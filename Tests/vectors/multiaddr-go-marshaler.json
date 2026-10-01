@@ -1,0 +1,14 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestBinaryMarshaler, TestTextMarshaler, TestJSONMarshaler, TestComponent*Marshaler",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "addr": "/ip4/0.0.0.0/tcp/4001/tls",
+ "component": {
+  "proto": "ip4",
+  "value": "0.0.0.0"
+ }
+}

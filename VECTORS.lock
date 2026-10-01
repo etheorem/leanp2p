@@ -1,0 +1,84 @@
+# Pinned upstream vector sources (VECTOR_TEST_PLAN.md, phase 0 step 1).
+#
+# Each entry is a byte-exact copy of the named commit, vendored under
+# vendor/<dir>. Recreate or update with: scripts/vendor-pull.sh
+#
+# Every JSON file in Tests/vectors/ is derived from these copies and records
+# its provenance (repo, path, commit) in a "_provenance" field.
+
+[[vendor]]
+dir = "vendor/multiaddr"
+repo = "https://github.com/multiformats/multiaddr"
+commit = "7a0710a4a2a425f9280a148561a3ff5af80aa2f5"
+branch = "main"
+used-for = "protocols.csv: authoritative multiaddr protocol table"
+
+[[vendor]]
+dir = "vendor/multibase"
+repo = "https://github.com/multiformats/multibase"
+commit = "d7406cdea189b82a0b3937f5737b440f5fa92f92"
+branch = "master"
+used-for = "tests/*.csv: multibase CSV vectors (phase 1)"
+
+[[vendor]]
+dir = "vendor/unsigned-varint"
+repo = "https://github.com/multiformats/unsigned-varint"
+commit = "dd184f1ce89c81808503bb719b5fcb13844d08f3"
+branch = "master"
+used-for = "README.md: spec examples and rules (phase 1)"
+
+[[vendor]]
+dir = "vendor/multihash"
+repo = "https://github.com/multiformats/multihash"
+commit = "b43ec1026a610fa87878e53b3daecf3a14b3ef6f"
+branch = "master"
+used-for = "README.md: \"multihash\" example vectors"
+
+[[vendor]]
+dir = "vendor/go-multiaddr"
+repo = "https://github.com/multiformats/go-multiaddr"
+commit = "7fae00adf671d9d4b931e591f2357a261567fee5"
+branch = "master"
+used-for = "multiaddr_test.go: TestConstructSucceeds/Fails, TestStringToBytes, TestBytesToString, TestEqual, TestGetValue, TestEncapsulate, TestDecapsulate, TestZone, TestHTTPPath, TestDNS, TestProtocols"
+
+[[vendor]]
+dir = "vendor/js-multiaddr"
+repo = "https://github.com/multiformats/js-multiaddr"
+commit = "35cc0d9d7ba94626fa9f5bd4d672b5f616afad3e"
+branch = "main"
+used-for = "test/index.spec.ts: variants, normalize, invalid, unknown protocols, equals, decapsulate tables"
+
+[[vendor]]
+dir = "vendor/specs"
+repo = "https://github.com/libp2p/specs"
+commit = "78e75c6f4e5dd9de4bc1524c686c0f45df4b461a"
+branch = "master"
+used-for = "peer-ids, tls, noise, multistream-select, RFC 0002/0003 spec examples (tier B)"
+
+[[vendor]]
+dir = "vendor/test-plans"
+repo = "https://github.com/libp2p/test-plans"
+commit = "6ea8a3464d7df3e5717bad3580fa268fab822291"
+branch = "master"
+used-for = "transport-interop harness contract (phase 5)"
+
+[[vendor]]
+dir = "vendor/flynn-noise"
+repo = "https://github.com/flynn/noise"
+commit = "4d9f71cd4ba1fe81415efac312664ccc4bc79b46"
+branch = "master"
+used-for = "vectors.txt: Noise framework XX handshake vectors (phase 3 step 16; the exact library go-libp2p's noise uses)"
+
+[[vendor]]
+dir = "vendor/multistream-select"
+repo = "https://github.com/multiformats/multistream-select"
+commit = "9a1fbe8edadebea223f47102f1913b8026c23a1c"
+branch = "master"
+used-for = "README.md: multistream-select protocol description, ls request/reply framing examples (phase 3 step 15)"
+
+[[vendor]]
+dir = "vendor/go-libp2p"
+repo = "https://github.com/libp2p/go-libp2p"
+commit = "3c2c902122cb6fae3897f729a3dbb9d4665ae90d"
+branch = "master"
+used-for = "core/crypto/test_data fixtures (rsa/secp256k1/ecdsa key protobufs + signatures over a fixed message) and crypto/fixture_test.go TestFixtures; core/crypto/pb/crypto.proto and core/peer/pb/peer_record.proto: authoritative field tables (phase 2)"

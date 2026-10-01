@@ -1,0 +1,37 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestBytesSplitAndJoin",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "cases": [
+  {
+   "addr": "/ip4/1.2.3.4/udp/1234",
+   "parts": [
+    "/ip4/1.2.3.4",
+    "/udp/1234"
+   ]
+  },
+  {
+   "addr": "/ip4/1.2.3.4/tcp/1/ip4/2.3.4.5/udp/2",
+   "parts": [
+    "/ip4/1.2.3.4",
+    "/tcp/1",
+    "/ip4/2.3.4.5",
+    "/udp/2"
+   ]
+  },
+  {
+   "addr": "/ip4/1.2.3.4/utp/ip4/2.3.4.5/udp/2/udt",
+   "parts": [
+    "/ip4/1.2.3.4",
+    "/utp",
+    "/ip4/2.3.4.5",
+    "/udp/2",
+    "/udt"
+   ]
+  }
+ ]
+}

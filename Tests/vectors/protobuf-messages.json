@@ -1,0 +1,46 @@
+{
+ "_provenance": {
+  "repo": "field tables from vendor/specs: identify/README.md, noise/README.md, RFC/0002-signed-envelopes.md, RFC/0003-routing-records.md; PublicKey/PrivateKey from peer-ids/peer-ids.md",
+  "commit": "78e75c6f4e5dd9de4bc1524c686c0f45df4b461a",
+  "upstreamTest": "encode/decode against go-libp2p pb shapes",
+  "extractedBy": "scripts/extract-vectors.py (independent mini-encoder; go-libp2p not available in the build environment)"
+ },
+ "note": "identitySig / envelope signature are filler bytes: the signature itself is exercised against OpenSSL in Tests/Keys (RFC 8032 vectors and round trips)",
+ "cases": [
+  {
+   "name": "Identify (ed25519 key, two addrs, two protocols)",
+   "bytesHex": "2a0a697066732f302e312e30320d6c65616e7032702f302e312e300a24080112201ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e1208047f000001060fa112154100000000000000000000000000000001a30200352208047f000001060fa11a102f697066732f70696e672f312e302e301a0e2f697066732f69642f312e302e30"
+  },
+  {
+   "name": "NoiseHandshakePayload (ed25519 key, muxer extensions)",
+   "bytesHex": "0a24080112201ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e1240000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f221c120c2f79616d75782f312e302e30120c2f6d706c65782f362e372e30"
+  },
+  {
+   "name": "PeerRecord (identity-inlined ed25519 id, two addrs)",
+   "bytesHex": "0a260024080112201ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e10bdaadeec051a0a0a08047f000001060fa11a170a154100000000000000000000000000000001a3020035"
+  },
+  {
+   "name": "Envelope (PeerRecord payload, payloadType 0x0301)",
+   "bytesHex": "0a24080112201ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e120203011a530a260024080112201ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e10bdaadeec051a0a0a08047f000001060fa11a170a154100000000000000000000000000000001a30200352a403f3e3d3c3b3a393837363534333231302f2e2d2c2b2a292827262524232221201f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100"
+  }
+ ],
+ "expected": {
+  "protocolVersion": "ipfs/0.1.0",
+  "agentVersion": "leanp2p/0.1.0",
+  "listenAddrsHex": [
+   "047f000001060fa1",
+   "4100000000000000000000000000000001a3020035"
+  ],
+  "observedAddrHex": "047f000001060fa1",
+  "protocols": [
+   "/ipfs/ping/1.0.0",
+   "/ipfs/id/1.0.0"
+  ],
+  "streamMuxers": [
+   "/yamux/1.0.0",
+   "/mplex/6.7.0"
+  ],
+  "seq": 1570215229,
+  "payloadTypeHex": "0301"
+ }
+}

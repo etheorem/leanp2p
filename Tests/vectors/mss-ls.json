@@ -1,0 +1,18 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/multistream-select",
+  "commit": "9a1fbe8edadebea223f47102f1913b8026c23a1c",
+  "path": "README.md",
+  "upstreamTest": "Listing / ls example in detail",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "lsWireHex": "036c730a",
+ "replyExample": {
+  "protocols": [
+   "/ipfs/kad/1.0.0",
+   "/ipfs/id/1.0.0"
+  ],
+  "bodyHex": "102f697066732f6b61642f312e302e300a0f2f697066732f69642f312e302e300a0a",
+  "note": "varint(len(proto)+1) proto \\n, repeated, then a final \\n; the reply is wrapped in one uvarint length prefix by the caller"
+ }
+}

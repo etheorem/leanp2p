@@ -1,0 +1,67 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestDecapsulate",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "cases": [
+  {
+   "left": "/ip4/1.2.3.4/tcp/1234",
+   "right": "/ip4/1.2.3.4",
+   "expected": ""
+  },
+  {
+   "left": "/ip4/1.2.3.4",
+   "right": "/ip4/1.2.3.4/tcp/1234",
+   "expected": "/ip4/1.2.3.4"
+  },
+  {
+   "left": "/ip4/1.2.3.5/tcp/1234",
+   "right": "/ip4/5.3.2.1",
+   "expected": "/ip4/1.2.3.5/tcp/1234"
+  },
+  {
+   "left": "/ip4/1.2.3.5/udp/1234/quic-v1",
+   "right": "/udp/1234",
+   "expected": "/ip4/1.2.3.5"
+  },
+  {
+   "left": "/ip4/1.2.3.6/udp/1234/quic-v1",
+   "right": "/udp/1234/quic-v1",
+   "expected": "/ip4/1.2.3.6"
+  },
+  {
+   "left": "/ip4/1.2.3.7/tcp/1234",
+   "right": "/ws",
+   "expected": "/ip4/1.2.3.7/tcp/1234"
+  },
+  {
+   "left": "/dnsaddr/wss.com/tcp/4001",
+   "right": "/ws",
+   "expected": "/dnsaddr/wss.com/tcp/4001"
+  },
+  {
+   "left": "/dnsaddr/wss.com/tcp/4001/ws",
+   "right": "/wss",
+   "expected": "/dnsaddr/wss.com/tcp/4001/ws"
+  },
+  {
+   "left": "/dnsaddr/wss.com/ws",
+   "right": "/wss",
+   "expected": "/dnsaddr/wss.com/ws"
+  },
+  {
+   "left": "/dnsaddr/wss.com/ws",
+   "right": "/dnsaddr/wss.com",
+   "expected": ""
+  },
+  {
+   "left": "/dnsaddr/wss.com/tcp/4001/wss",
+   "right": "/wss",
+   "expected": "/dnsaddr/wss.com/tcp/4001"
+  }
+ ],
+ "note": "expected \"\" means Decapsulate returns nil (nothing left)"
+}

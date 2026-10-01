@@ -1,0 +1,38 @@
+name: CI
+
+# VECTOR_TEST_PLAN.md phase 0 step 4: build and run the vector suites on
+# every push and pull request.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenSSL development headers
+        # the phase 2 crypto shim (c/p2pcrypto.c) compiles against
+        # <openssl/*.h> and links libcrypto
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
+      - name: Install elan + Lean toolchain
+        uses: leanprover/lean-action@v1
+        with:
+          # lake build + lake test; toolchain version comes from lean-toolchain
+          build: true
+          test: true
+
+      - name: Verify vector provenance
+        # The pinned vendor copies must match VECTORS.lock and the committed
+        # JSON must be reproducible from them.
+        run: |
+          scripts/vendor-pull.sh --verify
+          python3 scripts/extract-vectors.py
+          git diff --exit-code -- Tests/vectors || {
+            echo "::error::Tests/vectors is stale; re-run scripts/extract-vectors.py"
+            exit 1
+          }

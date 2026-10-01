@@ -1,0 +1,5 @@
+# Lean build artifacts
+/.lake
+
+# Python
+__pycache__/

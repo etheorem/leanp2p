@@ -1,0 +1,35 @@
+name: nightly
+
+# VECTOR_TEST_PLAN.md phase 0 step 4: nightly slot for the tier C interop
+# matrix. Phase 5 (step 25/26): the build + vector suites, then the live
+# tcp x noise x yamux cells of the transport-interop harness against
+# go-libp2p (scripts/interop-matrix.sh).
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # daily, 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  vectors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: leanprover/lean-action@v1
+        with:
+          build: true
+          test: true
+
+  # Phase 5 step 26: the harness cells runnable against go-libp2p v0.50
+  # (tcp x noise x yamux, both dial directions, through Redis). The
+  # remaining matrix rows (tls, ws, quic) and peer implementations
+  # (rust/js/nim) follow the same harness once the spike grows those
+  # transports (see README "Real node (phase 5)").
+  interop-matrix:
+    runs-on: ubuntu-latest
+    needs: vectors
+    steps:
+      - uses: actions/checkout@v4
+      - name: tcp x noise x yamux (lean <-> go-libp2p)
+        run: bash scripts/interop-matrix.sh
+

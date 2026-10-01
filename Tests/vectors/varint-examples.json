@@ -1,0 +1,53 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/unsigned-varint",
+  "commit": "dd184f1ce89c81808503bb719b5fcb13844d08f3",
+  "path": "README.md",
+  "upstreamTest": "spec examples and rules",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "examples": [
+  {
+   "n": 1,
+   "binary": "00000001",
+   "uvarintHex": "01"
+  },
+  {
+   "n": 127,
+   "binary": "01111111",
+   "uvarintHex": "7f"
+  },
+  {
+   "n": 128,
+   "binary": "1000000000000001",
+   "uvarintHex": "8001"
+  },
+  {
+   "n": 255,
+   "binary": "1111111100000001",
+   "uvarintHex": "ff01"
+  },
+  {
+   "n": 300,
+   "binary": "1010110000000010",
+   "uvarintHex": "ac02"
+  },
+  {
+   "n": 16384,
+   "binary": "100000001000000000000001",
+   "uvarintHex": "808001"
+  }
+ ],
+ "rules": [
+  {
+   "rule": "minimal encoding",
+   "quote": "Multiformats varints must be minimally encoded. That is, numbers must be encoded in the least number of bytes possible.",
+   "counterExampleHex": "8100",
+   "counterExampleDecodesTo": 1
+  },
+  {
+   "rule": "9-byte maximum",
+   "quote": "Implementations MUST restrict the size of the varint to a max of 9 bytes (63 bits)."
+  }
+ ]
+}

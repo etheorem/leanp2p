@@ -1,0 +1,21 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/libp2p/specs",
+  "commit": "78e75c6f4e5dd9de4bc1524c686c0f45df4b461a",
+  "path": "connections/README.md",
+  "upstreamTest": "multistream-select wire examples",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "framing": "uvarint length prefix, then UTF-8 message bytes ending in \\n",
+ "cases": [
+  {
+   "message": "na",
+   "bytesHex": "036e610a"
+  },
+  {
+   "message": "/multistream/1.0.0\n",
+   "bytesHex": "132f6d756c746973747265616d2f312e302e300a",
+   "note": "derived from the framing rule stated in the README"
+  }
+ ]
+}

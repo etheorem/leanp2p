@@ -1,0 +1,19 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestFilterAddrs",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "good": [
+  "/ip4/127.0.0.1/tcp/1234",
+  "/ip4/1.1.1.1/tcp/999",
+  "/ip4/1.2.3.4/udp/1234/utp"
+ ],
+ "bad": [
+  "/ip6/fe80::1/tcp/1234",
+  "/ip6/fe80::100/tcp/1234"
+ ],
+ "filter": "first protocol code is ip4"
+}

@@ -1,0 +1,57 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/libp2p/go-libp2p",
+  "commit": "3c2c902122cb6fae3897f729a3dbb9d4665ae90d",
+  "release": "v0.50.0",
+  "capturedBy": "scripts/capture-vectors.go (run in docker golang:alpine; flynn/noise v1.1.0)",
+  "path": "github.com/multiformats/go-multistream v0.6.1 (the mss go-libp2p uses)",
+  "upstreamTest": "MultistreamMuxer.Negotiate / SelectOneOf / NewMSSelect lazy handshake over net.Pipe",
+  "note": "every i2r/r2i entry is one Write in order; the lazy trace shows the header+proposal written back-to-back before any response is read",
+  "extractedBy": "scripts/capture-vectors.go"
+ },
+ "fullTrace": [
+  {
+   "dir": "i2r",
+   "hex": "132f6d756c746973747265616d2f312e302e300a102f697066732f6b61642f312e302e300a"
+  },
+  {
+   "dir": "r2i",
+   "hex": "132f6d756c746973747265616d2f312e302e300a"
+  },
+  {
+   "dir": "r2i",
+   "hex": "102f697066732f6b61642f312e302e300a"
+  }
+ ],
+ "naTrace": [
+  {
+   "dir": "i2r",
+   "hex": "132f6d756c746973747265616d2f312e302e300a0c2f6e6f70652f392e392e390a"
+  },
+  {
+   "dir": "r2i",
+   "hex": "132f6d756c746973747265616d2f312e302e300a"
+  },
+  {
+   "dir": "r2i",
+   "hex": "036e610a"
+  }
+ ],
+ "lazyTrace": [
+  {
+   "dir": "i2r",
+   "hex": "132f6d756c746973747265616d2f312e302e300a102f697066732f6b61642f312e302e300a"
+  },
+  {
+   "dir": "r2i",
+   "hex": "132f6d756c746973747265616d2f312e302e300a"
+  },
+  {
+   "dir": "r2i",
+   "hex": "102f697066732f6b61642f312e302e300a"
+  }
+ ],
+ "naWireHex": "036e610a",
+ "headerWireHex": "132f6d756c746973747265616d2f312e302e300a",
+ "lsWireHex": "036c730a"
+}

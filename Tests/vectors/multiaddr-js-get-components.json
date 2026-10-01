@@ -1,0 +1,86 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/js-multiaddr",
+  "commit": "35cc0d9d7ba94626fa9f5bd4d672b5f616afad3e",
+  "path": "test/index.spec.ts",
+  "upstreamTest": "describe('.getComponents')",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "cases": [
+  {
+   "addr": "/ip4/0.0.0.0/utp",
+   "components": [
+    {
+     "code": 4,
+     "name": "ip4",
+     "value": "0.0.0.0"
+    },
+    {
+     "code": 302,
+     "name": "utp",
+     "value": null
+    }
+   ]
+  },
+  {
+   "addr": "/ip4/0.0.0.0/utp/ipfs/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC",
+   "components": [
+    {
+     "code": 4,
+     "name": "ip4",
+     "value": "0.0.0.0"
+    },
+    {
+     "code": 302,
+     "name": "utp",
+     "value": null
+    },
+    {
+     "code": 421,
+     "name": "p2p",
+     "value": "QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+    }
+   ]
+  },
+  {
+   "addr": "/ip4/0.0.0.0/tcp/8000/unix/tmp%2Fp2p.sock",
+   "components": [
+    {
+     "code": 4,
+     "name": "ip4",
+     "value": "0.0.0.0"
+    },
+    {
+     "code": 6,
+     "name": "tcp",
+     "value": "8000"
+    },
+    {
+     "code": 400,
+     "name": "unix",
+     "value": "tmp/p2p.sock"
+    }
+   ]
+  },
+  {
+   "addr": "/memory/777/p2p/QmZR5a9AAXGqQF2ADqoDdGS8zvqv8n3Pag6TDDnTNMcFW6",
+   "components": [
+    {
+     "code": 777,
+     "name": "memory",
+     "value": "777"
+    },
+    {
+     "code": 421,
+     "name": "p2p",
+     "value": "QmZR5a9AAXGqQF2ADqoDdGS8zvqv8n3Pag6TDDnTNMcFW6"
+    }
+   ]
+  },
+  {
+   "addr": "/memory/test/p2p/QmZR5a9AAXGqQF2ADqoDdGS8zvqv8n3Pag6TDDnTNMcFW6",
+   "knownDivergence": "js treats the memory value as a string; we follow go/rust (big-endian u64) and skip this js-only vector",
+   "components": []
+  }
+ ]
+}

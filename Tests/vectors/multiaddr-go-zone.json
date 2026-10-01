@@ -1,0 +1,11 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestZone",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "string": "/ip6zone/eth0/ip6/::1",
+ "bytesHex": "2a04657468302900000000000000000000000000000001"
+}

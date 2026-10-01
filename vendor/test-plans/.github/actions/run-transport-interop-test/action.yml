@@ -1,0 +1,141 @@
+name: "libp2p transport interop test"
+description: "Run the libp2p transport interoperability test suite"
+inputs:
+  test-filter:
+    description: "Filter which tests to run out of the created matrix"
+    required: false
+    default: ""
+  upload-results:
+    description: "Upload the test results as an artifact"
+    required: false
+    default: "true"
+  test-results-suffix:
+    description: "Suffix to add to the test results artifact name"
+    required: false
+    default: ""
+  test-ignore:
+    description: "Exclude tests from the created matrix that include this string in their name"
+    required: false
+    default: ""
+  extra-versions:
+    description: "Space-separated paths to JSON files describing additional images"
+    required: false
+    default: ""
+  worker-count:
+    description: "How many workers to use for the test"
+    required: false
+    default: "2"
+  shard-count:
+    description: "Total number of shards"
+    required: false
+    default: "1"
+  shard-index:
+    description: "0-based shard index"
+    required: false
+    default: "0"
+  render:
+    description: "Whether to render results after testing"
+    required: false
+    default: "true"
+  timeout:
+    description: "How many seconds to let each test run for"
+    required: false
+  verbose:
+    description: "Enable verbose output"
+    required: false
+    default: false
+  known-errors:
+    description: "Regex for known test failures. Matched failures show as yellow instead of red and won't fail the workflow. Merged with knownErrors.json if present."
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    # This depends on where this file is within this repository. This walks up
+    # from here to the transport-interop folder
+    - run: |
+        WORK_DIR=$(realpath "$GITHUB_ACTION_PATH/../../../transport-interop")
+        echo "WORK_DIR=$WORK_DIR" >> $GITHUB_OUTPUT
+      shell: bash
+      id: find-workdir
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: lts/*
+
+    # Existence of /etc/buildkit/buildkitd.toml indicates that this is a
+    # self-hosted runner. If so, we need to pass the config to the buildx
+    # action. The config enables docker.io proxy which is required to
+    # work around docker hub rate limiting.
+    - run: |
+        if test -f /etc/buildkit/buildkitd.toml; then
+          echo "config=/etc/buildkit/buildkitd.toml" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
+      id: buildkit
+
+    - name: Set up Docker Buildx
+      id: buildx
+      uses: docker/setup-buildx-action@v2
+      with:
+        config: ${{ steps.buildkit.outputs.config }}
+
+    - name: Install deps
+      working-directory: ${{ steps.find-workdir.outputs.WORK_DIR }}
+      run: npm ci
+      shell: bash
+
+    - name: Run the test
+      working-directory: ${{ steps.find-workdir.outputs.WORK_DIR }}
+      env:
+        WORKER_COUNT: ${{ inputs.worker-count }}
+        EXTRA_VERSION: ${{ inputs.extra-versions }}
+        NAME_FILTER: ${{ inputs.test-filter }}
+        NAME_IGNORE: ${{ inputs.test-ignore }}
+        TIMEOUT: ${{ inputs.timeout }}
+        VERBOSE: ${{ inputs.verbose }}
+        SHARD_COUNT: ${{ inputs.shard-count }}
+        SHARD_INDEX: ${{ inputs.shard-index }}
+      run: npm run test -- --extra-version=$EXTRA_VERSION --name-filter="$NAME_FILTER" --name-ignore="$NAME_IGNORE" --verbose="$VERBOSE"
+      shell: bash
+
+    - name: Print the results
+      working-directory: ${{ steps.find-workdir.outputs.WORK_DIR }}
+      run: cat results.csv
+      shell: bash
+
+    - name: Render results
+      if: inputs.render == 'true'
+      working-directory: ${{ steps.find-workdir.outputs.WORK_DIR }}
+      run: |
+        if [ -n "${{ inputs.known-errors }}" ]; then
+          npm run renderResults -- --known-errors "${{ inputs.known-errors }}" > ./dashboard.md
+        else
+          npm run renderResults > ./dashboard.md
+        fi
+      shell: bash
+
+    - name: Show Dashboard Output
+      if: inputs.render == 'true'
+      working-directory: ${{ steps.find-workdir.outputs.WORK_DIR }}
+      run: cat ./dashboard.md >> $GITHUB_STEP_SUMMARY
+      shell: bash
+
+    - name: Exit with Error
+      if: inputs.render == 'true'
+      working-directory: ${{ steps.find-workdir.outputs.WORK_DIR }}
+      run: |
+        if grep -q ":red_circle:" ./dashboard.md; then
+          exit 1
+        else
+          exit 0
+        fi
+      shell: bash
+    - name: Upload test results
+      if: inputs.upload-results == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.test-results-suffix && format('test-plans-output-{0}', inputs.test-results-suffix) || 'test-plans-output' }}
+        path: |
+          ${{ steps.find-workdir.outputs.WORK_DIR }}/results.csv
+          ${{ steps.find-workdir.outputs.WORK_DIR }}/dashboard.md

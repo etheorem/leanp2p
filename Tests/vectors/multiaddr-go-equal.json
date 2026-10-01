@@ -1,0 +1,46 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestEqual",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "pairs": [
+  {
+   "a": "/ip4/127.0.0.1/udp/1234",
+   "b": "/ip4/127.0.0.1/tcp/1234",
+   "equal": false
+  },
+  {
+   "a": "/ip4/127.0.0.1/tcp/1234",
+   "b": "/ip4/127.0.0.1/udp/1234",
+   "equal": false
+  },
+  {
+   "a": "/ip4/127.0.0.1/tcp/1234",
+   "b": "/ip4/127.0.0.1/tcp/1234",
+   "equal": true
+  },
+  {
+   "a": "/ip4/127.0.0.1/tcp/1234",
+   "b": "/ip4/127.0.0.1/tcp/1234",
+   "equal": true
+  },
+  {
+   "a": "/ip4/127.0.0.1/udp/1234",
+   "b": "/ip4/127.0.0.1/udp/1234",
+   "equal": true
+  },
+  {
+   "a": "/ip4/127.0.0.1/tcp/1234",
+   "b": "/ip4/127.0.0.1/tcp/1234/",
+   "equal": true
+  },
+  {
+   "a": "/ip4/127.0.0.1/tcp/1234/",
+   "b": "/ip4/127.0.0.1/tcp/1234",
+   "equal": true
+  }
+ ]
+}

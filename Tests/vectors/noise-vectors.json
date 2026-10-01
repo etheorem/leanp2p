@@ -1,0 +1,136 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/flynn/noise",
+  "commit": "4d9f71cd4ba1fe81415efac312664ccc4bc79b46",
+  "path": "vectors.txt",
+  "upstreamTest": "TestVectors (noise-c format), Noise_XX_25519_ChaChaPoly_SHA256",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "note": "handshake_hash entries are not in this file; conformance is                 the message bytes themselves plus the go-libp2p transcript",
+ "cases": [
+  {
+   "note": "no prologue, empty payloads",
+   "prologue": "",
+   "handshakeHash": "",
+   "initStatic": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+   "respStatic": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+   "initEphemeral": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+   "respEphemeral": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
+   "messages": [
+    {
+     "payload": "",
+     "ciphertext": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254"
+    },
+    {
+     "payload": "",
+     "ciphertext": "64b101b1d0be5a8704bd078f9895001fc03e8e9f9522f188dd128d9846d484663414af878d3e46a2f58911a816d6e8346d4ea17a6f2a0bb4ef4ed56c133cff4560a34e36ea82109f26cf2e5a5caf992b608d55c747f615e5a3425a7a19eefb8f"
+    },
+    {
+     "payload": "",
+     "ciphertext": "87f864c11ba449f46a0a4f4e2eacbb7b0457784f4fca1937f572c93603e9c4d97e5ea11b16f3968710b23a3be3202dc1b5e1ce3c963347491e74f5c0768a9b42"
+    },
+    {
+     "payload": "79656c6c6f777375626d6172696e65",
+     "ciphertext": "a52ef02ba60e12696d1d6b9ef4245c88fca757b6134ad6e76b56e310a6adf6"
+    },
+    {
+     "payload": "7375626d6172696e6579656c6c6f77",
+     "ciphertext": "2445aa438ebd649281c636cc7269ca82f1d9023d72520943aeabf909cdf521"
+    }
+   ]
+  },
+  {
+   "note": "no prologue, with payloads",
+   "prologue": "",
+   "handshakeHash": "",
+   "initStatic": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+   "respStatic": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+   "initEphemeral": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+   "respEphemeral": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
+   "messages": [
+    {
+     "payload": "746573745f6d73675f30",
+     "ciphertext": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254746573745f6d73675f30"
+    },
+    {
+     "payload": "746573745f6d73675f31",
+     "ciphertext": "64b101b1d0be5a8704bd078f9895001fc03e8e9f9522f188dd128d9846d484663414af878d3e46a2f58911a816d6e8346d4ea17a6f2a0bb4ef4ed56c133cff4572e7a2ba5123ac30618b3d205f5c2d17f50cbca216483ac56bcc78e33bf520303278db641e5e731b2e3a"
+    },
+    {
+     "payload": "746573745f6d73675f32",
+     "ciphertext": "87f864c11ba449f46a0a4f4e2eacbb7b0457784f4fca1937f572c93603e9c4d9f27e318e43ba630594c4d08eeb3b36d97c7377a2f4f9144b2f0c8095ad92140505b2ab53eff244b14138"
+    },
+    {
+     "payload": "79656c6c6f777375626d6172696e65",
+     "ciphertext": "a52ef02ba60e12696d1d6b9ef4245c88fca757b6134ad6e76b56e310a6adf6"
+    },
+    {
+     "payload": "7375626d6172696e6579656c6c6f77",
+     "ciphertext": "2445aa438ebd649281c636cc7269ca82f1d9023d72520943aeabf909cdf521"
+    }
+   ]
+  },
+  {
+   "note": "with prologue, empty payloads",
+   "prologue": "6e6f74736563726574",
+   "handshakeHash": "",
+   "initStatic": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+   "respStatic": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+   "initEphemeral": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+   "respEphemeral": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
+   "messages": [
+    {
+     "payload": "",
+     "ciphertext": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254"
+    },
+    {
+     "payload": "",
+     "ciphertext": "64b101b1d0be5a8704bd078f9895001fc03e8e9f9522f188dd128d9846d484663414af878d3e46a2f58911a816d6e8346d4ea17a6f2a0bb4ef4ed56c133cff4588f043d1e49a3289b1beeab8f96b0551a48cddf9f38b1a12e46c6908644198f3"
+    },
+    {
+     "payload": "",
+     "ciphertext": "87f864c11ba449f46a0a4f4e2eacbb7b0457784f4fca1937f572c93603e9c4d95a04fa1f1c41fb3f00d496f242c1e44ce5b749b3d54bf74cea2dad086d601fb6"
+    },
+    {
+     "payload": "79656c6c6f777375626d6172696e65",
+     "ciphertext": "a52ef02ba60e12696d1d6b9ef4245c88fca757b6134ad6e76b56e310a6adf6"
+    },
+    {
+     "payload": "7375626d6172696e6579656c6c6f77",
+     "ciphertext": "2445aa438ebd649281c636cc7269ca82f1d9023d72520943aeabf909cdf521"
+    }
+   ]
+  },
+  {
+   "note": "with prologue, with payloads",
+   "prologue": "6e6f74736563726574",
+   "handshakeHash": "",
+   "initStatic": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+   "respStatic": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+   "initEphemeral": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+   "respEphemeral": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
+   "messages": [
+    {
+     "payload": "746573745f6d73675f30",
+     "ciphertext": "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254746573745f6d73675f30"
+    },
+    {
+     "payload": "746573745f6d73675f31",
+     "ciphertext": "64b101b1d0be5a8704bd078f9895001fc03e8e9f9522f188dd128d9846d484663414af878d3e46a2f58911a816d6e8346d4ea17a6f2a0bb4ef4ed56c133cff4545958c588d17d6373e0c1dcfa3755d37f50cbca216483ac56bcc98f5095870aa814ba40c08079c11f087"
+    },
+    {
+     "payload": "746573745f6d73675f32",
+     "ciphertext": "87f864c11ba449f46a0a4f4e2eacbb7b0457784f4fca1937f572c93603e9c4d9c1e9a1a313d02b78871cfd178a521a4c7c7377a2f4f9144b2f0ccedc84d379151b466741e4b266db6023"
+    },
+    {
+     "payload": "79656c6c6f777375626d6172696e65",
+     "ciphertext": "a52ef02ba60e12696d1d6b9ef4245c88fca757b6134ad6e76b56e310a6adf6"
+    },
+    {
+     "payload": "7375626d6172696e6579656c6c6f77",
+     "ciphertext": "2445aa438ebd649281c636cc7269ca82f1d9023d72520943aeabf909cdf521"
+    }
+   ]
+  }
+ ]
+}

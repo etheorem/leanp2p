@@ -1,0 +1,55 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/multihash",
+  "commit": "b43ec1026a610fa87878e53b3daecf3a14b3ef6f",
+  "path": "README.md",
+  "upstreamTest": "\"multihash\" example vectors",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "cases": [
+  {
+   "algorithm": "sha1",
+   "input": "multihash",
+   "encodings": [
+    {
+     "kind": "hex",
+     "value": "111488c2f11fb2ce392acb5b2986e640211c4690073e"
+    },
+    {
+     "kind": "base32pad-upper",
+     "value": "CEKIRQXRD6ZM4OJKZNNSTBXGIAQRYRUQA47A===="
+    },
+    {
+     "kind": "base58btc",
+     "value": "5dsgvJGnvAfiR3K6HCBc4hcokSfmjj"
+    },
+    {
+     "kind": "base64pad",
+     "value": "ERSIwvEfss45KstbKYbmQCEcRpAHPg=="
+    }
+   ]
+  },
+  {
+   "algorithm": "sha2-256",
+   "input": "multihash",
+   "encodings": [
+    {
+     "kind": "hex",
+     "value": "12209cbc07c3f991725836a3aa2a581ca2029198aa420b9d99bc0e131d9f3e2cbe47"
+    },
+    {
+     "kind": "base32pad-upper",
+     "value": "CIQJZPAHYP4ZC4SYG2R2UKSYDSRAFEMYVJBAXHMZXQHBGHM7HYWL4RY="
+    },
+    {
+     "kind": "base58btc",
+     "value": "QmYtUc4iTCbbfVSDNKvtQqrfyezPPnFvE33wFmutw9PBBk"
+    },
+    {
+     "kind": "base64pad",
+     "value": "EiCcvAfD+ZFyWDajqipYHKICkZiqQgudmbwOEx2fPiy+Rw=="
+    }
+   ]
+  }
+ ]
+}

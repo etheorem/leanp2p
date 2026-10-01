@@ -1,0 +1,61 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestProtocolsWithString",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "good": [
+  {
+   "addr": "/ip4",
+   "protocols": [
+    "ip4"
+   ]
+  },
+  {
+   "addr": "/ip4/tcp",
+   "protocols": [
+    "ip4",
+    "tcp"
+   ]
+  },
+  {
+   "addr": "ip4/tcp/udp/ip6",
+   "protocols": [
+    "ip4",
+    "tcp",
+    "udp",
+    "ip6"
+   ]
+  },
+  {
+   "addr": "////////ip4/tcp",
+   "protocols": [
+    "ip4",
+    "tcp"
+   ]
+  },
+  {
+   "addr": "ip4/udp/////////",
+   "protocols": [
+    "ip4",
+    "udp"
+   ]
+  },
+  {
+   "addr": "////////ip4/tcp////////",
+   "protocols": [
+    "ip4",
+    "tcp"
+   ]
+  }
+ ],
+ "bad": [
+  "dsijafd",
+  "/ip4/tcp/fidosafoidsa",
+  "////////ip4/tcp/21432141/////////",
+  "////////ip4///////tcp/////////"
+ ],
+ "note": "consumed by the operations-API suite (phase 1 step 9)"
+}

@@ -1,0 +1,11 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestDNS",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "bytesHex": "372a303030303030303030303030303030303030303030303030303030303030303030303030303030303030",
+ "note": "upstream stores the bytes as a Go string literal; hex below is that literal's byte sequence"
+}

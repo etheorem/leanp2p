@@ -1,0 +1,104 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestGetValue",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "protoNames": {
+  "ipfs": "p2p",
+  "utp": "utp",
+  "tls": "tls"
+ },
+ "cases": [
+  {
+   "addr": "/ip4/127.0.0.1/utp/tcp/5555/udp/1234/tls/utp/ipfs/QmbHVEEepCi7rn7VL7Exxpd2Ci9NNB6ifvqwhsrbRMgQFP",
+   "checks": [
+    {
+     "proto": "ip4",
+     "value": "127.0.0.1"
+    },
+    {
+     "proto": "utp",
+     "value": ""
+    },
+    {
+     "proto": "tls",
+     "value": ""
+    },
+    {
+     "proto": "tcp",
+     "value": "5555"
+    },
+    {
+     "proto": "udp",
+     "value": "1234"
+    },
+    {
+     "proto": "ipfs",
+     "value": "QmbHVEEepCi7rn7VL7Exxpd2Ci9NNB6ifvqwhsrbRMgQFP"
+    },
+    {
+     "proto": "p2p",
+     "value": "QmbHVEEepCi7rn7VL7Exxpd2Ci9NNB6ifvqwhsrbRMgQFP"
+    }
+   ],
+   "missing": [
+    "ip6"
+   ]
+  },
+  {
+   "addr": "/ip4/0.0.0.0",
+   "checks": [
+    {
+     "proto": "ip4",
+     "value": "0.0.0.0"
+    }
+   ],
+   "missing": []
+  },
+  {
+   "addr": "/ip4/0.0.0.0/ip4/0.0.0.0/ip4/0.0.0.0",
+   "checks": [
+    {
+     "proto": "ip4",
+     "value": "0.0.0.0"
+    }
+   ],
+   "missing": []
+  },
+  {
+   "addr": "/ip4/0.0.0.0/udp/12345/utp",
+   "checks": [
+    {
+     "proto": "ip4",
+     "value": "0.0.0.0"
+    },
+    {
+     "proto": "udp",
+     "value": "12345"
+    },
+    {
+     "proto": "utp",
+     "value": ""
+    }
+   ],
+   "missing": []
+  },
+  {
+   "addr": "/ip4/0.0.0.0/unix/a/b/c/d",
+   "checks": [
+    {
+     "proto": "ip4",
+     "value": "0.0.0.0"
+    },
+    {
+     "proto": "unix",
+     "value": "/a/b/c/d"
+    }
+   ],
+   "missing": []
+  }
+ ]
+}

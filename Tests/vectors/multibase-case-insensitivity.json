@@ -1,0 +1,61 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/multibase",
+  "commit": "d7406cdea189b82a0b3937f5737b440f5fa92f92",
+  "path": "tests/case_insensitivity.csv",
+  "upstreamTest": "multibase CSV vectors",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "input": "hello world",
+ "cases": [
+  {
+   "encoding": "base16",
+   "expected": "f68656c6c6f20776F726C64"
+  },
+  {
+   "encoding": "base16upper",
+   "expected": "F68656c6c6f20776F726C64"
+  },
+  {
+   "encoding": "base32",
+   "expected": "bnbswy3dpeB3W64TMMQ"
+  },
+  {
+   "encoding": "base32upper",
+   "expected": "Bnbswy3dpeB3W64TMMQ"
+  },
+  {
+   "encoding": "base32hex",
+   "expected": "vd1imor3f41RMUSJCCG"
+  },
+  {
+   "encoding": "base32hexupper",
+   "expected": "Vd1imor3f41RMUSJCCG"
+  },
+  {
+   "encoding": "base32pad",
+   "expected": "cnbswy3dpeB3W64TMMQ======"
+  },
+  {
+   "encoding": "base32padupper",
+   "expected": "Cnbswy3dpeB3W64TMMQ======"
+  },
+  {
+   "encoding": "base32hexpad",
+   "expected": "td1imor3f41RMUSJCCG======"
+  },
+  {
+   "encoding": "base32hexpadupper",
+   "expected": "Td1imor3f41RMUSJCCG======"
+  },
+  {
+   "encoding": "base36",
+   "expected": "kfUvrsIvVnfRbjWaJo"
+  },
+  {
+   "encoding": "base36upper",
+   "expected": "KfUVrSIVVnFRbJWAJo"
+  }
+ ],
+ "note": "encode checked in both directions for basic/leading_zero/two_leading_zeros; the case-insensitivity file is a decode-tolerance file (values are non-canonical)"
+}

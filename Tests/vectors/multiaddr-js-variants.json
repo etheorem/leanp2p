@@ -1,0 +1,197 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/js-multiaddr",
+  "commit": "35cc0d9d7ba94626fa9f5bd4d672b5f616afad3e",
+  "path": "test/index.spec.ts",
+  "upstreamTest": "describe('variants') roundTrip",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "cases": [
+  {
+   "name": "ip4",
+   "value": "/ip4/127.0.0.1"
+  },
+  {
+   "name": "ip6",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095"
+  },
+  {
+   "name": "ip4 + tcp",
+   "value": "/ip4/127.0.0.1/tcp/5000"
+  },
+  {
+   "name": "ip6 + tcp",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/tcp/5000"
+  },
+  {
+   "name": "ip4 + udp",
+   "value": "/ip4/127.0.0.1/udp/5000"
+  },
+  {
+   "name": "ip6 + udp",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/udp/5000"
+  },
+  {
+   "name": "ip4 + p2p",
+   "value": "/ip4/127.0.0.1/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC/tcp/1234"
+  },
+  {
+   "name": "ip4 + ipfs",
+   "value": "/ip4/127.0.0.1/ipfs/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC/tcp/1234"
+  },
+  {
+   "name": "ip6 + p2p",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC/tcp/1234"
+  },
+  {
+   "name": "ip6zone + ip6",
+   "value": "/ip6zone/x/ip6/fe80::1"
+  },
+  {
+   "name": "ip4 + udp + utp",
+   "value": "/ip4/127.0.0.1/udp/5000/utp"
+  },
+  {
+   "name": "ip6 + udp + utp",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/udp/5000/utp"
+  },
+  {
+   "name": "ip4 + tcp + http",
+   "value": "/ip4/127.0.0.1/tcp/8000/http"
+  },
+  {
+   "name": "ip4 + tcp + unix",
+   "value": "/ip4/127.0.0.1/tcp/80/unix/a%2Fb%2Fc%2Fd%2Fe%2Ff"
+  },
+  {
+   "name": "ip6 + tcp + http",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/tcp/8000/http"
+  },
+  {
+   "name": "ip6 + tcp + unix",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/tcp/8000/unix/a%2Fb%2Fc%2Fd%2Fe%2Ff"
+  },
+  {
+   "name": "ip4 + tcp + https",
+   "value": "/ip4/127.0.0.1/tcp/8000/https"
+  },
+  {
+   "name": "ip6 + tcp + https",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/tcp/8000/https"
+  },
+  {
+   "name": "ip4 + tcp + websockets",
+   "value": "/ip4/127.0.0.1/tcp/8000/ws"
+  },
+  {
+   "name": "ip6 + tcp + websockets",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/tcp/8000/ws"
+  },
+  {
+   "name": "ip6 + tcp + websockets + ipfs",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/tcp/8000/ws/ipfs/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+  },
+  {
+   "name": "ip6 + tcp + websockets + p2p",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/tcp/8000/ws/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+  },
+  {
+   "name": "ip6 + udp + quic + ipfs",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/udp/4001/quic/ipfs/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+  },
+  {
+   "name": "ip6 + udp + quic + p2p",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/udp/4001/quic/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+  },
+  {
+   "name": "ip6 + udp + quic-v1 + ipfs",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/udp/4001/quic-v1/ipfs/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+  },
+  {
+   "name": "ip6 + udp + quic-v1 + p2p",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/udp/4001/quic-v1/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+  },
+  {
+   "name": "ip6 webtransport",
+   "value": "/ip6/2001:8a0:7ac5:4201:3ac9:86ff:fe31:7095/udp/4001/quic-v1/webtransport"
+  },
+  {
+   "name": "ip4 webtransport",
+   "value": "/ip4/1.2.3.4/udp/4001/quic-v1/webtransport"
+  },
+  {
+   "name": "webtransport with certhash",
+   "value": "/ip4/1.2.3.4/udp/4001/quic-v1/webtransport/certhash/uEiAkH5a4DPGKUuOBjYw0CgwjvcJCJMD2K_1aluKR_tpevQ/certhash/uEiAfbgiymPP2_nX7Dgir8B4QkksjHp2lVuJZz0F79Be9JA/p2p/12D3KooWBdmLJjhpgJ9KZgLM3f894ff9xyBfPvPjFNn7MKJpyrC2"
+  },
+  {
+   "name": "ip6zone + ip6 + udp + quic",
+   "value": "/ip6zone/x/ip6/fe80::1/udp/1234/quic"
+  },
+  {
+   "name": "unix",
+   "value": "/unix/a%2Fb%2Fc%2Fd%2Fe"
+  },
+  {
+   "name": "p2p (base58btc)",
+   "value": "/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+  },
+  {
+   "name": "ipfs",
+   "value": "/ipfs/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+  },
+  {
+   "name": "tls",
+   "value": "/ip4/127.0.0.1/tcp/9090/tls/ws"
+  },
+  {
+   "name": "sni",
+   "value": "/ip4/127.0.0.1/tcp/9090/tls/sni/example.com/ws"
+  },
+  {
+   "name": "http-path",
+   "value": "/ip4/127.0.0.1/tcp/9090/tls/http-path/tmp%2Ffoo%2F..%2Fbar"
+  },
+  {
+   "name": "onion",
+   "value": "/onion/timaq4ygg2iegci7:1234"
+  },
+  {
+   "name": "onion3",
+   "value": "/onion3/vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd:1234"
+  },
+  {
+   "name": "p2p-circuit",
+   "value": "/p2p-circuit/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+  },
+  {
+   "name": "p2p p2p-circuit",
+   "value": "/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC/p2p-circuit"
+  },
+  {
+   "name": "ipfs p2p-circuit",
+   "value": "/ipfs/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC/p2p-circuit"
+  },
+  {
+   "name": "p2p-webrtc-star",
+   "value": "/ip4/127.0.0.1/tcp/9090/ws/p2p-webrtc-star/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+  },
+  {
+   "name": "p2p-webrtc-star ipfs",
+   "value": "/ip4/127.0.0.1/tcp/9090/ws/p2p-webrtc-star/ipfs/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC"
+  },
+  {
+   "name": "p2p-webrtc-direct",
+   "value": "/ip4/127.0.0.1/tcp/9090/http/p2p-webrtc-direct"
+  },
+  {
+   "name": "p2p-websocket-star",
+   "value": "/ip4/127.0.0.1/tcp/9090/ws/p2p-websocket-star"
+  },
+  {
+   "name": "memory p2p",
+   "value": "/memory/test/p2p/QmcgpsyWgH8Y8ajJz1Cu72KnS5uo2Aa2LpzU7kinSupNKC",
+   "knownDivergence": "js treats the memory value as an arbitrary string; we follow go/rust (big-endian u64, the plan's step 8 decision), so this js-only vector is skipped"
+  }
+ ],
+ "note": "expected output replaces /ipfs/ with /p2p/ (JS roundTrip)"
+}
