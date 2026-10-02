@@ -203,10 +203,17 @@ func main() {
 		if len(addrs) == 0 {
 			fatalf("no listen addrs")
 		}
-		if _, err := redisCmd(rc, "RPUSH", "listenerAddr", addrs[0].String()); err != nil {
+		// publish the /p2p/<id>-suffixed form: the dialer resolves the
+		// identity from the suffix (AddrInfoFromString requires it)
+		ai := peer.AddrInfo{ID: h.ID(), Addrs: addrs}
+		p2pAddrs, err := peer.AddrInfoToP2pAddrs(&ai)
+		if err != nil || len(p2pAddrs) == 0 {
+			fatalf("p2p addrs: %v", err)
+		}
+		if _, err := redisCmd(rc, "RPUSH", "listenerAddr", p2pAddrs[0].String()); err != nil {
 			fatalf("RPUSH: %v", err)
 		}
-		fmt.Fprintf(os.Stderr, "interopd: listening at %s\n", addrs[0])
+		fmt.Fprintf(os.Stderr, "interopd: listening at %s\n", p2pAddrs[0])
 		time.Sleep(time.Duration(timeoutSecs) * time.Second)
 		fmt.Fprintln(os.Stderr, "interopd: test timeout hit")
 		os.Exit(1)

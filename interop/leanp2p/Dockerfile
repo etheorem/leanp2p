@@ -36,8 +36,6 @@ COPY lakefile.lean lake-manifest.json lean-toolchain ./
 COPY c/ c/
 COPY LeanP2P/ LeanP2P/
 COPY LeanP2P.lean Interop.lean ./
-# the exe imports the lib root; a placeholder Tests dir keeps `lake build
-# interop` from trying to build the test driver's lib glob
 RUN lake build interop
 
 # test-plans harness contract

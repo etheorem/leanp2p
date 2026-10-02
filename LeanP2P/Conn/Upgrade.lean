@@ -29,13 +29,16 @@ muxer was negotiated. `upgradeOutbound` / `upgradeInbound` return a
 namespace LeanP2P
 
 /-- Uniform view of a negotiated muxer session. `openStream` takes the
-protocol name (mplex carries it in NewStream; the others ignore it). -/
+protocol name (mplex carries it in NewStream; the others ignore it);
+`isDead` reports whether the session has shut down (the host uses it to
+retire dead sessions so a peer can reconnect). -/
 structure MuxHandle where
   /-- the negotiated muxer's protocol id -/
   name : String
   openStream : String → IO (Option Stream)
   acceptStream : IO (Option Stream)
   shutdown : IO Unit
+  isDead : IO Bool
   /-- background tasks (frame pumps) owned by this session; the host
   joins them on close -/
   tasks : TaskSet
@@ -47,13 +50,18 @@ structure MuxChoice where
   server : Connection → IO (Option MuxHandle)
 
 /-- A live, upgraded connection to an identified peer. `inbound` records
-who dialed: the dedup rule needs the direction to resolve simultaneous
-dials deterministically (go-libp2p's connection race resolution). -/
+who dialed and `born` is the upgrade time (mono ms): together they let
+the host resolve *simultaneous* dials deterministically without touching
+long-lived connections that merely got a second, later connection. -/
 structure Session where
   remotePeer : PeerId
   remoteAddr : Multiaddr
   mux : MuxHandle
   inbound : Bool := false
+  born : Nat := 0
+  /-- host-assigned unique id (weak identity for the dedup bookkeeping;
+  0 until the host stamps it) -/
+  sid : Nat := 0
 
 /-! ## Muxer selection from the security handshake (go semantics)
 
@@ -78,6 +86,7 @@ def MuxSession.toHandle (m : MuxSession) : MuxHandle where
   openStream := fun _ => some <$> m.openStream
   acceptStream := m.acceptStream
   shutdown := m.shutdown
+  isDead := m.dead.get
   tasks := m.tasks
 
 def FramedChoice : MuxChoice where
@@ -87,8 +96,8 @@ def FramedChoice : MuxChoice where
 
 /-! ## The yamux and mplex choices -/
 
-/-- The yamux and mplex choices: the frame pump runs as a tracked
-background task owned by the session. -/
+/-- The yamux and mplex choices: the frame pump and the control-frame
+writer run as tracked background tasks owned by the session. -/
 
 def YamuxChoice : MuxChoice where
   name := Yamux.protocol
@@ -96,19 +105,23 @@ def YamuxChoice : MuxChoice where
     let s ← Yamux.YamuxSession.make c true
     let tasks ← TaskSet.new
     tasks.spawn s.pump
+    tasks.spawn s.controlLoop
     return some { name := Yamux.protocol
                   openStream := fun _ => s.openStream
                   acceptStream := s.acceptStream
                   shutdown := s.shutdown
+                  isDead := s.dead.get
                   tasks := tasks }
   server c := do
     let s ← Yamux.YamuxSession.make c false
     let tasks ← TaskSet.new
     tasks.spawn s.pump
+    tasks.spawn s.controlLoop
     return some { name := Yamux.protocol
                   openStream := fun _ => s.openStream
                   acceptStream := s.acceptStream
                   shutdown := s.shutdown
+                  isDead := s.dead.get
                   tasks := tasks }
 
 def MplexChoice : MuxChoice where
@@ -121,6 +134,7 @@ def MplexChoice : MuxChoice where
                   openStream := s.openStream
                   acceptStream := s.acceptStream
                   shutdown := s.shutdown
+                  isDead := s.dead.get
                   tasks := tasks }
   server c := do
     let s ← Mplex.MplexSession.make c false
@@ -130,6 +144,7 @@ def MplexChoice : MuxChoice where
                   openStream := s.openStream
                   acceptStream := s.acceptStream
                   shutdown := s.shutdown
+                  isDead := s.dead.get
                   tasks := tasks }
 
 /-! ## Negotiation -/
@@ -233,7 +248,8 @@ def Upgrade.upgradeOutbound (secs : List SecurityProtocol)
       return (some { remotePeer := sc.remotePeer
                      remoteAddr := sc.toConnection.remoteAddr
                      mux := h
-                     inbound := false })
+                     inbound := false
+                     born := ← IO.monoMsNow })
 
 /-- Full inbound upgrade: answer the security negotiation, handshake, then
 start the muxer selected by the initiator in the handshake (falling back
@@ -251,6 +267,7 @@ def Upgrade.upgradeInbound (secs : List SecurityProtocol)
       pure (some { remotePeer := sc.remotePeer
                    remoteAddr := sc.toConnection.remoteAddr
                    mux := h
-                   inbound := true })
+                   inbound := true
+                   born := ← IO.monoMsNow })
 
 end LeanP2P

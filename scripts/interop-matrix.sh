@@ -46,7 +46,7 @@ echo "lean harness built"
 echo
 echo "== starting redis (docker, redis:7-alpine) =="
 docker rm -f leanp2p-redis >/dev/null 2>&1 || true
-docker run -d --name leanp2p-redis -p 6379:6379 redis:7-alpine >/dev/null
+docker run -d --name leanp2p-redis -p 127.0.0.1:16379:6379 redis:7-alpine >/dev/null
 for _ in $(seq 1 20); do
   if docker exec leanp2p-redis redis-cli PING 2>/dev/null | grep -q PONG; then break; fi
   sleep 0.5
@@ -61,11 +61,11 @@ run_cell () { # dialer listener muxer label
 
   if [ "$listener" = "lean" ]; then
     env transport=tcp muxer="$muxer" security=noise is_dialer=false ip=127.0.0.1 \
-        redis_addr=127.0.0.1:6379 test_timeout_seconds=60 \
+        redis_addr=127.0.0.1:16379 test_timeout_seconds=60 \
         ./.lake/build/bin/interop >"$WORK/l.out" 2>"$WORK/l.err" &
   else
     env transport=tcp muxer="$muxer" security=noise is_dialer=false ip=127.0.0.1 \
-        redis_addr=127.0.0.1:6379 test_timeout_seconds=60 \
+        redis_addr=127.0.0.1:16379 test_timeout_seconds=60 \
         ./scripts/interopd >"$WORK/l.out" 2>"$WORK/l.err" &
   fi
   LPID=$!
@@ -82,11 +82,11 @@ run_cell () { # dialer listener muxer label
   local rc=0
   if [ "$dialer" = "lean" ]; then
     env transport=tcp muxer="$muxer" security=noise is_dialer=true ip=127.0.0.1 \
-        redis_addr=127.0.0.1:6379 test_timeout_seconds=60 \
+        redis_addr=127.0.0.1:16379 test_timeout_seconds=60 \
         ./.lake/build/bin/interop >"$WORK/d.out" 2>"$WORK/d.err" || rc=$?
   else
     env transport=tcp muxer="$muxer" security=noise is_dialer=true ip=127.0.0.1 \
-        redis_addr=127.0.0.1:6379 test_timeout_seconds=60 \
+        redis_addr=127.0.0.1:16379 test_timeout_seconds=60 \
         ./scripts/interopd >"$WORK/d.out" 2>"$WORK/d.err" || rc=$?
   fi
 

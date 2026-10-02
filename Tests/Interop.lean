@@ -215,4 +215,62 @@ def InteropSuite.run (r : Runner) : IO Unit := do
     hA.close
     hB.close
 
+  /- ## reconnect: a dead session is replaced, not reused -/
+
+  do
+    let some hA ← mkHost idR loopback [YamuxChoice]
+      | r.check "reconnect host A" false
+    let some hB ← mkHost idI loopback [YamuxChoice]
+      | r.check "reconnect host B" false
+    hA.setStreamHandler Ping.protocol Ping.handle
+    hB.setStreamHandler Ping.protocol Ping.handle
+    let _ ← hA.listen
+    let _ ← hB.listen
+    let some lA ← hA.listeners.get |>.map (·.head?) | r.check "reconnect listener A" false
+    let some lB ← hB.listeners.get |>.map (·.head?) | r.check "reconnect listener B" false
+    hA.peerstore.addAddrs hB.id [lB.addr]
+    hB.peerstore.addAddrs hA.id [lA.addr]
+    let some sA ← hA.dialPeer hB.id | r.check "reconnect first dial" false
+    match ← hA.newStreamTo hB.id Ping.protocol with
+    | none => r.check "reconnect first ping" false
+    | some s => do
+      let res ← Ping.ping s (Bytes.ofNatList (List.replicate 32 1))
+      s.close
+      r.check "reconnect first ping" res.isSome
+    -- the connection dies (both stored sessions shut down, like a peer
+    -- restart with no EOF observed yet)
+    for (_, s) in ← hA.conns.get do s.mux.shutdown
+    for (_, s) in ← hB.conns.get do s.mux.shutdown
+    -- a fresh dial must replace the dead entries and work
+    let some sA2 ← hA.dialPeer hB.id | r.check "reconnect dial" false
+    let oldDead ← sA.mux.isDead
+    let newDead ← sA2.mux.isDead
+    r.check "reconnect replaced session" (oldDead && !newDead)
+    r.check "reconnect one conn at A" ((← hA.conns.get).length == 1)
+    match ← hA.newStreamTo hB.id Ping.protocol with
+    | none => r.check "reconnect ping stream" false
+    | some s => do
+      let res ← Ping.ping s (Bytes.ofNatList (List.replicate 32 2))
+      s.close
+      r.check "reconnect ping" res.isSome
+    r.check "reconnect one conn at B" ((← hB.conns.get).length == 1)
+    -- the reverse direction: kill the fresh connection again and let B
+    -- reconnect - its dial replaces the dead entry at hA through decide
+    for (_, s) in ← hA.conns.get do s.mux.shutdown
+    for (_, s) in ← hB.conns.get do s.mux.shutdown
+    let some sB2 ← hB.dialPeer hA.id | r.check "reconnect dial B" false
+    let bOldDead ← sA2.mux.isDead
+    let bNewDead ← sB2.mux.isDead
+    r.check "reconnect replaced session B" (bOldDead && !bNewDead)
+    r.check "reconnect one conn at B again" ((← hB.conns.get).length == 1)
+    r.check "reconnect one conn at A again" ((← hA.conns.get).length == 1)
+    match ← hB.newStreamTo hA.id Ping.protocol with
+    | none => r.check "reconnect ping stream B" false
+    | some s => do
+      let res ← Ping.ping s (Bytes.ofNatList (List.replicate 32 3))
+      s.close
+      r.check "reconnect ping B" res.isSome
+    hA.close
+    hB.close
+
 end Tests

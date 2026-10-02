@@ -3,3 +3,8 @@
 
 # Python
 __pycache__/
+
+# docker-built go harness nodes
+/scripts/interopd
+/scripts/pingd
+/interop/leanp2p/image.json

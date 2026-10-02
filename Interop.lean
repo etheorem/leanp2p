@@ -27,6 +27,11 @@ Dialer stdout (keys verbatim from the test plan, including its
 `pingRTTMilllis` typo):
 
     {"handshakePlusOneRTTMillis": 12, "pingRTTMilllis": 4}
+
+Known gap: the dial/ping phase has no internal timeout (only the BLPOP
+is bounded); a peer that accepts but never responds parks the dialer
+until the runner kills it, exactly as the test plan's
+`test_timeout_seconds` provides for.
 -/
 
 open LeanP2P
@@ -98,29 +103,38 @@ def buildNode (cfg : InteropCfg) : IO (Option Host) := do
   Host.new { key := id, listenAddr := listenAddr } Tcp.transport
     [Noise.security id static (muxers.map (·.name))] muxers
 
+/-- The ip to advertise: the configured one, or - when the runner passed
+the default 0.0.0.0 - the interface address the redis connection used
+(the redis server is by definition reachable from both harness sides). -/
+def advertisedIp (cfg : InteropCfg) (redis : Redis.Client) : String :=
+  if cfg.ip != "0.0.0.0" then cfg.ip
+  else match redis.conn.localAddr.components with
+    | [AddrComponent.ip4 a b c d, _] => s!"{a}.{b}.{c}.{d}"
+    | _ => "127.0.0.1"
+
 /-- Listener: bind, publish the dialable multiaddr on the `listenerAddr`
 list, serve pings until the test timeout, then exit nonzero (the runner
 kills us earlier on success). -/
 def listenerMode (cfg : InteropCfg) : IO UInt32 := do
-  if cfg.ip == "0.0.0.0" then
-    IO.eprintln "interop: warning: ip=0.0.0.0 advertises a non-dialable address; pass a real ip"
-  let some h ← buildNode cfg | return 1
+  let some redis ← Redis.connect? cfg.redisAddr | do
+    IO.eprintln s!"interop: redis connect failed ({cfg.redisAddr})"; return 1
+  let some h ← buildNode cfg | do redis.close; return 1
   h.setStreamHandler Ping.protocol Ping.handle
-  let some _ ← h.listen | do IO.eprintln "interop: listen failed"; return 1
+  let some _ ← h.listen | do
+    IO.eprintln "interop: listen failed"; h.close; redis.close; return 1
   let port := match (← h.listeners.get).head? with
     | some l => match l.addr.components.getLast? with
       | some (.tcp p) => p
       | _ => 0
     | none => 0
   let addrStr :=
-    s!"/ip4/{cfg.ip}/tcp/{port}/p2p/{PeerId.toBase58 h.id}"
-  let some redis ← Redis.connect? cfg.redisAddr | do
-    IO.eprintln s!"interop: redis connect failed ({cfg.redisAddr})"; return 1
+    s!"/ip4/{advertisedIp cfg redis}/tcp/{port}/p2p/{PeerId.toBase58 h.id}"
   match ← Redis.rpush redis "listenerAddr" addrStr with
   | some _ => IO.eprintln s!"interop: listening at {addrStr}"
   | none => do
     IO.eprintln "interop: redis RPUSH failed"
     h.close
+    redis.close
     return 1
   IO.sleep ((cfg.timeoutSecs * 1000).toUInt32)
   IO.eprintln "interop: test timeout hit"
@@ -155,7 +169,6 @@ def dialerMode (cfg : InteropCfg) : IO UInt32 := do
     | none => do IO.eprintln "interop: ping failed"; return 1
     | some rtt => do
       let total ← IO.monoMsNow
-      let stdout ← IO.getStdout
       -- keys verbatim from the test plan (including its `pingRTTMilllis` typo)
       IO.print ("{\"handshakePlusOneRTTMillis\": " ++ toString (total - t0)
         ++ ", \"pingRTTMilllis\": " ++ toString rtt ++ "}\n")

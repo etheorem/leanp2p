@@ -71,8 +71,10 @@ def YamuxSuite.run (r : Runner) : IO Unit := do
   let serverStreams ← server.streams.get
   r.check "yamux e2e incoming stream" (serverStreams.any (·.1 == 1))
   -- step 5 (interop): accepting a stream must emit the ACK window update
+  -- (the ACK rides the control queue; the control task emits it)
+  let ackOut ← server.controlOne
   let ack ← client.pumpOne
-  r.check "yamux e2e accepted stream acked" ack
+  r.check "yamux e2e accepted stream acked" (ackOut ∧ ack)
   let payload ← match serverStreams.lookup 1 with
     | some sst => sst.pipe.read
     | none => pure none
@@ -99,8 +101,10 @@ def YamuxSuite.run (r : Runner) : IO Unit := do
   client.ping 7
   let pinged ← server.pumpOne
   r.check "yamux e2e ping processed" pinged
+  -- the ping echo rides the control queue; the control task emits it
+  let pongOut ← server.controlOne
   let pong ← client.pumpOne
-  r.check "yamux e2e pong echoed" pong
+  r.check "yamux e2e pong echoed" (pongOut ∧ pong)
   client.goaway 0
   let ga ← server.pumpOne
   r.check "yamux e2e goaway" (¬ ga)

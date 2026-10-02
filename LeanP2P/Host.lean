@@ -40,6 +40,8 @@ structure Host where
   conns : OnceRef (List (PeerId × Session))
   handlers : OnceRef (List (String × (Stream → IO Unit)))
   listeners : OnceRef (List Listener)
+  /-- source of unique session ids (dedup bookkeeping) -/
+  nextSid : OnceRef Nat
   tasks : TaskSet
 
 def Host.new (cfg : HostConfig) (transport : Transport)
@@ -56,6 +58,7 @@ def Host.new (cfg : HostConfig) (transport : Transport)
       conns := ← OnceRef.new []
       handlers := ← OnceRef.new []
       listeners := ← OnceRef.new []
+      nextSid := ← OnceRef.new 1
       tasks := ← TaskSet.new })
 
 def Host.setStreamHandler (h : Host) (proto : String) (f : Stream → IO Unit) : IO Unit := do
@@ -83,6 +86,11 @@ def Host.addrBase (a : Multiaddr) : Multiaddr :=
   | some (.p2p _ _) => { a with components := a.components.dropLast }
   | _ => a
 
+/-- Stamp a fresh unique session id (before dedup sees it). -/
+def Host.stampSid (h : Host) (s : Session) : IO Session := do
+  let sid ← h.nextSid.update fun n => (n + 1, n)
+  pure { s with sid := sid }
+
 /-- Spawn a tracked task (connection/stream handlers, serve loops). -/
 def Host.spawn (h : Host) (act : IO Unit) : IO Unit :=
   h.tasks.spawn act
@@ -100,29 +108,82 @@ inbound connections. -/
 def Host.initiatorOf (h : Host) (s : Session) : PeerId :=
   if s.inbound then s.remotePeer else h.id
 
-/-- Connection dedup with go-libp2p's simultaneous-connect rule. When an
-inbound/outbound pair raced, both sides keep the connection dialed by the
-peer with the smaller id, so the two decision points converge on the same
-TCP connection (the old spike rule dropped the newer connection, which
-could leave both sides with nothing). Returns the surviving session,
-whether `newS` was stored, and the displaced session to shut down. -/
-def Host.decide (h : Host) (newS : Session) :
-    IO (Session × Bool × Option Session) := do
-  h.conns.update fun cs =>
-    match cs.lookup newS.remotePeer with
-    | some old =>
-        let oldInit := Bytes.toNatList (Host.initiatorOf h old).bytes
-        let newInit := Bytes.toNatList (Host.initiatorOf h newS).bytes
-        if oldInit ≤ newInit then
-          (cs, (old, false, none))
-        else
-          (cs.filter (fun x => x.1 != newS.remotePeer)
-              ++ [(newS.remotePeer, newS)], (newS, true, some old))
-    | none => (cs ++ [(newS.remotePeer, newS)], (newS, true, none))
+/-- The window in which two opposite-direction connections count as a
+simultaneous dial (both handshakes still ramping up). Each side measures
+with its own clock, so decisions near the boundary can diverge; the
+dead-session replacement below makes that self-healing (the side whose
+connection lost sees it die and a redial replaces the dead entry). -/
+def simulWindowMs : Nat := 30000
 
-/-- The live session to a peer, if any. -/
+/-- Connection dedup. A dead session is always replaced (otherwise a peer
+that restarted could never reconnect). A live session keeps its place -
+except when an inbound/outbound pair raced: then both sides keep the
+connection dialed by the peer with the smaller id, so the two decision
+points converge on the same TCP connection (the spike's old rule dropped
+the newer connection, which could leave both sides with nothing). A
+later, non-racing connection never displaces a healthy session; go keeps
+both and only resolves genuine races (known gap: a peer whose session we
+still consider live cannot replace it until it is seen dead - the spike
+has no keep-alive or yamux ping probe to notice earlier).
+
+The dead probe needs IO, so probe and commit are separate steps; when
+the occupant changed underneath the probe (a concurrent decide - exactly
+the simultaneous-dial case), the full rule is re-evaluated against the
+new occupant, bounded by a few retries. Returns the surviving session,
+whether `newS` was stored, and the displaced session to shut down. -/
+partial def Host.decide (h : Host) (newS : Session) :
+    IO (Session × Bool × Option Session) := do
+  let now ← IO.monoMsNow
+  let newInit := Bytes.toNatList (Host.initiatorOf h newS).bytes
+  let rec go (retries : Nat) :
+      IO (Session × Bool × Option Session) := do
+    let peek : Option Session ← h.conns.update fun cs => (cs, cs.lookup newS.remotePeer)
+    let wantReplace ←
+      match peek with
+      | none => pure true
+      | some old => do
+        if ← old.mux.isDead then pure true
+        else
+          let raced := old.inbound != newS.inbound ∧ now - old.born ≤ simulWindowMs
+          pure (raced ∧ newInit < Bytes.toNatList (Host.initiatorOf h old).bytes)
+    let (stored, isNew, loser, moved) ← h.conns.update fun cs =>
+      match cs.lookup newS.remotePeer with
+      | none => (cs ++ [(newS.remotePeer, newS)], (newS, true, none, false))
+      | some old =>
+          let sameAsPeek : Bool :=
+            (peek.map (fun o => o.sid == old.sid)).getD false
+          if sameAsPeek then
+            if wantReplace then
+              (cs.filter (fun x => x.1 != newS.remotePeer)
+                  ++ [(newS.remotePeer, newS)], (newS, true, some old, false))
+            else
+              (cs, (old, false, none, false))
+          else
+            -- a concurrent decide changed the entry between our probe
+            -- and the commit: re-run the whole rule against the new
+            -- occupant instead of silently first-commit-wins
+            (cs, (old, false, none, true))
+    if moved && retries > 0 then go (retries - 1)
+    else pure (stored, isNew, loser)
+  go 3
+
+/-- Remove exactly `s` (by its unique host-assigned id) from the conns
+cell. -/
+def Host.pruneSession (h : Host) (s : Session) : IO Unit := do
+  h.conns.update fun cs =>
+    (cs.filter (fun x => x.1 != s.remotePeer ∨ x.2.sid != s.sid), ())
+
+/-- The live session to a peer, if any. Dead sessions are pruned (only
+the probed one - a concurrent decide may have stored a live successor),
+so a reconnect (and dialPeer) never reuses one. -/
 def Host.sessionOf (h : Host) (pid : PeerId) : IO (Option Session) := do
-  return (← h.conns.get).lookup pid
+  match (← h.conns.get).lookup pid with
+  | none => pure none
+  | some s =>
+    if ← s.mux.isDead then do
+      Host.pruneSession h s
+      pure none
+    else pure (some s)
 
 /-- Inbound stream: negotiate, then dispatch to the registered handler. -/
 partial def Host.handleStream (h : Host) (s : Stream) : IO Unit := do
@@ -150,7 +211,7 @@ partial def Host.handleConn (h : Host) (c : Connection) : IO Unit := do
   | none => c.close
   | some sess =>
     h.peerstore.addAddrs sess.remotePeer [sess.remoteAddr]
-    let (_, isNew, loser) ← h.decide sess
+    let (_, isNew, loser) ← h.decide (← h.stampSid sess)
     match loser with
     | some old => old.mux.shutdown   -- our dial lost the race
     | none => pure ()
@@ -194,7 +255,13 @@ def Host.dial (h : Host) (addr : Multiaddr) (expect : Option PeerId) :
     | none => do
       let cs ← h.conns.get
       match cs.find? (fun x => x.2.remoteAddr == addr) with
-      | some x => pure (some x.2)
+      | some x =>
+        -- an address-keyed hit must still be alive; dead ones are pruned
+        -- (identity-safe, as in sessionOf)
+        if ← x.2.mux.isDead then do
+          Host.pruneSession h x.2
+          pure none
+        else pure (some x.2)
       | none => pure none
   match reuse? with
   | some s => return (some s)
@@ -203,7 +270,7 @@ def Host.dial (h : Host) (addr : Multiaddr) (expect : Option PeerId) :
     | none => return none
     | some sess =>
       h.peerstore.addAddrs sess.remotePeer [addr]
-      let (stored, isNew, loser) ← h.decide sess
+      let (stored, isNew, loser) ← h.decide (← h.stampSid sess)
       match loser with
       | some old => old.mux.shutdown   -- displaced by the race winner
       | none => pure ()

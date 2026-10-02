@@ -24,6 +24,9 @@
 */
 #include <lean/lean.h>
 #include <string.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <openssl/evp.h>
 #include <openssl/core_names.h>
 #include <openssl/params.h>
@@ -654,4 +657,32 @@ lean_obj_res leanp2p_x509_self_signed(b_lean_obj_arg der, lean_obj_arg w) {
   X509_free(x);
   clear_err();
   return mk_ok_bool(ok ? 1 : 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* Name resolution for the phase 5 interop harness. The Lean runtime    */
+/* has no DNS; the test-plans runner passes `redis_addr=redis:6379`     */
+/* (compose service name). Returns the first IPv4 address as 4 bytes,   */
+/* or none.                                                            */
+lean_obj_res leanp2p_resolve_v4(b_lean_obj_arg host, lean_obj_arg w) {
+  const char *h = lean_string_cstr(host);
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  if (getaddrinfo(h, NULL, &hints, &res) != 0 || res == NULL) {
+    if (res != NULL) freeaddrinfo(res);
+    clear_err();
+    return mk_ok_none();
+  }
+  uint8_t out[4];
+  for (struct addrinfo *ai = res; ai != NULL; ai = ai->ai_next) {
+    if (ai->ai_family == AF_INET && ai->ai_addr != NULL) {
+      memcpy(out, &((struct sockaddr_in *)ai->ai_addr)->sin_addr, 4);
+      freeaddrinfo(res);
+      return mk_ok_some(mk_ba(out, 4));
+    }
+  }
+  freeaddrinfo(res);
+  return mk_ok_none();
 }

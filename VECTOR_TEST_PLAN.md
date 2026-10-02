@@ -66,8 +66,8 @@ it, pings once and prints `{"handshakePlusOneRTTMillis": ..,
 a minimal RESP2 client over the Lean TCP transport
 (`LeanP2P/Interop/Redis.lean`); `scripts/interopd.go` is the go-libp2p
 v0.50 counterpart reading the same environment; `interop/leanp2p/`
-(Dockerfile + Makefile + images.json) drops into a `libp2p/test-plans`
-fork as `impl/leanp2p/<v>/` and was verified live (lean container as
+(Dockerfile + Makefile emitting the upstream `image.json`) drops into a
+`libp2p/test-plans` fork as `impl/leanp2p/<v>/` and was verified live (lean container as
 listener, go container dialing it through Redis on a docker network).
 Step 26 fixed every interop blocker phase 4 had recorded before running
 the cells: mplex stream identity now follows go-mplex (both sides count
@@ -81,8 +81,20 @@ failures tear the connection down; all yamux frame writes serialize on
 the session mutex (the pump's new ACK writes raced handler writes at the
 Noise layer). The stress also exposed two latent bugs, both fixed:
 `BufReader.readExactly` re-served its buffer (any leftover ≥ the request
-duplicated bytes — the framing desynced), and the echo handler did not
-propagate EOF. Done criteria: `Tests/Interop.lean` (same-id mplex
+duplicated bytes — the framing desynced), the echo handler did not
+propagate EOF, the same double-serve existed in the redis client's line
+reader, and yamux counted received bytes twice as window credit. A
+post-implementation review round then reshaped the yamux pump (control
+frames queue through a dedicated writer task, so the pump never blocks
+on the write mutex), restricted the dial resolution to genuine races
+(direction + freshness window — a later inbound connection no longer
+displaces a healthy session), and made the harness test-plans compatible
+in the details: `redis_addr` resolves DNS names (getaddrinfo in the C
+shim, so the compose default `redis:6379` works) and a listener given
+the runner default `ip=0.0.0.0` advertises the interface address its
+redis connection used. Both were verified with a fully containerized
+cell (lean image as listener with `ip=0.0.0.0` + `redis_addr=redis:6379`,
+a go container dialing it through the service name). Done criteria: `Tests/Interop.lean` (same-id mplex
 streams with no cross-delivery; a 1 MiB round trip — 4× the initial
 yamux window — both directions over noise-encrypted TCP; three rounds of
 simultaneous dials converging to one usable connection per side), and
@@ -414,7 +426,7 @@ with a round-trip theorem first, the IO shell after.
     `test_timeout_seconds`; listener does `RPUSH listenerAddr`, dialer does
     `BLPOP`, pings, prints `{"handshakePlusOneRTT":..,"pingRTT":..}`.
     Needs a minimal Redis RESP client. Add a `Dockerfile` and an
-    `images.json` entry in a fork of `libp2p/test-plans`.
+    `image.json`-emitting Makefile in a fork of `libp2p/test-plans`.
 26. **Interop matrix, in this order:** `tcp × noise × yamux`,
     `tcp × noise × mplex`, `tcp × tls × yamux`, `ws × noise × yamux`.
     Run against go-libp2p, rust-libp2p, js-libp2p, nim-libp2p. Done: green

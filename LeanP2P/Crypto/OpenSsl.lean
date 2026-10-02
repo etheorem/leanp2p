@@ -48,6 +48,12 @@ implementation). -/
 opaque hkdfSha256 (salt ikm info : ByteArray) (outLen : @& USize) :
     IO (Option ByteArray)
 
+/-- `resolveV4 host`: the first IPv4 address of `host` via getaddrinfo
+(4 bytes; the runtime has no DNS, and the interop harness must accept the
+compose service name `redis`). -/
+@[extern "leanp2p_resolve_v4"]
+opaque resolveV4 (host : @& String) : IO (Option ByteArray)
+
 /-! ## Ed25519 -/
 
 /-- Public key (32 bytes) derived from the raw RFC 8032 seed. -/

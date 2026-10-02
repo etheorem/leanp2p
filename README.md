@@ -350,7 +350,7 @@ test-plan-shaped peer and paid the interop debt the wider matrix exposed:
 
 | step | what | where |
 |---|---|---|
-| 25 | transport-interop harness: the `interop` exe reads `transport`, `muxer`, `security`, `is_dialer`, `ip`, `redis_addr`, `test_timeout_seconds`; the listener `RPUSH`es its multiaddr on the `listenerAddr` list, the dialer `BLPOP`s it, pings once and prints `{"handshakePlusOneRTTMillis": .., "pingRTTMilllis": ..}` (keys verbatim, typo included). A minimal RESP2 client (`LeanP2P/Interop/Redis.lean`) rides the TCP transport; `scripts/interopd.go` is the go-libp2p counterpart reading the same env, and `interop/leanp2p/` (Dockerfile + Makefile + images.json) drops into a `libp2p/test-plans` fork as `impl/leanp2p/<v>/` | `Interop.lean`, `LeanP2P/Interop/Redis`, `scripts/interop-matrix.sh`, `interop/leanp2p/` |
+| 25 | transport-interop harness: the `interop` exe reads `transport`, `muxer`, `security`, `is_dialer`, `ip`, `redis_addr`, `test_timeout_seconds`; the listener `RPUSH`es its multiaddr on the `listenerAddr` list, the dialer `BLPOP`s it, pings once and prints `{"handshakePlusOneRTTMillis": .., "pingRTTMilllis": ..}` (keys verbatim, typo included). A minimal RESP2 client (`LeanP2P/Interop/Redis.lean`) rides the TCP transport (DNS names resolve through a getaddrinfo shim); `scripts/interopd.go` is the go-libp2p counterpart reading the same env, and `interop/leanp2p/` (Dockerfile + Makefile emitting the upstream `image.json`) drops into a `libp2p/test-plans` fork as `impl/leanp2p/<v>/` | `Interop.lean`, `LeanP2P/Interop/Redis`, `scripts/interop-matrix.sh`, `interop/leanp2p/` |
 | 26 | the recorded phase-4 blockers fixed to go semantics, then the live cells: **tcp × noise × yamux, lean ↔ go-libp2p v0.50, both dial directions, through Redis** (`scripts/interop-matrix.sh`, green; also wired into the nightly workflow, and verified once fully containerized: the leanp2p image as listener, a go container dialing it) | `Conn/Mplex`, `Conn/Yamux`, `Host`, `Net/Tcp`, `Tests/Interop` |
 
 The interop debt fixed (all recorded as phase-5 blockers in phase 4):
@@ -365,22 +365,37 @@ The interop debt fixed (all recorded as phase-5 blockers in phase 4):
   acknowledged (empty ACK window update — the spec requires ACK or RST),
   the initiator opens with an empty SYN window update (go-yamux
   semantics), sends are bounded by the peer-granted window (writers park
-  on a credit channel; the session closes it on teardown), and consumed
-  bytes return as credit in half-window batches. Evidence: a 1 MiB
-  round trip (4× the initial window) both directions over
-  noise-encrypted TCP (`Tests/Interop`).
+  on a credit channel; the session closes it on teardown), consumed
+  bytes return as credit in half-window batches, and the credit ledger
+  is exact (only application consumption returns credit). The frame
+  pump never writes inline: pump-generated control frames (ACKs, ping
+  echoes) go through a queue drained by a dedicated writer task, so a
+  stream writer parked on a full TCP send buffer cannot stall the pumps
+  of both sessions at once. Evidence: a 1 MiB round trip (4× the initial
+  window) both directions over noise-encrypted TCP (`Tests/Interop`).
 - **Simultaneous dials resolve go-style**: `Session.inbound` records who
-  dialed; when an inbound/outbound pair raced, both sides keep the
-  connection dialed by the peer with the smaller id, so the two decision
-  points converge (the spike used to drop the newer connection, which
-  could leave both sides with nothing). Evidence: three rounds of
-  concurrent dialing, one session survives on each side, pings work
-  both ways.
+  dialed; when an inbound/outbound pair *raced* (opposite directions
+  within a freshness window), both sides keep the connection dialed by
+  the peer with the smaller id, so the two decision points converge (the
+  spike used to drop the newer connection, which could leave both sides
+  with nothing). A later, non-racing connection never displaces a
+  healthy session — go keeps both and only resolves genuine races — and
+  a *dead* session is always replaced, so a restarted peer can
+  reconnect (the decision re-runs the full rule when a concurrent decide
+  changes the entry between probe and commit, sessions carry unique ids,
+  and dead sessions are pruned from the reuse paths). The window is
+  clock-local (documented divergence risk near its edge); the
+  dead-replacement makes that self-healing. Known gap: a peer cannot
+  replace a session we still consider live (no keepalive probe yet). Evidence: three rounds of
+  concurrent dialing, one session survives on each side, pings work both
+  ways; plus a killed-connection round trip where a fresh dial replaces
+  the dead entry on both sides and pings again (`Tests/Interop`).
 - **TCP write failures tear the connection down** (read EOF + FIN) so
   the mux/session layers observe them instead of losing bytes silently.
 - **All yamux frame writes serialize on the session write mutex** — the
-  frame pump now writes (ACKs), which raced handler writes at the Noise
-  layer (two ChaChaPoly records with the same nonce).
+  frame pump started writing (ACKs), which raced handler writes at the
+  Noise layer (two ChaChaPoly records with the same nonce). Post-review
+  the pump no longer takes the mutex at all (control queue; above).
 - Two latent bugs the stress exposed and fixed: `BufReader.readExactly`
   re-served buffered bytes (any leftover ≥ the request duplicated them
   into the stream — the noise/mux framing desynced), and the echo
@@ -467,5 +482,9 @@ the hash interface — the identity model is sound.
 - mplex has no flow control (per spec); yamux implements the spec's
   window accounting (ACK on accept, send-side credit, half-window
   returns) but does not enforce the receive window on the peer.
-- The harness advertises the configured `ip` (the test runner passes a
-  dialable container IP); libp2p discovers interface addresses.
+- The harness advertises the configured `ip`; with the runner default
+  `0.0.0.0` it falls back to the interface address its redis connection
+  used, and `redis_addr` accepts DNS names (getaddrinfo in the C shim) —
+  the compose-style `redis:6379` default works. Known gap: the dial/ping
+  phase has no internal timeout (the runner's `test_timeout_seconds`
+  provides for it).

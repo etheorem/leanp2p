@@ -1,6 +1,7 @@
 import LeanP2P.Net.Tcp
 import LeanP2P.Conn.Reader
 import LeanP2P.Crypto.Bytes
+import LeanP2P.Crypto.OpenSsl
 /-!
 # Minimal Redis client (VECTOR_TEST_PLAN.md, phase 5 step 25)
 
@@ -31,24 +32,33 @@ def parseIp4? (h : String) : Option (Nat × Nat × Nat × Nat) := do
     | _, _, _, _ => none
   | _ => none
 
-/-- `host:port` (host = dotted ip4, or `localhost`) to a `/ip4/../tcp/..`
-multiaddr. -/
-def addrOfHostPort? (hostPort : String) : Option Multiaddr := do
+/-- `host:port` to a `/ip4/../tcp/..` multiaddr. The host may be a dotted
+ip4, `localhost`, or any DNS name (resolved through the shim's
+getaddrinfo - the test-plans runner passes the compose service name
+`redis`). -/
+def addrOfHostPort? (hostPort : String) : IO (Option Multiaddr) := do
   match hostPort.splitOn ":" with
   | [h, p] =>
-    let port ← p.toNat?
-    if port ≥ 65536 then none
-    else
-      let host := if h == "localhost" then "127.0.0.1" else h
-      match parseIp4? host with
+    let some port := p.toNat? | pure none
+    if port ≥ 65536 then pure none
+    else do
+      let ip? ←
+        if h == "localhost" then pure (some (127, 0, 0, 1))
+        else match parseIp4? h with
+          | some q => pure (some q)
+          | none => do
+            match ← OpenSsl.resolveV4 h with
+            | some b4 => pure (parseIp4? s!"{b4[0]!.toNat}.{b4[1]!.toNat}.{b4[2]!.toNat}.{b4[3]!.toNat}")
+            | none => pure none
+      match ip? with
       | some (a, b, c, d) =>
-          some { components := [AddrComponent.ip4 a b c d, AddrComponent.tcp port] }
-      | none => none
-  | _ => none
+          pure (some { components := [AddrComponent.ip4 a b c d, AddrComponent.tcp port] })
+      | none => pure none
+  | _ => pure none
 
-/-- Connect to `host:port`. -/
+/-- Connect to `host:port` (DNS names resolved; `none` on failure). -/
 def connect? (hostPort : String) : IO (Option Client) := do
-  let some addr := addrOfHostPort? hostPort | return none
+  let some addr ← addrOfHostPort? hostPort | return none
   let some c ← Tcp.dial addr | return none
   return some { conn := c, reader := ← BufReader.ofConn c }
 
@@ -71,9 +81,14 @@ def encodeCmd (args : List String) : ByteArray :=
   args.foldl (fun acc a =>
     acc ++ Bytes.ofString s!"${(a.toUTF8).size}\r\n" ++ a.toUTF8 ++ Bytes.ofString "\r\n") head
 
-/-- One CRLF-terminated line off the reader (kept buffered for the next
-reply; RESP replies never straddle our reads). -/
+/-- One CRLF-terminated line off the reader (the over-read stays buffered
+for the next reply). The buffer is drained up front: bytes taken into
+`acc` must not be served again by `readAvail` (the same fault the phase 5
+`readExactly` fix removed - a lone `\r` split across TCP reads used to
+duplicate the buffered prefix and desync the reply stream). -/
 partial def readLine (r : BufReader) : IO (Option String) := do
+  let first ← r.buf.get
+  r.buf.set ByteArray.empty
   let rec go (acc : ByteArray) : IO (Option String) := do
     match acc.toList.findIdx? (· == 13) with
     | some i =>
@@ -88,7 +103,7 @@ partial def readLine (r : BufReader) : IO (Option String) := do
       match ← r.readAvail with
       | none => pure none
       | some c => go (acc ++ c)
-  go (← r.buf.get)
+  go first
 
 /-- Read one reply (recursively for arrays). -/
 partial def reply (r : BufReader) : IO (Option Reply) := do
@@ -106,7 +121,8 @@ partial def reply (r : BufReader) : IO (Option Reply) := do
         match (l.drop 1).toInt? with
         | some (-1) => pure (Reply.bulk none)
         | some n =>
-          match ← r.readExactly n.toNat with
+          if n < -1 then pure none
+          else match ← r.readExactly n.toNat with
           | none => pure none
           | some b => do
             let _ ← readLine r   -- trailing CRLF
