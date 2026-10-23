@@ -59,10 +59,20 @@ def MplexSuite.run (r : Runner) : IO Unit := do
   | .bad => r.check "mplex 1MiB cap rejects" true
   | _ => r.check "mplex 1MiB cap rejects" false
 
+  -- an over-long varint (> 9 bytes) is a protocol error, not "need more
+  -- bytes": the reader must not accumulate forever on a hostile header
+  match Mplex.decodeMsg? (List.replicate 12 255) with
+  | .bad => r.check "mplex over-long varint rejected" true
+  | _ => r.check "mplex over-long varint rejected" false
+  -- a short prefix of one is still legitimately incomplete
+  match Mplex.decodeMsg? (List.replicate 5 255) with
+  | .more _ => r.check "mplex short varint incomplete" true
+  | _ => r.check "mplex short varint incomplete" false
+
   -- NewStream + data over the byte-splitting sim, stepped
   let (cI, cR) ← mkSplit
-  let client ← Mplex.MplexSession.make cI true
-  let server ← Mplex.MplexSession.make cR false
+  let client ← Mplex.MplexSession.make (← BufReader.ofConn cI) true
+  let server ← Mplex.MplexSession.make (← BufReader.ofConn cR) false
   let some st ← client.openStream "/ipfs/kad/1.0.0" | r.check "mplex e2e open" false
   st.write (Bytes.ofString "mplex-data")
   -- the server pump processes NewStream and MessageInitiator
@@ -88,27 +98,36 @@ def MplexSuite.run (r : Runner) : IO Unit := do
     let echoed ← st.read
     r.check "mplex e2e echo" (echoed == some b)
   st.close
-  -- the server pump processes the CloseInitiator and closes its stream view
+  -- half-close (mplex README "Closing a stream"): the server processes
+  -- CloseInitiator; its read side drains to EOF, but its write side
+  -- must stay open - a response sent after our close still arrives
   let sclose ← server.pumpOne
+  r.check "mplex e2e close processed" sclose
   let serverStreams2 ← server.streams.get
-  let openState ← match serverStreams2.lookup (0, false) with
-    | some sst => sst.open_.get
-    | none => pure true
-  r.check "mplex e2e close" (sclose ∧ openState == false)
+  match serverStreams2.lookup (0, false) with
+  | none => r.check "mplex e2e close" false
+  | some sst => do
+    let eof ← sst.pipe.read
+    r.check "mplex e2e close read eof" (eof == none)
+    r.check "mplex e2e close write stays open" (← sst.writeOpen.get)
+    server.writeMsg { flag := Mplex.fMessageReceiver, id := 0,
+                      payload := Bytes.toNatList (Bytes.ofString "after-close") }
+    let cstep ← client.pumpOne
+    let late ← st.read
+    r.check "mplex e2e close late response"
+      (cstep ∧ late == some (Bytes.ofString "after-close"))
 
-  -- reset: the peer's stream is torn down
+  -- reset: the peer's stream is torn down (both directions die and the
+  -- stream is retired from the session map)
   let (cI2, cR2) ← mkSplit
-  let client2 ← Mplex.MplexSession.make cI2 true
-  let server2 ← Mplex.MplexSession.make cR2 false
+  let client2 ← Mplex.MplexSession.make (← BufReader.ofConn cI2) true
+  let server2 ← Mplex.MplexSession.make (← BufReader.ofConn cR2) false
   let some st2 ← client2.openStream "/demo" | r.check "mplex reset open" false
   st2.reset
   -- the server pump processes NewStream, then ResetInitiator
   let _ ← server2.pumpOne
   let r1 ← server2.pumpOne
   let serverStreams3 ← server2.streams.get
-  let openState ← match serverStreams3.lookup (0, false) with
-    | some sst => sst.open_.get
-    | none => pure true
-  r.check "mplex e2e reset" (r1 ∧ openState == false)
+  r.check "mplex e2e reset" (r1 ∧ (serverStreams3.lookup (0, false)).isNone)
 
 end Tests

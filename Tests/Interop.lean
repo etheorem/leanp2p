@@ -73,8 +73,8 @@ def InteropSuite.run (r : Runner) : IO Unit := do
   /- ## mplex: same-id streams from both sides coexist (go-mplex) -/
 
   let (cI, cR) ← mkSplit
-  let client ← Mplex.MplexSession.make cI true
-  let server ← Mplex.MplexSession.make cR false
+  let client ← Mplex.MplexSession.make (← BufReader.ofConn cI) true
+  let server ← Mplex.MplexSession.make (← BufReader.ofConn cR) false
   -- both sides open their first stream; with ids from zero that is id 0
   -- on both (the old odd/even split would have kept them apart)
   let some stC ← client.openStream "/p/c" | r.check "mplex id collision open C" false

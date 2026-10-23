@@ -363,8 +363,27 @@ static uint8_t *der_sig_low_s(const uint8_t *der, size_t der_len,
   return buf;
 }
 
+/* BIP-62 accept rule on the verify side: reject high-S signatures so the
+   accepted set matches go-libp2p and signatures are non-malleable. */
+static int der_sig_is_low_s(const uint8_t *der, size_t der_len) {
+  const unsigned char *p = der;
+  ECDSA_SIG *sig = d2i_ECDSA_SIG(NULL, &p, (long)der_len);
+  if (sig == NULL) { clear_err(); return 0; }
+  const BIGNUM *s = ECDSA_SIG_get0_s(sig);
+  BIGNUM *order = BN_new(), *half = BN_new();
+  EC_GROUP *grp = EC_GROUP_new_by_curve_name(NID_secp256k1);
+  int ok = grp != NULL && order != NULL && half != NULL
+        && EC_GROUP_get_order(grp, order, NULL) == 1
+        && BN_rshift1(half, order)
+        && BN_cmp(s, half) <= 0;
+  EC_GROUP_free(grp); BN_free(order); BN_free(half);
+  ECDSA_SIG_free(sig);
+  if (!ok) clear_err();
+  return ok;
+}
+
 lean_obj_res leanp2p_secp256k1_sign(b_lean_obj_arg scalar, b_lean_obj_arg msg,
-                                    lean_obj_arg w) {
+                                     lean_obj_arg w) {
   if (lean_sarray_size(scalar) != 32) return mk_ok_none();
   EVP_PKEY *pkey = ec_key_from_priv("secp256k1", NID_secp256k1,
                                     lean_sarray_cptr(scalar), 32);
@@ -394,6 +413,8 @@ lean_obj_res leanp2p_secp256k1_sign(b_lean_obj_arg scalar, b_lean_obj_arg msg,
 lean_obj_res leanp2p_secp256k1_verify(b_lean_obj_arg pub, b_lean_obj_arg msg,
                                       b_lean_obj_arg sig, lean_obj_arg w) {
   if (lean_sarray_size(pub) != 33) return mk_ok_bool(0);
+  if (!der_sig_is_low_s(lean_sarray_cptr(sig), lean_sarray_size(sig)))
+    return mk_ok_bool(0);
   EVP_PKEY *pkey = ec_key_from_pub("secp256k1", lean_sarray_cptr(pub), 33);
   if (pkey == NULL) return mk_ok_bool(0);
   EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -408,6 +429,11 @@ lean_obj_res leanp2p_secp256k1_verify(b_lean_obj_arg pub, b_lean_obj_arg msg,
 
 /* ------------------------------------------------------------------ */
 /* ECDSA P-256 and RSA (DER key forms per peer-ids spec)               */
+
+/* libp2p RSA bound: the peer-ids / security baseline requires 2048-8192
+   bit keys; smaller keys must not verify. */
+#define RSA_MIN_BITS 2048
+#define RSA_MAX_BITS 8192
 
 /* Import a DER private key (PKCS#8 or PKCS#1, auto-detected). */
 static EVP_PKEY *priv_from_der(b_lean_obj_arg der) {
@@ -433,6 +459,26 @@ static EVP_PKEY *pub_from_spki_der(b_lean_obj_arg der) {
   EVP_PKEY *pkey = d2i_PUBKEY(NULL, &p, (long)lean_sarray_size(der));
   if (pkey == NULL) clear_err();
   return pkey;
+}
+
+/* Is the SPKI an EC key on exactly `curve_name` (e.g. prime256v1)? The
+   verifiers must not accept a key of another type or curve: an EC key
+   under the ECDSA entry point or vice versa would let one scheme's
+   signatures validate under another's. */
+static int spki_is_ec_curve(EVP_PKEY *pkey, const char *curve_name) {
+  if (pkey == NULL || !EVP_PKEY_is_a(pkey, "EC")) return 0;
+  char group[64];
+  size_t len = 0;
+  if (EVP_PKEY_get_group_name(pkey, group, sizeof(group), &len) != 1)
+    return 0;
+  return strcmp(group, curve_name) == 0;
+}
+
+/* Is the SPKI an RSA key within the libp2p size bound? */
+static int spki_is_rsa_in_bound(EVP_PKEY *pkey) {
+  if (pkey == NULL || !EVP_PKEY_is_a(pkey, "RSA")) return 0;
+  int bits = EVP_PKEY_get_bits(pkey);
+  return bits >= RSA_MIN_BITS && bits <= RSA_MAX_BITS;
 }
 
 /* Generic EVP sign/verify helpers (PKCS#1 v1.5 for RSA, DER for EC). */
@@ -489,9 +535,12 @@ lean_obj_res leanp2p_ecdsa_p256_sign(b_lean_obj_arg pkcs8, b_lean_obj_arg msg,
 }
 
 lean_obj_res leanp2p_ecdsa_p256_verify(b_lean_obj_arg spki, b_lean_obj_arg msg,
-                                       b_lean_obj_arg sig, lean_obj_arg w) {
+                                        b_lean_obj_arg sig, lean_obj_arg w) {
   EVP_PKEY *pkey = pub_from_spki_der(spki);
-  if (pkey == NULL) return mk_ok_bool(0);
+  if (!spki_is_ec_curve(pkey, "prime256v1")) {
+    EVP_PKEY_free(pkey);
+    return mk_ok_bool(0);
+  }
   int ok = evp_verify(pkey, EVP_sha256(), msg, sig);
   EVP_PKEY_free(pkey);
   return mk_ok_bool(ok);
@@ -521,7 +570,10 @@ lean_obj_res leanp2p_rsa_sign(b_lean_obj_arg pkcs1, b_lean_obj_arg msg,
 lean_obj_res leanp2p_rsa_verify(b_lean_obj_arg spki, b_lean_obj_arg msg,
                                 b_lean_obj_arg sig, lean_obj_arg w) {
   EVP_PKEY *pkey = pub_from_spki_der(spki);
-  if (pkey == NULL) return mk_ok_bool(0);
+  if (!spki_is_rsa_in_bound(pkey)) {
+    EVP_PKEY_free(pkey);
+    return mk_ok_bool(0);
+  }
   int ok = evp_verify(pkey, EVP_sha256(), msg, sig);
   EVP_PKEY_free(pkey);
   return mk_ok_bool(ok);
@@ -608,6 +660,32 @@ lean_obj_res leanp2p_chacha20poly1305_open(b_lean_obj_arg key,
 
 #define LIBP2P_TLS_OID "1.3.6.1.4.1.53594.1.1"
 
+/* tls.md validation beyond the signature:
+   - the certificate must be valid *now* (NotBefore/NotAfter checked);
+   - the certificate may not carry critical extensions we do not
+     understand - only the libp2p extension may be critical;
+   - the libp2p extension itself MAY be critical, so its criticality is
+     not a reason to reject. */
+static int cert_valid_now(X509 *x) {
+  if (X509_cmp_current_time(X509_get0_notBefore(x)) >= 0) return 0; /* not yet valid */
+  if (X509_cmp_current_time(X509_get0_notAfter(x)) <= 0) return 0; /* expired */
+  return 1;
+}
+
+static int cert_no_unknown_critical(X509 *x) {
+  int n = X509_get_ext_count(x);
+  for (int i = 0; i < n; i++) {
+    X509_EXTENSION *e = X509_get_ext(x, i);
+    if (e == NULL) return 0;
+    if (!X509_EXTENSION_get_critical(e)) continue;  /* non-critical: ignore */
+    ASN1_OBJECT *oid = OBJ_txt2obj(LIBP2P_TLS_OID, 1);
+    int isLibp2p = oid != NULL && OBJ_cmp(X509_EXTENSION_get_object(e), oid) == 0;
+    ASN1_OBJECT_free(oid);
+    if (!isLibp2p) return 0;  /* critical and not understood: abort */
+  }
+  return 1;
+}
+
 /* (spkiDer, extValue) for the libp2p extension of a certificate DER. */
 lean_obj_res leanp2p_x509_libp2p_ext(b_lean_obj_arg der, lean_obj_arg w) {
   const unsigned char *p = lean_sarray_cptr(der);
@@ -618,7 +696,8 @@ lean_obj_res leanp2p_x509_libp2p_ext(b_lean_obj_arg der, lean_obj_arg w) {
   ASN1_OCTET_STRING *val = ext != NULL ? X509_EXTENSION_get_data(ext) : NULL;
   EVP_PKEY *pk = (x != NULL) ? X509_get0_pubkey(x) : NULL;
   int spki_len = (pk != NULL) ? i2d_PUBKEY(pk, NULL) : -1;
-  if (val == NULL || spki_len <= 0) {
+  int valid = x != NULL && cert_valid_now(x) && cert_no_unknown_critical(x);
+  if (val == NULL || spki_len <= 0 || !valid) {
     if (x != NULL) X509_free(x);
     if (oid != NULL) ASN1_OBJECT_free(oid);
     clear_err();

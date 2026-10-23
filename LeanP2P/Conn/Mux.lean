@@ -1,5 +1,6 @@
 import LeanP2P.Net.Transport
 import LeanP2P.Conn.Stream
+import LeanP2P.Conn.Reader
 import LeanP2P.Conn.Frame
 import LeanP2P.Conc
 import Std.Sync.Mutex
@@ -36,9 +37,12 @@ def Pipe.push (p : Pipe) (b : ByteArray) : IO Unit := do
 def Pipe.close (p : Pipe) : IO Unit :=
   p.ch.close
 
-/-- An established mux session over one connection. -/
+/-- An established mux session over one connection. Reads go through the
+buffered reader the negotiation used (bytes over-read while selecting the
+muxer are not lost). -/
 structure MuxSession where
   conn : Connection
+  reader : BufReader
   nextId : OnceRef Nat
   pending : OnceRef (List (Nat × Pipe))
   incoming : Chan Stream
@@ -46,6 +50,10 @@ structure MuxSession where
   dead : IO.Ref Bool
   writeMx : Std.Mutex Unit
   tasks : TaskSet
+
+/-- 1 MiB per frame: a declared length above this is a protocol error,
+not something to buffer. -/
+def maxFrame : Nat := 1048576
 
 def frameToBytes (f : Framing.Frame) : ByteArray :=
   Bytes.ofNatList (Framing.encode f)
@@ -88,35 +96,41 @@ def MuxSession.shutdown (m : MuxSession) : IO Unit := do
 
 /-- Read frames off the connection and dispatch to stream pipes. -/
 partial def MuxSession.drain (m : MuxSession) : IO Unit := do
-  match Framing.decode? (← m.buf.get) with
-  | none => pure ()
-  | some (f, rest) =>
-    m.buf.set rest
-    if f.payload.isEmpty then
-      match (← m.pending.get).lookup f.sid with
-      | some p => p.close
-      | none => pure ()
-    else
-      match (← m.pending.get).lookup f.sid with
-      | some p => p.push (Bytes.ofNatList f.payload)
-      | none =>
-        let p ← Pipe.new
-        p.push (Bytes.ofNatList f.payload)
-        m.pending.update fun ps => (ps ++ [(f.sid, p)], ())
-        discard <| m.incoming.send (m.streamOf f.sid p)
-    MuxSession.drain m
+  -- a declared length beyond the cap can never complete: protocol error
+  match ← m.buf.get with
+  | bs =>
+    if bs.length > maxFrame + 8 then m.shutdown
+    else match Framing.decode? bs with
+    | none => pure ()
+    | some (f, rest) =>
+      m.buf.set rest
+      if f.payload.isEmpty then
+        match (← m.pending.get).lookup f.sid with
+        | some p => p.close
+        | none => pure ()
+      else
+        match (← m.pending.get).lookup f.sid with
+        | some p => p.push (Bytes.ofNatList f.payload)
+        | none =>
+          let p ← Pipe.new
+          p.push (Bytes.ofNatList f.payload)
+          m.pending.update fun ps => (ps ++ [(f.sid, p)], ())
+          discard <| m.incoming.send (m.streamOf f.sid p)
+      MuxSession.drain m
 
 partial def MuxSession.pumpLoop (m : MuxSession) : IO Unit := do
-  match ← m.conn.read with
+  -- buffered bytes first (negotiation over-reads), then fresh chunks
+  match ← m.reader.readAvail with
   | none => m.shutdown
   | some chunk =>
     m.buf.set ((← m.buf.get) ++ Bytes.toNatList chunk)
     MuxSession.drain m
     MuxSession.pumpLoop m
 
-def MuxSession.make (c : Connection) (firstId : Nat) : IO MuxSession := do
+def MuxSession.make (r : BufReader) (firstId : Nat) : IO MuxSession := do
   let m : MuxSession :=
-    { conn := c
+    { conn := r.conn
+      reader := r
       nextId := ← OnceRef.new firstId
       pending := ← OnceRef.new []
       incoming := ← Chan.new
@@ -131,15 +145,16 @@ def MuxSession.make (c : Connection) (firstId : Nat) : IO MuxSession := do
 def MuxSession.acceptStream (m : MuxSession) : IO (Option Stream) :=
   m.incoming.recv
 
-/-- The muxer interface: client/server roles differ in stream-id parity. -/
+/-- The muxer interface: client/server roles differ in stream-id parity.
+Both roles mux the buffered reader they are given. -/
 structure Muxer where
   name : String
-  client : Connection → IO (Option MuxSession)
-  server : Connection → IO (Option MuxSession)
+  client : BufReader → IO (Option MuxSession)
+  server : BufReader → IO (Option MuxSession)
 
 def FramedMux : Muxer where
   name := "framed/1.0.0"
-  client c := some <$> MuxSession.make c 1
-  server c := some <$> MuxSession.make c 0
+  client r := some <$> MuxSession.make r 1
+  server r := some <$> MuxSession.make r 0
 
 end LeanP2P

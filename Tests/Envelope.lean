@@ -57,6 +57,12 @@ def EnvelopeSuite.run (r : Runner) : IO Unit := do
       -- full verification chain
       let verified ← Messages.PeerRecord.verifyEnvelope? env
       r.check "peer record verifyEnvelope" verified.isSome
+      -- the payload_type is part of validation: an envelope with a
+      -- different type must not be opened as a peer record (RFC 0002
+      -- makes the type identify the payload's schema)
+      let wrongType : Messages.Envelope := { env with payloadType := Bytes.ofNatList [1] }
+      let rejected ← Messages.PeerRecord.verifyEnvelope? wrongType
+      r.check "verifyEnvelope rejects wrong payload type" rejected.isNone
 
   -- the signature is non-empty and verified above
   r.check "envelope signature non-empty" (envBytes.size > 0)

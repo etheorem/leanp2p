@@ -145,7 +145,7 @@ def TcpSuite.run (r : Runner) : IO Unit := do
       match ← l.accept with
       | none => pure ()
       | some c => do
-        match ← Upgrade.muxResponder [YamuxChoice] none c with
+        match ← Upgrade.muxResponder [YamuxChoice] none (← BufReader.ofConn c) with
         | none => c.close
         | some (_, h) => do
           match ← h.acceptStream with
@@ -156,7 +156,7 @@ def TcpSuite.run (r : Runner) : IO Unit := do
             | some b => s.write b; s.close
             h.shutdown
     let some c ← Tcp.dial l.addr | r.check "tcp yamux dial" false; return ()
-    match ← Upgrade.muxInitiator [YamuxChoice] none c with
+    match ← Upgrade.muxInitiator [YamuxChoice] none (← BufReader.ofConn c) with
     | none => r.check "tcp yamux upgrade" false; c.close
     | some (_, h) => do
       r.check "tcp yamux upgrade" true
@@ -177,7 +177,7 @@ def TcpSuite.run (r : Runner) : IO Unit := do
       match ← l.accept with
       | none => pure ()
       | some c => do
-        match ← Upgrade.muxResponder [MplexChoice] none c with
+        match ← Upgrade.muxResponder [MplexChoice] none (← BufReader.ofConn c) with
         | none => c.close
         | some (_, h) => do
           match ← h.acceptStream with
@@ -188,7 +188,7 @@ def TcpSuite.run (r : Runner) : IO Unit := do
             | some b => s.write b; s.close
             h.shutdown
     let some c ← Tcp.dial l.addr | r.check "tcp mplex dial" false; return ()
-    match ← Upgrade.muxInitiator [MplexChoice] none c with
+    match ← Upgrade.muxInitiator [MplexChoice] none (← BufReader.ofConn c) with
     | none => r.check "tcp mplex upgrade" false; c.close
     | some (_, h) => do
       r.check "tcp mplex upgrade" true

@@ -60,8 +60,8 @@ def YamuxSuite.run (r : Runner) : IO Unit := do
 
   -- two-party session over the byte-splitting sim, stepped deterministically
   let (cI, cR) ← mkSplit
-  let client ← Yamux.YamuxSession.make cI true
-  let server ← Yamux.YamuxSession.make cR false
+  let client ← Yamux.YamuxSession.make (← BufReader.ofConn cI) true
+  let server ← Yamux.YamuxSession.make (← BufReader.ofConn cR) false
 
   let some st ← client.openStream | r.check "yamux e2e open" false
   st.write (Bytes.ofString "yamux-payload")
@@ -108,5 +108,50 @@ def YamuxSuite.run (r : Runner) : IO Unit := do
   client.goaway 0
   let ga ← server.pumpOne
   r.check "yamux e2e goaway" (¬ ga)
+
+  /- hostile frames: only a SYN (with the remote's parity) creates a
+  stream; data beyond the receive window is a protocol error. -/
+  let (cI3, cR3) ← mkSplit
+  let c3 ← Yamux.YamuxSession.make (← BufReader.ofConn cI3) true
+  let s3 ← Yamux.YamuxSession.make (← BufReader.ofConn cR3) false
+  let hdrTo (t fl sid len : Nat) : ByteArray :=
+    Bytes.ofNatList (Yamux.encode { version := Yamux.version0, typ := t, flags := fl, streamID := sid, length := len })
+  -- Data for an unopened stream (right parity, but no SYN): dropped, no
+  -- stream state is invented, later openStream cannot collide
+  c3.conn.write (hdrTo Yamux.tData 0 3 3 ++ Bytes.ofNatList [1, 2, 3])
+  let drop1 ← s3.pumpOne
+  r.check "yamux unknown stream data dropped" (drop1 ∧ (← s3.streams.get).isEmpty)
+  -- SYN with OUR parity (the server's own id space): rejected
+  c3.conn.write (hdrTo Yamux.tWindowUpdate Yamux.fSYN 2 0)
+  let drop2 ← s3.pumpOne
+  r.check "yamux syn wrong parity rejected" (drop2 ∧ (← s3.streams.get).isEmpty)
+  -- proper SYN (odd id) opens the stream, then data up to the granted
+  -- receive window is accepted, one byte beyond is a violation
+  c3.conn.write (hdrTo Yamux.tWindowUpdate Yamux.fSYN 5 0)
+  let syn ← s3.pumpOne
+  let big := ByteArray.mk (Array.replicate Yamux.initialWindow 7)
+  c3.conn.write (hdrTo Yamux.tData 0 5 Yamux.initialWindow ++ big)
+  let inWindow ← s3.pumpOne
+  c3.conn.write (hdrTo Yamux.tData 0 5 1 ++ Bytes.ofNatList [9])
+  let overWindow ← s3.pumpOne
+  r.check "yamux receive window enforced" (syn ∧ inWindow ∧ ¬ overWindow ∧ (← s3.dead.get))
+
+  /- parked-writer wake hand-off: a writer that used part of the credit
+  passes the wake token to the next parked writer of the same stream. -/
+  let (cI4, cR4) ← mkSplit
+  let c4 ← Yamux.YamuxSession.make (← BufReader.ofConn cI4) true
+  let s4 ← Yamux.YamuxSession.make (← BufReader.ofConn cR4) false
+  let st4 ← Yamux.StreamState.new
+  s4.streams.update fun sts => (sts ++ [(1, st4)], ())
+  -- simulate: one writer parked on the credit channel, 150 bytes of
+  -- credit granted by the peer
+  st4.parked.update fun _ => (1, ())
+  st4.sendWindow.update fun _ => (150, ())
+  -- a 100-byte write: takes 100, leaves 50 credit and one parked writer
+  -- -> the wake token must be handed on (without it, the second writer
+  -- sleeps until the peer happens to grant more credit)
+  s4.writeStream 1 st4 (ByteArray.mk (Array.replicate 100 9))
+  let token ← st4.credit.recv
+  r.check "yamux parked-writer handoff" token.isSome
 
 end Tests

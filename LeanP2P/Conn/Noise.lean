@@ -374,10 +374,17 @@ def buildPayload (identity : Keys.PrivKey) (staticPub : ByteArray)
 
 /-- Validate a received `NoiseHandshakePayload`: decode it, check the
 signature over `sigInput staticPub` and return the identity key together
-with the muxers the peer advertised in its extensions (empty when absent). -/
+with the muxers the peer advertised in its extensions (empty when absent).
+The payload is decoded *before* the peer is authenticated, so its size is
+capped: the list-based protobuf decoder is quadratic, and an anonymous
+connection must not be able to buy megabytes of CPU with one message
+(real payloads are well under 2 KiB even for RSA-8192 identities). -/
+def maxPayload : Nat := 8192
+
 def verifyPayload (payload : ByteArray) (staticPub : ByteArray) :
     IO (Option (Keys.PubKey × List String)) := do
-  match Messages.decodeNoisePayload? payload with
+  if payload.size > maxPayload then pure none
+  else match Messages.decodeNoisePayload? payload with
   | none => pure none
   | some p =>
     match Keys.unmarshalPubKey? (Bytes.ofNatList p.identityKey) with
@@ -393,7 +400,12 @@ def verifyPayload (payload : ByteArray) (staticPub : ByteArray) :
 def defaultMuxers : List String := ["/yamux/1.0.0", "/mplex/6.7.0"]
 
 /-- Wrap a connection in the two transport cipher states. Reads go through
-the same buffered reader the handshake used. -/
+the same buffered reader the handshake used. Transport errors are fatal,
+not EOF: a failed AEAD open means the peer is corrupt or hostile - the
+connection is torn down (readers see EOF, the peer sees a FIN) instead of
+looking like an orderly end of stream; a failed seal breaks the write
+loop *and* tears the connection down, so the failure is observable on
+both ends. -/
 def secureConnR (reader : BufReader) (conn : Connection)
     (enc₀ dec₀ : CipherState) : IO Connection := do
   let enc ← IO.mkRef enc₀
@@ -404,21 +416,21 @@ def secureConnR (reader : BufReader) (conn : Connection)
     | some ct => do
       let d ← dec.get
       match ← d.decrypt ByteArray.empty ct with
-      | none => pure none
+      | none => conn.close; pure none   -- authentication failure: fatal
       | some (pt, d') => dec.set d'; pure (some pt)
   let write := fun (b : ByteArray) => do
     -- chunk plaintext into frames of at most maxMessage - 16 bytes (the
     -- Noise spec's 65535 cap includes the 16-byte Poly1305 tag)
     let chunkSize := maxMessage - 16
     let mut off := 0
-    while off < b.size do
+    let mut ok := true
+    while ok ∧ off < b.size do
       let len := min chunkSize (b.size - off)
       let e ← enc.get
       let chunk := b.extract off (off + len)
       match ← e.encrypt ByteArray.empty chunk with
-      | none => break
-      | some (ct, e') => enc.set e'; writeFramed conn ct
-      off := off + len
+      | none => ok := false; conn.close
+      | some (ct, e') => enc.set e'; writeFramed conn ct; off := off + len
   pure { read := read, write := write, close := conn.close,
          localAddr := conn.localAddr, remoteAddr := conn.remoteAddr }
 
@@ -426,13 +438,18 @@ def roleIsInitiator : Role → Bool
   | .initiator => true
   | .responder => false
 
-/-- The noise-libp2p handshake over `conn`; returns an encrypted connection
-with the verified remote peer id. `muxers` is what we advertise in the
-handshake extension - keep it equal to the host's actual muxer list so the
-remote's extension-based selection can only land on a muxer we have. -/
-def handshake (identity : Keys.PrivKey) (staticPriv : ByteArray)
-    (role : Role) (conn : Connection)
+/-- The noise-libp2p handshake over the buffered reader `r` (the same one
+the multistream negotiation used, so bytes coalescing past the selection
+reply reach the handshake); returns an encrypted connection with the
+verified remote peer id. `muxers` is what we advertise in the handshake
+extension - keep it equal to the host's actual muxer list so the remote's
+extension-based selection can only land on a muxer we have. The transport
+continues on the same reader, so nothing buffered between the two phases
+is ever dropped. -/
+def handshakeR (identity : Keys.PrivKey) (staticPriv : ByteArray)
+    (role : Role) (r : BufReader)
     (muxers : List String := defaultMuxers) : IO (Option SecureConn) := do
+  let conn := r.conn
   let hs? ← HandshakeState.init (roleIsInitiator role) staticPriv
   match hs? with
   | none => pure none
@@ -445,7 +462,6 @@ def handshake (identity : Keys.PrivKey) (staticPriv : ByteArray)
     match payload? with
     | none => pure none
     | some localPayload =>
-    let reader ← BufReader.ofConn conn
     if roleIsInitiator role then
       -- -> e
       match ← hs0.writeMsg1 ByteArray.empty with
@@ -453,7 +469,7 @@ def handshake (identity : Keys.PrivKey) (staticPriv : ByteArray)
       | some (m1, hs1) => do
         writeFramed conn m1
         -- <- e, ee, s, es ++ payload
-        match ← readFramed reader with
+        match ← readFramed r with
         | none => pure none
         | some w2 => do
           match ← hs1.readMsg2 w2 with
@@ -469,7 +485,7 @@ def handshake (identity : Keys.PrivKey) (staticPriv : ByteArray)
               | some (m3, hs3) => do
                 writeFramed conn m3
                 let (k1, k2) := hs3.ss.split
-                let c ← secureConnR reader conn k1 k2
+                let c ← secureConnR r conn k1 k2
                 let some localPub ← identity.publicKey | pure none
                 pure (some
                   { toConnection := c
@@ -477,7 +493,7 @@ def handshake (identity : Keys.PrivKey) (staticPriv : ByteArray)
                     remotePeer := PeerId.ofPublicKey remoteKey
                     remoteMuxers := remoteMuxers })
     else
-      match ← readFramed reader with
+      match ← readFramed r with
       | none => pure none
       | some w1 => do
         match ← hs0.readMsg1 w1 with
@@ -487,7 +503,7 @@ def handshake (identity : Keys.PrivKey) (staticPriv : ByteArray)
           | none => pure none
           | some (m2, hs2) => do
             writeFramed conn m2
-            match ← readFramed reader with
+            match ← readFramed r with
             | none => pure none
             | some w3 => do
               match ← hs2.readMsg3 w3 with
@@ -498,7 +514,7 @@ def handshake (identity : Keys.PrivKey) (staticPriv : ByteArray)
                 | none => pure none
                 | some (remoteKey, remoteMuxers) => do
                   let (k1, k2) := hs3.ss.split
-                  let c ← secureConnR reader conn k2 k1
+                  let c ← secureConnR r conn k2 k1
                   let some localPub ← identity.publicKey | pure none
                   pure (some
                     { toConnection := c
@@ -506,11 +522,19 @@ def handshake (identity : Keys.PrivKey) (staticPriv : ByteArray)
                       remotePeer := PeerId.ofPublicKey remoteKey
                       remoteMuxers := remoteMuxers })
 
+/-- Convenience wrapper taking a bare connection (tests, standalone use):
+makes its own reader. The upgrader uses `handshakeR` to keep one reader
+across negotiation and handshake. -/
+def handshake (identity : Keys.PrivKey) (staticPriv : ByteArray)
+    (role : Role) (conn : Connection)
+    (muxers : List String := defaultMuxers) : IO (Option SecureConn) := do
+  handshakeR identity staticPriv role (← BufReader.ofConn conn) muxers
+
 /-- The noise-libp2p `SecurityProtocol` over a per-connection static key.
 `muxers` is advertised in the handshake extension (see `handshake`). -/
 def security (identity : Keys.PrivKey) (staticPriv : ByteArray)
     (muxers : List String := defaultMuxers) : SecurityProtocol where
   name := "/noise"
-  handshake := fun role conn => handshake identity staticPriv role conn muxers
+  handshake := fun role r => handshakeR identity staticPriv role r muxers
 
 end LeanP2P.Noise

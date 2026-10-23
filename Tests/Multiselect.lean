@@ -82,6 +82,15 @@ def MultiselectSuite.run (r : Runner) : IO Unit := do
     r.check "mss decode ok" (s == "/probe/1.0.0" ∧ c == (Multiselect.msgBytes "/probe/1.0.0").length)
   | _ => r.check "mss decode ok" false
 
+  -- an over-long varint (> 9 bytes) is a protocol error, not "need more
+  -- bytes": the reader must not accumulate forever on a hostile length
+  match Multiselect.decodeMsg? (ByteArray.mk (Array.replicate 12 255)) with
+  | .bad => r.check "mss over-long varint rejected" true
+  | _ => r.check "mss over-long varint rejected" false
+  match Multiselect.decodeMsg? (ByteArray.mk (Array.replicate 5 255)) with
+  | .more _ => r.check "mss short varint incomplete" true
+  | _ => r.check "mss short varint incomplete" false
+
   -- captured go-multistream traces
   let g ← loadJson "mss-go-trace.json"
   let naWire ← hexBytes (← jStr "mss-go-trace.json" g "naWireHex")

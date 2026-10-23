@@ -1,4 +1,5 @@
 import Tests.Support
+import Std.Internal.UV.TCP
 
 /-!
 # Node suite (VECTOR_TEST_PLAN.md, phase 4 steps 22 + 24)
@@ -14,6 +15,7 @@ import Tests.Support
 -/
 
 open LeanP2P Tests
+open Std.Net Std.Internal.UV
 
 namespace Tests
 
@@ -268,5 +270,45 @@ def NodeSuite.run (r : Runner) : IO Unit := do
     ps.close
   hD.close
   hC.close
+
+  /- ## negotiation leftovers reach the handler (no dropped bytes)
+
+  `Host.handleStream` and `Host.openProto` prepend their negotiation
+  reader's leftover bytes to the stream they hand on: a coalesced first
+  data frame must not vanish between the stages. -/
+  let base : Stream :=
+    { read := pure (some (Bytes.ofString "TAIL"))
+      write := fun _ => pure ()
+      close := pure ()
+      reset := pure () }
+  let s' ← Stream.prependBytes base (Bytes.ofString "AB")
+  let first ← s'.read
+  let second ← s'.read
+  r.check "negotiation leftovers handed on"
+    (first == some (Bytes.ofString "AB") ∧ second == some (Bytes.ofString "TAIL"))
+
+  /- ## a silent peer cannot hang the shutdown
+
+  A raw TCP client that connects and sends nothing parks the upgrade
+  responder inside the security handshake. `close` must close the pending
+  connection (waking the parked read with EOF) and join the task; before
+  the fix the join waited forever. -/
+  let some hS ← mkHost idR loopback [YamuxChoice, MplexChoice]
+    | r.check "silent peer host" false; return ()
+  let some _ ← hS.listen | r.check "silent peer listen" false
+  let some lS ← hS.listeners.get |>.map (·.head?) | r.check "silent peer listener" false
+  let port := match lS.addr.components.getLast? with
+    | some (.tcp p) => p
+    | _ => 0
+  let sock ← TCP.Socket.new
+  let sa : SocketAddress :=
+    .v4 { addr := { octets := #v[127, 0, 0, 1] }, port := port.toUInt16 }
+  let connected ← match ← LeanP2P.Tcp.await (← sock.connect sa) with
+    | .ok _ => pure true
+    | .error _ => pure false
+  r.check "silent peer connected" connected
+  IO.sleep 100   -- the responder parks in the handshake read
+  hS.close
+  r.check "close with silent peer joins" true
 
 end Tests

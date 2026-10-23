@@ -320,22 +320,6 @@ Look up known fields, skipping everything else - this is the tolerance
 libp2p needs when peer messages evolve (proto2 optional fields, proto3
 implicit-presence fields arriving out of order or carrying unknown tags). -/
 
-/-- First varint field with this number. -/
-def getVarint? (num : Nat) (fs : Fields) : Option Nat :=
-  (fs.lookup num).bind (fun
-    | .varint v => some v
-    | _ => none)
-
-/-- First bytes/string/submessage field with this number, as raw payload. -/
-def getBytes? (num : Nat) (fs : Fields) : Option (List Nat) :=
-  (fs.lookup num).bind (fun
-    | .bytes bs => some bs
-    | _ => none)
-
-/-- First embedded submessage with this number. -/
-def getSub? (num : Nat) (fs : Fields) : Option Fields :=
-  getBytes? num fs |>.bind decodeFields
-
 /-- All length-delimited values of a repeated field, in wire order. -/
 def getAllBytes (num : Nat) (fs : Fields) : List (List Nat) :=
   fs.filterMap (fun (n, v) => if n = num then
@@ -345,6 +329,26 @@ def getAllBytes (num : Nat) (fs : Fields) : List (List Nat) :=
 def getAllVarints (num : Nat) (fs : Fields) : List Nat :=
   fs.filterMap (fun (n, v) => if n = num then
     match v with | .varint v => some v | _ => none else none)
+
+/-- Last varint field with this number. Singular (proto2 optional /
+proto3 implicit-presence) fields follow last-value-wins semantics per the
+protobuf spec: a repeated occurrence of a singular field overwrites the
+previous value, so the last one on the wire is the message's value. -/
+def getVarint? (num : Nat) (fs : Fields) : Option Nat :=
+  (fs.reverse.lookup num).bind (fun
+    | .varint v => some v
+    | _ => none)
+
+/-- Last bytes/string/submessage field with this number, as raw payload
+(singular-field semantics, see `getVarint?`). -/
+def getBytes? (num : Nat) (fs : Fields) : Option (List Nat) :=
+  (fs.reverse.lookup num).bind (fun
+    | .bytes bs => some bs
+    | _ => none)
+
+/-- First embedded submessage with this number. -/
+def getSub? (num : Nat) (fs : Fields) : Option Fields :=
+  getBytes? num fs |>.bind decodeFields
 
 /-- Is the field present (proto2 `optional`/`required` semantics)? -/
 def hasField (num : Nat) (fs : Fields) : Bool := fs.any (fun (n, _) => n = num)

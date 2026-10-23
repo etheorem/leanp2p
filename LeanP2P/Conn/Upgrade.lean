@@ -43,11 +43,62 @@ structure MuxHandle where
   joins them on close -/
   tasks : TaskSet
 
-/-- A muxer choice for negotiation: name + role entry points. -/
+/-- A muxer choice for negotiation: name + role entry points. Both take
+the buffered reader of the connection they mux: bytes over-read while
+negotiating the muxer stay in that buffer and must reach the session
+(a lazily dialing peer streams its first frames right after the reply). -/
 structure MuxChoice where
   name : String
-  client : Connection → IO (Option MuxHandle)
-  server : Connection → IO (Option MuxHandle)
+  client : BufReader → IO (Option MuxHandle)
+  server : BufReader → IO (Option MuxHandle)
+
+/-- The unauthenticated phase of a connection is bounded: a peer that goes
+silent mid-negotiation must not hold a connection (or dial) task forever.
+30 s, in line with go-libp2p's upgrader timeouts. -/
+def upgradeTimeoutMs : Nat := 30000
+
+/-- Run one upgrade step under a deadline. The step runs in its own task;
+if it has not finished within `ms`, `onTimeout` fires - closing the
+underlying connection, which wakes every read the upgrade is parked in
+(libuv drops cancelled promises, so closing - not cancelling - is the
+wake mechanism) - and the deadline gives the task a short moment to
+unwind before the upgrade is reported failed. The deadline covers *only*
+the unauthenticated phase: the connections the session hands on are the
+untouched originals, so an authenticated-but-idle connection never
+expires. -/
+partial def Upgrade.withinDeadline (ms : Nat) (onTimeout : IO Unit)
+    (act : IO (Option α)) : IO (Option α) := do
+  let done ← IO.mkRef false
+  let pr ← (IO.Promise.new : IO (IO.Promise (Option α)))
+  let _ ← IO.asTask do
+    try
+      let v ← act
+      done.set true
+      pr.resolve v
+    catch _ => do
+      done.set true
+      pr.resolve none
+  let rec spin (left : Nat) : IO (Option α) := do
+    if ← done.get then
+      match ← IO.wait pr.result? with
+      | some v => pure v
+      | none => pure none
+    else if left = 0 then do
+      onTimeout
+      -- the wake is not instant: give the upgrade task up to ~500 ms to
+      -- unwind before giving up on it
+      let rec drain (k : Nat) : IO (Option α) := do
+        if ← done.get then
+          match ← IO.wait pr.result? with
+          | some v => pure v
+          | none => pure none
+        else if k = 0 then pure none
+        else do IO.sleep 5; drain (k - 1)
+      drain 100
+    else do
+      IO.sleep 25
+      spin (left - 1)
+  spin (ms / 25 + 1)
 
 /-- A live, upgraded connection to an identified peer. `inbound` records
 who dialed and `born` is the upgrade time (mono ms): together they let
@@ -91,18 +142,19 @@ def MuxSession.toHandle (m : MuxSession) : MuxHandle where
 
 def FramedChoice : MuxChoice where
   name := FramedMux.name
-  client c := do return (← MuxSession.make c 1).toHandle
-  server c := do return (← MuxSession.make c 0).toHandle
+  client r := do return (← MuxSession.make r 1).toHandle
+  server r := do return (← MuxSession.make r 0).toHandle
 
 /-! ## The yamux and mplex choices -/
 
 /-- The yamux and mplex choices: the frame pump and the control-frame
-writer run as tracked background tasks owned by the session. -/
+writer run as tracked background tasks owned by the session. Both mux
+the buffered reader they are given. -/
 
 def YamuxChoice : MuxChoice where
   name := Yamux.protocol
-  client c := do
-    let s ← Yamux.YamuxSession.make c true
+  client r := do
+    let s ← Yamux.YamuxSession.make r true
     let tasks ← TaskSet.new
     tasks.spawn s.pump
     tasks.spawn s.controlLoop
@@ -112,8 +164,8 @@ def YamuxChoice : MuxChoice where
                   shutdown := s.shutdown
                   isDead := s.dead.get
                   tasks := tasks }
-  server c := do
-    let s ← Yamux.YamuxSession.make c false
+  server r := do
+    let s ← Yamux.YamuxSession.make r false
     let tasks ← TaskSet.new
     tasks.spawn s.pump
     tasks.spawn s.controlLoop
@@ -126,8 +178,8 @@ def YamuxChoice : MuxChoice where
 
 def MplexChoice : MuxChoice where
   name := Mplex.protocol
-  client c := do
-    let s ← Mplex.MplexSession.make c true
+  client r := do
+    let s ← Mplex.MplexSession.make r true
     let tasks ← TaskSet.new
     tasks.spawn s.pump
     return some { name := Mplex.protocol
@@ -136,8 +188,8 @@ def MplexChoice : MuxChoice where
                   shutdown := s.shutdown
                   isDead := s.dead.get
                   tasks := tasks }
-  server c := do
-    let s ← Mplex.MplexSession.make c false
+  server r := do
+    let s ← Mplex.MplexSession.make r false
     let tasks ← TaskSet.new
     tasks.spawn s.pump
     return some { name := Mplex.protocol
@@ -150,7 +202,8 @@ def MplexChoice : MuxChoice where
 /-! ## Negotiation -/
 
 /-- Dialer side: propose each security protocol in order (the listener
-answers `na` until one matches), then run that handshake. -/
+answers `na` until one matches), then run that handshake. One buffered
+reader is threaded through the selection and the handshake. -/
 partial def Upgrade.securityInitiator (secs : List SecurityProtocol)
     (c : Connection) : IO (Option (SecureConn × SecurityProtocol)) := do
   let r ← BufReader.ofConn c
@@ -160,13 +213,14 @@ partial def Upgrade.securityInitiator (secs : List SecurityProtocol)
       match ← Multiselect.selectInitiator r c s.name with
       | none => go rest
       | some _ =>
-        match ← s.handshake .initiator c with
+        match ← s.handshake .initiator r with
         | none => pure none   -- handshake failure is fatal: stop
         | some sc => pure (some (sc, s))
   go secs
 
 /-- Listener side: answer proposals until a known security protocol
-arrives, then run that handshake as responder. -/
+arrives, then run that handshake as responder - on the same buffered
+reader, so coalesced bytes survive the stage boundary. -/
 def Upgrade.securityResponder (secs : List SecurityProtocol)
     (c : Connection) : IO (Option (SecureConn × SecurityProtocol)) := do
   let r ← BufReader.ofConn c
@@ -176,61 +230,66 @@ def Upgrade.securityResponder (secs : List SecurityProtocol)
     match secs.find? (·.name == name) with
     | none => pure none
     | some sec => do
-      let sc? ← sec.handshake .responder c
+      let sc? ← sec.handshake .responder r
       return (sc?.map fun sc => (sc, sec))
 
 /-- Dialer side: start the muxer chosen in the security handshake, or
-multistream-negotiate one when no muxer was agreed. -/
+multistream-negotiate one when no muxer was agreed (on the secure
+connection's buffered reader, so decrypted bytes coalescing past the
+security phase are not lost). -/
 partial def Upgrade.muxInitiator (muxers : List MuxChoice)
-    (agreed : Option MuxChoice) (c : Connection) :
+    (agreed : Option MuxChoice) (r : BufReader) :
     IO (Option (MuxChoice × MuxHandle)) := do
+  let c := r.conn
   match agreed with
   | some m => do
-    match ← m.client c with
+    match ← m.client r with
     | none => pure none
     | some h => pure (some (m, h))
   | none =>
-    let r ← BufReader.ofConn c
     let rec go : List MuxChoice → IO (Option (MuxChoice × MuxHandle))
       | [] => pure none
       | m :: rest => do
         match ← Multiselect.selectInitiator r c m.name with
         | none => go rest
         | some _ =>
-          match ← m.client c with
+          match ← m.client r with
           | none => pure none
           | some h => pure (some (m, h))
     go muxers
 
 /-- Listener side: start the muxer chosen in the security handshake, or
-multistream-negotiate one when no muxer was agreed. -/
+multistream-negotiate one when no muxer was agreed (on the secure
+connection's buffered reader). -/
 def Upgrade.muxResponder (muxers : List MuxChoice)
-    (agreed : Option MuxChoice) (c : Connection) :
+    (agreed : Option MuxChoice) (r : BufReader) :
     IO (Option (MuxChoice × MuxHandle)) := do
+  let c := r.conn
   match agreed with
   | some m => do
-    match ← m.server c with
+    match ← m.server r with
     | none => pure none
     | some h => pure (some (m, h))
   | none => do
-    let r ← BufReader.ofConn c
     match ← Multiselect.selectResponder r c (muxers.map (·.name)) with
     | none => pure none
     | some name =>
       match muxers.find? (·.name == name) with
       | none => pure none
       | some m => do
-        let h? ← m.server c
+        let h? ← m.server r
         return (h?.map fun h => (m, h))
 
-/-- Full outbound upgrade: dial `addr`, negotiate security, verify the
-remote identity (`expect`, when given), then start the muxer selected in
-the handshake (falling back to multistream-select). -/
+/-- Full outbound upgrade: dial `addr`, negotiate security (bounded by
+`upgradeTimeoutMs` - a silent peer fails the dial instead of hanging it),
+verify the remote identity (`expect`, when given), then start the muxer
+selected in the handshake (falling back to multistream-select). -/
 def Upgrade.upgradeOutbound (secs : List SecurityProtocol)
     (muxers : List MuxChoice) (transport : Transport) (addr : Multiaddr)
     (expect : Option PeerId) : IO (Option Session) := do
   let some raw ← transport.dial addr | return none
-  match ← Upgrade.securityInitiator secs raw with
+  match ← Upgrade.withinDeadline upgradeTimeoutMs raw.close
+      (Upgrade.securityInitiator secs raw) with
   | none => raw.close; return none
   | some (sc, _) => do
     match expect with
@@ -242,7 +301,8 @@ def Upgrade.upgradeOutbound (secs : List SecurityProtocol)
     | none => pure ()
     -- go upgrader semantics: the initiator picks by its own preference
     let agreed := Upgrade.matchMuxers muxers (muxers.map (·.name)) sc.remoteMuxers
-    match ← Upgrade.muxInitiator muxers agreed sc.toConnection with
+    let r ← BufReader.ofConn sc.toConnection
+    match ← Upgrade.muxInitiator muxers agreed r with
     | none => sc.toConnection.close; return none
     | some (_, h) =>
       return (some { remotePeer := sc.remotePeer
@@ -253,7 +313,8 @@ def Upgrade.upgradeOutbound (secs : List SecurityProtocol)
 
 /-- Full inbound upgrade: answer the security negotiation, handshake, then
 start the muxer selected by the initiator in the handshake (falling back
-to multistream-select). -/
+to multistream-select). The caller wraps the connection in a read
+deadline (`Host.handleConn`); the responder side only ever reacts. -/
 def Upgrade.upgradeInbound (secs : List SecurityProtocol)
     (muxers : List MuxChoice) (c : Connection) : IO (Option Session) := do
   match ← Upgrade.securityResponder secs c with
@@ -261,7 +322,8 @@ def Upgrade.upgradeInbound (secs : List SecurityProtocol)
   | some (sc, _) => do
     -- responder rule: follow the initiator's (remote) preference order
     let agreed := Upgrade.matchMuxers muxers sc.remoteMuxers (muxers.map (·.name))
-    match ← Upgrade.muxResponder muxers agreed sc.toConnection with
+    let r ← BufReader.ofConn sc.toConnection
+    match ← Upgrade.muxResponder muxers agreed r with
     | none => sc.toConnection.close; pure none
     | some (_, h) =>
       pure (some { remotePeer := sc.remotePeer

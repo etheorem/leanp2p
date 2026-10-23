@@ -72,16 +72,19 @@ inductive MsgDecode where
   | bad
   | done (msg : Msg) (consumed : Nat)
 
-/-- Decode one message; `consumed` counts every byte taken off `bs`. -/
+/-- Decode one message; `consumed` counts every byte taken off `bs`. A
+varint that cannot complete within the 9-byte uvarint limit is a protocol
+error, not "need more bytes" - otherwise the reader accumulates forever
+on a hostile header (the 9-byte bound is `Varint.decode?`'s own). -/
 def decodeMsg? : List Nat → MsgDecode
   | bs =>
     match Varint.decode? bs with
-    | none => .more 1
+    | none => if bs.length ≥ 9 then .bad else .more 1
     | some (key, rest) =>
       if key % 8 > 6 then .bad
       else
         match Varint.decode? rest with
-        | none => .more (bs.length + 1)
+        | none => if rest.length ≥ 9 then .bad else .more (bs.length + 1)
         | some (len, rest2) =>
           if len > maxMsg then .bad
           else if rest2.length < len then .more (bs.length + (len - rest2.length))
@@ -146,7 +149,9 @@ structure MplexStream where
   id : Nat
   pipe : Pipe
   initiator : Bool
-  open_ : IO.Ref Bool
+  /-- our write direction is open (a remote Close does NOT close it:
+  half-close semantics - close ends the closer's writing only) -/
+  writeOpen : IO.Ref Bool
 
 structure MplexSession where
   conn : Connection
@@ -160,8 +165,8 @@ structure MplexSession where
   writeMx : Std.Mutex Unit
   isClient : Bool
 
-def MplexSession.make (conn : Connection) (isClient : Bool) : IO MplexSession := do
-  return { conn := conn, reader := ← BufReader.ofConn conn,
+def MplexSession.make (r : BufReader) (isClient : Bool) : IO MplexSession := do
+  return { conn := r.conn, reader := r,
            streams := ← OnceRef.new [], incoming := ← Chan.new,
            nextId := ← OnceRef.new 0,
            dead := ← IO.mkRef false, writeMx := ← Std.Mutex.new (),
@@ -170,25 +175,39 @@ def MplexSession.make (conn : Connection) (isClient : Bool) : IO MplexSession :=
 def MplexSession.writeMsg (s : MplexSession) (m : Msg) : IO Unit :=
   s.writeMx.atomically fun _ => s.conn.write (Bytes.ofNatList (encodeMsg m))
 
-/-- The stream view handed to the application. -/
+/-- Forget a stream (both directions are done): out of the session map,
+so a long-lived connection does not accumulate entries and every lookup
+stays cheap. -/
+def MplexSession.removeStream (s : MplexSession) (key : Nat × Bool) : IO Unit :=
+  s.streams.update fun sts => (sts.filter (fun x => x.1 != key), ())
+
+/-- The stream view handed to the application. Half-close per the spec:
+"Closing a stream closes it for writing and closes the remote end for
+reading but allows writing in the other direction" - local `close` ends
+our writes only; reads keep returning data until the peer closes. -/
 def MplexSession.streamOf (s : MplexSession) (st : MplexStream) : Stream where
   read := st.pipe.read
   write := fun b => do
-    if ← st.open_.get then
+    if ← st.writeOpen.get then
       let flag := if st.initiator then fMessageInitiator else fMessageReceiver
       s.writeMsg { flag := flag, id := st.id, payload := Bytes.toNatList b }
   close := do
-    if ← st.open_.get then
+    if ← st.writeOpen.get then
       let flag := if st.initiator then fCloseInitiator else fCloseReceiver
       s.writeMsg { flag := flag, id := st.id, payload := [] }
-      st.open_.set false
-      st.pipe.close
+      st.writeOpen.set false
+      -- the peer already closed (our reads are at EOF): the stream is
+      -- fully done on both directions, retire it
+      if ← st.pipe.ch.closed.get then
+        s.removeStream (st.id, st.initiator)
+    -- reads stay open: the peer may still be sending (half-close)
   reset := do
-    if ← st.open_.get then
+    -- reset is abortive in both directions; send it once
+    if ← st.writeOpen.get then
       let flag := if st.initiator then fResetInitiator else fResetReceiver
       s.writeMsg { flag := flag, id := st.id, payload := [] }
-      st.open_.set false
-      st.pipe.close
+      st.writeOpen.set false
+    st.pipe.close
 
 /-- Open a new stream (NewStream carrying the stream name). Ids are
 allocated atomically and counted from zero on both sides (go-mplex). -/
@@ -196,7 +215,7 @@ def MplexSession.openStream (s : MplexSession) (protocolName : String) :
     IO (Option Stream) := do
   let sid ← s.nextId.update fun n => (n + 1, n)
   let st : MplexStream :=
-    { id := sid, pipe := ← Pipe.new, initiator := true, open_ := ← IO.mkRef true }
+    { id := sid, pipe := ← Pipe.new, initiator := true, writeOpen := ← IO.mkRef true }
   s.streams.update fun sts => (sts ++ [((sid, true), st)], ())
   s.writeMsg { flag := fNewStream, id := sid,
                payload := Bytes.toNatList (Bytes.ofString protocolName) }
@@ -217,7 +236,7 @@ def MplexSession.getOrCreate (s : MplexSession) (id : Nat)
   | none =>
     if ← s.dead.get then return none
     let st' : MplexStream :=
-      { id := id, pipe := ← Pipe.new, initiator := locallyInitiated, open_ := ← IO.mkRef true }
+      { id := id, pipe := ← Pipe.new, initiator := locallyInitiated, writeOpen := ← IO.mkRef true }
     let (st, isNew) ← s.streams.update fun sts =>
       match sts.lookup (id, locallyInitiated) with
       | some st => (sts, (st, false))
@@ -253,7 +272,13 @@ def MplexSession.shutdown (s : MplexSession) : IO Unit := do
 Receiver/Initiator suffix is relative to the *stream* initiator: a
 `*Receiver` flag concerns the stream the local side initiated,
 `NewStream` and the `*Initiator` flags the stream the remote side
-initiated (go-mplex identity; see the module doc). -/
+initiated (go-mplex identity; see the module doc).
+
+Close/Reset follow the spec's half-close rule: a peer Close ends *its*
+write direction - our reads drain to EOF, our writes keep working (the
+local `writeOpen` flag is untouched). A Reset kills both directions and
+retires the stream. Messages for streams that do not exist are dropped
+(go-mplex logs and ignores them). -/
 def MplexSession.pumpOne (s : MplexSession) : IO Bool := do
   match ← readFrame s.reader with
   | none => s.shutdown; pure false
@@ -277,13 +302,23 @@ def MplexSession.pumpOne (s : MplexSession) : IO Bool := do
     else if msg.flag == fCloseReceiver ∨ msg.flag == fCloseInitiator then do
       let locally := msg.flag == fCloseReceiver
       match (← s.streams.get).lookup (msg.id, locally) with
-      | some st => do st.open_.set false; st.pipe.close
+      | some st => do
+        -- the peer closed its write side: our reads drain to EOF. Our
+        -- writes stay open (half-close). If we had already closed too,
+        -- the stream is fully done - retire it.
+        st.pipe.close
+        if !(← st.writeOpen.get) then
+          s.removeStream (msg.id, locally)
       | none => pure ()
       pure true
     else if msg.flag == fResetReceiver ∨ msg.flag == fResetInitiator then do
       let locally := msg.flag == fResetReceiver
+      -- reset: both directions die, the stream is retired
       match (← s.streams.get).lookup (msg.id, locally) with
-      | some st => do st.open_.set false; st.pipe.close
+      | some st => do
+        st.writeOpen.set false
+        st.pipe.close
+        s.removeStream (msg.id, locally)
       | none => pure ()
       pure true
     else

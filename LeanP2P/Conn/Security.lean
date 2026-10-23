@@ -1,4 +1,5 @@
 import LeanP2P.Net.Transport
+import LeanP2P.Conn.Reader
 import LeanP2P.Crypto.PeerId
 import LeanP2P.Crypto.Keys
 import LeanP2P.Crypto.Sha256
@@ -8,6 +9,12 @@ import LeanP2P.Crypto.Sha256
 `handshake` upgrades a raw connection into an encrypted, peer-authenticated
 `SecureConn`. The spike ships only a toy (the "KEX" is NOT secure — it
 exists to exercise the composition shape where Noise/TLS would plug in).
+
+The handshake receives the *same* `BufReader` the multistream-select
+negotation used: bytes that coalesced past the selection reply stay in
+that buffer and must reach the handshake (a lazy dialer sends its first
+handshake message together with the proposal). A fresh reader here would
+silently drop them.
 -/
 
 namespace LeanP2P
@@ -28,7 +35,7 @@ structure SecureConn extends Connection where
 
 structure SecurityProtocol where
   name : String
-  handshake : Role → Connection → IO (Option SecureConn)
+  handshake : Role → BufReader → IO (Option SecureConn)
 
 /-- XOR-stream wrapper over a raw connection. The keystream position is
 tracked per direction, so this stays correct over real transports where
@@ -65,16 +72,18 @@ def NoiseSim.peerIdOf (raw : ByteArray) : PeerId :=
 
 /-- Toy "noise": exchange pubkey bytes, derive a symmetric shared secret
 (XOR of both sha256 key digests — order-independent). Everyone can read
-this traffic; it only demonstrates the interface. -/
-def NoiseSim.handshake (key : PubKey) (role : Role) (conn : Connection) :
+this traffic; it only demonstrates the interface. Reads go through the
+negotiation reader so coalesced bytes are not lost. -/
+def NoiseSim.handshake (key : PubKey) (role : Role) (r : BufReader) :
     IO (Option SecureConn) := do
+  let conn := r.conn
   let other? ←
     match role with
     | .initiator => do
       conn.write key.bytes
-      Connection.readExactly conn key.bytes.size
+      BufReader.readExactly r key.bytes.size
     | .responder => do
-      match ← Connection.readExactly conn key.bytes.size with
+      match ← BufReader.readExactly r key.bytes.size with
       | none => pure none
       | some a =>
         conn.write key.bytes

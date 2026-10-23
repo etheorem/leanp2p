@@ -164,6 +164,37 @@ peer-id examples (keys-peer-ids.json); RFC 8032 section 7.1 Ed25519 vectors \
                 r.check s!"sign/verify rejects tampered {ty}"
                   (!(← pub.verify bad sig))
 
+  -- DER verifiers enforce the key type and the libp2p RSA bound
+  -- (2048-8192 bits): an EC key must not verify under the RSA entry
+  -- point, an RSA key not under ECDSA, and a 1024-bit RSA key not at
+  -- all (the SPKI hex values below are openssl-generated).
+  let rsa1024Spki ← hexToBA "30819f300d06092a864886f70d010101050003818d0030818902818100d443346a10f6905e5422031ce1e333f5110a8613c8929bb8e8d37f51bffa045d2c27e42cdbcce4a9e615fe5b3d79f3d018e230591a623d70e46e1f9706aa6abdb0f14adedfb6ecc037e70f47db85f3aeb3380eb6e614055a3a9e38cfd82029dc1ca0296926a8d6db9ff55c70a6d92cf95da105831bd527debe2a886319ed91770203010001"
+  let p256Spki ← hexToBA "3059301306072a8648ce3d020106082a8648ce3d0301070342000496fe738530d35e9b1538124960ecffb0eab52bec053ee61767a19d86f8fce13bcd5f1585acb5e461d0a9004a98b847a74f2a3f5a394522fd1da3f2d12135e884"
+  let probe := Bytes.ofString "key-type separation probe"
+  match Keys.unmarshalPrivKey? rsaPrivBytes with
+  | none => r.check "rsa priv fixture" false
+  | some rsaPriv =>
+    match ← rsaPriv.sign probe with
+    | none => r.check "rsa sign probe" false
+    | some sig => do
+      r.check "rsa 1024-bit rejected" (!(← OpenSsl.rsaVerify rsa1024Spki probe sig))
+      r.check "rsa sig rejected as ecdsa" (!(← OpenSsl.ecdsaP256Verify p256Spki probe sig))
+      -- sanity: a proper RSA-2048 SPKI accepts it (the fixture's own key)
+      match ← rsaPriv.publicKey with
+      | none => r.check "rsa pub derivation" false
+      | some pub => r.check "rsa 2048-bit accepted" (← pub.verify probe sig)
+  match Keys.unmarshalPrivKey? ecdsaPrivBytes with
+  | none => r.check "ecdsa priv fixture" false
+  | some ecPriv =>
+    match ← ecPriv.sign probe with
+    | none => r.check "ecdsa sign probe" false
+    | some sig => do
+      r.check "ecdsa sig rejected as rsa" (!(← OpenSsl.rsaVerify rsa1024Spki probe sig))
+      -- sanity: the fixture's own P-256 SPKI accepts it
+      match ← ecPriv.publicKey with
+      | none => r.check "ecdsa pub derivation" false
+      | some pub => r.check "ecdsa accepted as ecdsa" (← pub.verify probe sig)
+
   -- RFC 0002/0003: a signed peer record envelope verifies, derives the
   -- same peer id, and rejects tampering
   match Keys.unmarshalPrivKey? ed25519PrivBytes with

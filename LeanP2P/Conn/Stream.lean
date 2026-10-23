@@ -24,6 +24,22 @@ def Stream.conn (s : Stream) : Connection where
   localAddr := { components := [] }
   remoteAddr := { components := [] }
 
+/-- A stream whose reads start with `first` and then continue on `s`.
+This is how bytes a negotiation stage over-read (they sit in its
+`BufReader`) reach the application: a handler building its own reader
+over the stream picks them up through `read` instead of losing them.
+`first` is handed out exactly once. -/
+def Stream.prependBytes (s : Stream) (first : ByteArray) : IO Stream := do
+  if first.isEmpty then pure s
+  else do
+    let pending ← IO.mkRef true
+    pure { s with
+      read := do
+        if ← pending.get then do
+          pending.set false
+          pure (some first)
+        else s.read }
+
 def Stream.writeLine (s : Stream) (l : String) : IO Unit :=
   s.write ((l.toUTF8).push 10)
 

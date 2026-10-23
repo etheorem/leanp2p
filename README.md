@@ -310,12 +310,16 @@ Notes from the implementation, worth keeping for the real implementation:
   `send`/`recv?` themselves can also throw outright (dead handle); the
   wrapper turns that into read-EOF / dropped write.
 - **Hand-off of buffered bytes between upgrade stages.** After a
-  multistream negotiation completes, the responder starts the next stage
-  (handshake, muxer) on the same connection; bytes that coalesced past
-  the selection could sit in the negotiation reader and be lost. The
-  dialer's round-trip discipline (it writes nothing past a proposal
-  before reading the reply) closes this window for one proposal at a
-  time; a real upgrader should thread one `BufReader` through all stages.
+  multistream negotiation completes, the next stage (security handshake,
+  muxer) runs on the same connection; bytes that coalesced past the
+  selection reply would sit in the negotiation reader and be lost - and
+  a lazy dialer (rust-libp2p) sends its first handshake message together
+  with the proposal, so the window is real. One `BufReader` is now
+  threaded through every stage (multiselect -> security handshake ->
+  secure transport -> muxer), and at the last hop - where the handler
+  builds its own reader - the negotiation leftovers are prepended to the
+  stream's reads (`Stream.prependBytes`), so nothing negotiated away is
+  dropped.
 - **mplex EOF teardown.** The old spike's pump marked the session dead on
   EOF but left pipes/queues open — invisible while readers polled, a
   deadlock once reads block. Blocking primitives surface exactly this
@@ -332,9 +336,7 @@ Open items, recorded for phase 5 (surfacing against real peers):
 - **mplex stream identity diverges from go-mplex** (go keys directions by
   the initiator flag and numbers both sides from zero; Lean uses an
   odd/even split), so mplex interop with go is not expected to work;
-  yamux is the interop muxer. Related: yamux send-side flow control
-  ignores received WindowUpdate credit and accepted streams are never
-  acknowledged (fine for small transfers, wrong under load).
+  yamux is the interop muxer.
 - **Simultaneous dials**: each side drops the newer inbound connection,
   so both can end up with nothing; needs go-style direction-based
   resolution.
@@ -342,6 +344,26 @@ Open items, recorded for phase 5 (surfacing against real peers):
   read-EOF); a real node should propagate send failures to the stream.
 - The cacophony handshake hash is extracted but not checked (the pinned
   vector file has empty `handshakeHash` fields; a new capture is needed).
+
+Receive-path bounds (hardened after review; each is a protocol error
+when violated, not memory to allocate):
+
+- yamux Data frames are capped at the 256 KiB initial window and checked
+  against the per-stream receive window we actually granted; only a SYN
+  frame (with the remote's id parity) creates a stream, so frames for
+  unknown ids never invent state; streams are removed once both sides
+  closed them (yamux and mplex); the control queue is capped;
+- mplex and multistream messages keep their 1 MiB / 1 KiB caps, and an
+  over-long varint (> 9 bytes) is a protocol error instead of "need more
+  bytes" (the reader would otherwise accumulate until EOF);
+- the Noise handshake payload is capped at 8 KiB before it is decoded
+  (pre-authentication, on a quadratic decoder - real payloads are well
+  under 2 KiB even for RSA-8192 identities);
+- the framed sim muxer rejects frames declaring more than 1 MiB.
+- the unauthenticated phase of every connection (dial and listen) is
+  bounded by a 30 s deadline: a silent peer fails the upgrade instead of
+  parking its task forever, and `Host.close` additionally closes pending
+  connections so shutdown never waits on one.
 
 ## Interop (phase 5)
 

@@ -191,10 +191,14 @@ def PeerRecord.envelope (r : PeerRecord) (priv : Keys.PrivKey) :
   Envelope.sign peerRecordDomain priv peerRecordPayloadType
     (encodePeerRecordB r)
 
-/-- Open and fully validate a signed peer record: signature, then peer id
-against the envelope's embedded key. -/
+/-- Open and fully validate a signed peer record: the envelope's
+`payload_type` must be the PeerRecord multicodec (RFC 0002: the type
+identifies how to interpret the payload - verifying the signature while
+ignoring it would let any payload through as a "peer record"), then the
+signature, then the peer id against the envelope's embedded key. -/
 def PeerRecord.verifyEnvelope? (e : Envelope) : IO (Option PeerRecord) := do
-  if ← e.verify peerRecordDomain then
+  if e.payloadType != peerRecordPayloadType then pure none
+  else if ← e.verify peerRecordDomain then
     match decodePeerRecord? e.payload with
     | none => pure none
     | some r =>

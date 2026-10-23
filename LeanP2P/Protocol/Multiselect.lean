@@ -68,7 +68,12 @@ inductive MsgDecode where
 def decodeMsg? : ByteArray → MsgDecode
   | bs =>
     match Varint.decodeB? bs 0 with
-    | none => .more 1
+    | none =>
+        -- a varint that could not decode with ≥ 9 bytes available can
+        -- never complete (the uvarint spec caps varints at 9 bytes) or
+        -- is non-minimal: protocol error, not "need more bytes" - the
+        -- reader must not accumulate forever on a hostile length
+        if bs.size ≥ 9 then .bad else .more 1
     | some (len, varintLen) =>
       if len > maxMsg then .bad
       else if bs.size < varintLen + len then .more (varintLen + len - bs.size)

@@ -40,7 +40,13 @@ structure Host where
   conns : OnceRef (List (PeerId × Session))
   handlers : OnceRef (List (String × (Stream → IO Unit)))
   listeners : OnceRef (List Listener)
-  /-- source of unique session ids (dedup bookkeeping) -/
+  /-- accepted connections still mid-upgrade (unauthenticated phase), so
+  `close` can wake tasks parked in a handshake read on a silent peer -/
+  pending : OnceRef (List (Nat × Connection))
+  /-- set before closing: connections that finish upgrading during
+  shutdown stop instead of registering and pumping forever -/
+  closing : OnceRef Bool
+  /-- source of unique session ids (dedup bookkeeping + pending ids) -/
   nextSid : OnceRef Nat
   tasks : TaskSet
 
@@ -58,6 +64,8 @@ def Host.new (cfg : HostConfig) (transport : Transport)
       conns := ← OnceRef.new []
       handlers := ← OnceRef.new []
       listeners := ← OnceRef.new []
+      pending := ← OnceRef.new []
+      closing := ← OnceRef.new false
       nextSid := ← OnceRef.new 1
       tasks := ← TaskSet.new })
 
@@ -185,7 +193,11 @@ def Host.sessionOf (h : Host) (pid : PeerId) : IO (Option Session) := do
       pure none
     else pure (some s)
 
-/-- Inbound stream: negotiate, then dispatch to the registered handler. -/
+/-- Inbound stream: negotiate, then dispatch to the registered handler.
+The negotiation reader's leftover bytes (data the peer coalesced past
+the proposal reply - a lazy dialer's first message is already in flight)
+are prepended to the stream handed to the handler, so a handler that
+builds its own reader sees them instead of losing them. -/
 partial def Host.handleStream (h : Host) (s : Stream) : IO Unit := do
   let supported := (← h.handlers.get).map (·.1)
   let reader ← BufReader.ofConn (s.conn)
@@ -194,7 +206,9 @@ partial def Host.handleStream (h : Host) (s : Stream) : IO Unit := do
   | some proto =>
     match (← h.handlers.get).lookup proto with
     | none => s.close
-    | some f => f s
+    | some f => do
+      let s' ← Stream.prependBytes s (← reader.buf.get)
+      f s'
 
 /-- Stream pump for one session: dispatch inbound streams to handlers. -/
 partial def Host.acceptLoop (h : Host) (s : Session) : IO Unit := do
@@ -205,19 +219,36 @@ partial def Host.acceptLoop (h : Host) (s : Session) : IO Unit := do
     h.acceptLoop s
 
 /-- Inbound connection: upgrade (security + muxer negotiated as responder),
-register, then pump inbound streams. Runs as its own task. -/
+register, then pump inbound streams. Runs as its own task. The connection
+stays on the `pending` list while it is unauthenticated, so `close` can
+wake a handshake parked on a silent peer (the read deadline bounds the
+wait either way). -/
 partial def Host.handleConn (h : Host) (c : Connection) : IO Unit := do
-  match ← Upgrade.upgradeInbound h.securities h.muxers c with
-  | none => c.close
-  | some sess =>
-    h.peerstore.addAddrs sess.remotePeer [sess.remoteAddr]
-    let (_, isNew, loser) ← h.decide (← h.stampSid sess)
-    match loser with
-    | some old => old.mux.shutdown   -- our dial lost the race
-    | none => pure ()
-    unless isNew do
-      sess.mux.shutdown   -- a session to this peer already exists
-    h.acceptLoop sess
+  let pid ← h.nextSid.update fun n => (n + 1, n)
+  h.pending.update fun cs => (cs ++ [(pid, c)], ())
+  -- the unauthenticated phase is deadline-bounded: a raw TCP client that
+  -- sends nothing fails the upgrade instead of parking the task forever.
+  -- The timeout fires by closing the raw connection, so the session's
+  -- connections (built on `c` itself) never inherit a read deadline.
+  let up? ← Upgrade.withinDeadline upgradeTimeoutMs c.close
+    (Upgrade.upgradeInbound h.securities h.muxers c)
+  try
+    match up? with
+    | none => c.close
+    | some sess => do
+      if ← h.closing.get then
+        sess.mux.shutdown   -- the host is shutting down: do not pump
+      else do
+        h.peerstore.addAddrs sess.remotePeer [sess.remoteAddr]
+        let (_, isNew, loser) ← h.decide (← h.stampSid sess)
+        match loser with
+        | some old => old.mux.shutdown   -- our dial lost the race
+        | none => pure ()
+        unless isNew do
+          sess.mux.shutdown   -- a session to this peer already exists
+        h.acceptLoop sess
+  finally
+    h.pending.update fun cs => (cs.filter (fun x => x.1 != pid), ())
 
 /-- Accept loop over the listener. -/
 partial def Host.serveLoop (h : Host) (l : Listener) : IO Unit := do
@@ -296,7 +327,10 @@ def Host.dialPeer (h : Host) (pid : PeerId) : IO (Option Session) := do
     go (← h.peerstore.addrsOf pid)
 
 /-- Open a negotiated stream in a session and run the multiselect dialer
-(lazy mode) for `proto`. -/
+(lazy mode) for `proto`. Bytes the reply coalesced with (the peer may
+already be streaming its first message) ride along on the returned
+stream: they are prepended to its reads, so nothing negotiated away is
+lost. -/
 def Host.openProto (sess : Session) (proto : String) : IO (Option Stream) := do
   let some s ← sess.mux.openStream proto | return none
   let reader ← BufReader.ofConn (s.conn)
@@ -304,7 +338,7 @@ def Host.openProto (sess : Session) (proto : String) : IO (Option Stream) := do
   | none =>
     s.close
     return none
-  | some _ => return (some s)
+  | some _ => some <$> Stream.prependBytes s (← reader.buf.get)
 
 /-- Dial (or reuse) and negotiate `proto` over a fresh stream. -/
 def Host.newStream (h : Host) (addr : Multiaddr) (proto : String) :
@@ -321,9 +355,16 @@ def Host.newStreamTo (h : Host) (pid : PeerId) (proto : String) :
   | some sess => Host.openProto sess proto
 
 /-- Close listeners and sessions, then join every owned task (serve loops,
-connection handlers, stream handlers and muxer frame pumps). -/
+connection handlers, stream handlers and muxer frame pumps). Connections
+still mid-upgrade are closed first, so a task parked in a handshake read
+on a silent peer wakes with EOF instead of hanging the join (the read
+deadline is only the backstop). -/
 def Host.close (h : Host) : IO Unit := do
+  h.closing.set true
   (← h.listeners.get).forM fun l => l.close
+  -- wake every task parked in an unauthenticated handshake (EOF)
+  for (_, c) in ← h.pending.get do
+    c.close
   for (_, s) in ← h.conns.get do
     s.mux.shutdown
   -- session frame pumps exit once their pipes/connections are closed

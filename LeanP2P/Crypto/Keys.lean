@@ -69,6 +69,31 @@ structure PrivKey where
 
 /-! ## Protobuf marshaling -/
 
+/-- A DER structure at the very least starts with a SEQUENCE tag and a
+length (a 2-byte minimum); full parsing is the backend's job. -/
+def derOk (d : ByteArray) : Bool :=
+  d.size ≥ 8 ∧ d[0]! == 0x30
+
+/-- Key `Data` shapes (peer-ids spec + go-libp2p): public keys - Ed25519
+raw 32 bytes, secp256k1 compressed point 33 bytes, ECDSA/RSA a DER
+structure (SPKI). Private keys - Ed25519 32 (seed), 64 (seed||pub) or 96
+(legacy seed||pub||pub) bytes, secp256k1 32-byte scalar, ECDSA/RSA DER
+(SEC1/PKCS#8, PKCS#1). A key whose data does not fit its type must not
+unmarshal - a truncated key would still derive a (bogus) peer id. -/
+def pubKeyDataOk (kt : KeyType) (d : ByteArray) : Bool :=
+  match kt with
+  | .ed25519 => d.size = 32
+  | .secp256k1 => d.size = 33
+  | .ecdsa => derOk d
+  | .rsa => derOk d
+
+def privKeyDataOk (kt : KeyType) (d : ByteArray) : Bool :=
+  match kt with
+  | .ed25519 => d.size = 32 ∨ d.size = 64 ∨ d.size = 96
+  | .secp256k1 => d.size = 32
+  | .ecdsa => derOk d
+  | .rsa => derOk d
+
 /-- Deterministic `PublicKey` protobuf bytes (fields in tag order, minimal
 varints). -/
 def marshalPubKey (k : PubKey) : ByteArray :=
@@ -80,7 +105,9 @@ def unmarshalPubKey? (b : ByteArray) : Option PubKey := do
   let t ← Pb.getVarint? 1 fs
   let d ← Pb.getBytes? 2 fs
   let kt ← KeyType.ofNat? t
-  pure { keyType := kt, raw := Bytes.ofNatList d }
+  if pubKeyDataOk kt (Bytes.ofNatList d) then
+    pure { keyType := kt, raw := Bytes.ofNatList d }
+  else none
 
 /-- Deterministic `PrivateKey` protobuf bytes. -/
 def marshalPrivKey (k : PrivKey) : ByteArray :=
@@ -92,7 +119,9 @@ def unmarshalPrivKey? (b : ByteArray) : Option PrivKey := do
   let t ← Pb.getVarint? 1 fs
   let d ← Pb.getBytes? 2 fs
   let kt ← KeyType.ofNat? t
-  pure { keyType := kt, raw := Bytes.ofNatList d }
+  if privKeyDataOk kt (Bytes.ofNatList d) then
+    pure { keyType := kt, raw := Bytes.ofNatList d }
+  else none
 
 /-! ## Signing and verification (dispatch over the backend) -/
 

@@ -384,14 +384,26 @@ private def groups? (t : String) : Option (List Nat) :=
 
 private def hexGroup (n : Nat) : String := String.mk (Nat.toDigits 16 n)
 
+/-- Strict decimal: digits only (Lean's `toNat?` also accepts `_`
+digit separators, so "8_0" would parse to 80 - a port or address value
+must reject it). -/
+private def decNat? (s : String) : Option Nat :=
+  let cs := s.toList
+  if cs.isEmpty ∨ !cs.all (fun c => '0' ≤ c ∧ c ≤ '9') then none
+  else some (cs.foldl (fun acc c => acc * 10 + (c.toNat - '0'.toNat)) 0)
+
+/-- IPv4 octet: strict decimal without a leading zero (Go 1.17+ net.ParseIP
+rejects `01`-style octets to avoid the classic octal ambiguity). -/
+private def octet? (s : String) : Option Nat := do
+  let n ← decNat? s
+  guard (n < 256)
+  guard (s.length = 1 ∨ s.toList.head? != some '0')
+  some n
+
 private def parseIp4? (s : String) : Option (Nat × Nat × Nat × Nat) :=
   match s.splitOn "." with
   | [a, b, c, d] => do
-      let f (t : String) : Option Nat := do
-        let n ← t.toNat?
-        guard (n < 256)
-        some n
-      let a ← f a; let b ← f b; let c ← f c; let d ← f d
+      let a ← octet? a; let b ← octet? b; let c ← octet? c; let d ← octet? d
       some (a, b, c, d)
   | _ => none
 
@@ -445,25 +457,41 @@ private def parseIp6? (s : String) : Option (List Nat) := do
 
 /-! ### percent-encoding (http-path) -/
 
+/-- Decode percent escapes over the **UTF-8 bytes** of `s` and validate
+the result as UTF-8. `%XX` escapes carry bytes, not code points: a
+percent-encoded non-ASCII path (`%C3%A9`) must decode to the two UTF-8
+bytes of `é`, not to two Latin-1 characters, or the wire form of the
+stored value re-encodes garbage. -/
 def percentDecode? (s : String) : Option String := do
-  let rec go (acc : List Char) : List Char → Option String
-    | [] => some (String.ofList acc.reverse)
-    | '%' :: a :: b :: rest => do
-        let hi ← hexDigit? a
-        let lo ← hexDigit? b
-        go (Char.ofNat (hi * 16 + lo) :: acc) rest
-    | '%' :: _ => none  -- dangling '%x'
-    | c :: rest => go (c :: acc) rest
-  go [] s.toList
+  let rec go (acc : List Nat) : List Nat → Option (List Nat)
+    | [] => some acc
+    | 0x25 :: a :: b :: rest => do
+        let hi ← hexDigitB? a
+        let lo ← hexDigitB? b
+        go (acc ++ [hi * 16 + lo]) rest
+    | 0x25 :: _ => none  -- dangling '%x'
+    | c :: rest => go (acc ++ [c]) rest
+  let bs ← go [] (Bytes.toNatList s.toUTF8)
+  Bytes.toString? (Bytes.ofNatList bs)
+where
+  hexDigitB? (b : Nat) : Option Nat :=
+    if b ≥ 0x30 ∧ b ≤ 0x39 then some (b - 0x30)
+    else if b ≥ 0x61 ∧ b ≤ 0x66 then some (b - 0x61 + 10)
+    else if b ≥ 0x41 ∧ b ≤ 0x46 then some (b - 0x41 + 10)
+    else none
 
-private def isUnreserved (c : Char) : Bool :=
-  ('a' ≤ c ∧ c ≤ 'z') ∨ ('A' ≤ c ∧ c ≤ 'Z') ∨ c.isDigit ∨
-    c == '-' ∨ c == '.' ∨ c == '_' ∨ c == '~'
+private def isUnreserved (b : Nat) : Bool :=
+  (0x61 ≤ b ∧ b ≤ 0x7a) ∨ (0x41 ≤ b ∧ b ≤ 0x5a) ∨ (0x30 ≤ b ∧ b ≤ 0x39) ∨
+    b == 0x2d ∨ b == 0x2e ∨ b == 0x5f ∨ b == 0x7e
 
+/-- Percent-encode the UTF-8 bytes of `s` (unreserved ASCII passes
+through; every other byte, including each byte of a multi-byte
+sequence, becomes `%XX` - encoding code points instead of bytes emits
+wrong wire bytes for any non-ASCII path). -/
 def percentEncode (s : String) : String :=
-  s.toList.foldl (fun acc c =>
-    if isUnreserved c then acc.push c
-    else acc ++ "%" ++ (hexByte (c.toNat / 16)) ++ hexByte (c.toNat % 16)) ""
+  (Bytes.toNatList s.toUTF8).foldl (fun acc b =>
+    if isUnreserved b then acc.push (Char.ofNat b)
+    else acc ++ "%" ++ (hexByte (b / 16)) ++ hexByte (b % 16)) ""
 where
   hexByte (n : Nat) : String := String.ofList [hexDigitChar n]
   hexDigitChar (n : Nat) : Char :=
@@ -502,7 +530,7 @@ def onionHost? (s : String) (bytes : Nat) : Option (List Nat) := do
   some out
 
 private def parsePort? (s : String) : Option Nat := do
-  let p ← s.toNat?
+  let p ← decNat? s
   guard (0 < p ∧ p < 65536)
   some p
 
@@ -524,13 +552,14 @@ private def garlic64EncodeByte (n : Nat) : Char :=
   else '~'
 
 /-- garlic64 value: i2p base64 (MSB-first, `-`/`~` for `+`/`/`),
-canonical `=` padding, decoded length ≥ 386. -/
+canonical `=` padding, decoded length ≥ 386. Parses its own output
+including padded forms: the padding stays part of the scanned string, so
+the final 2- or 3-char group (which `garlic64Print` pads) decodes. -/
 def garlic64Parse? (s : String) : Option (List Nat) := do
   let cs := s.toList
   guard (cs.length % 4 != 1)
-  let body := cs.takeWhile (fun c => c != '=')
-  let pad := cs.drop body.length
-  guard (pad.all (fun c => c == '='))
+  -- '=' only in a canonical tail (at most one final group of padding)
+  guard ((cs.dropWhile (fun c => c != '=')).all (fun c => c == '='))
   let rec go (acc : List Nat) : List Char → Option (List Nat)
     | [] => some acc
     | [a, b, '=', '='] => do
@@ -551,7 +580,7 @@ def garlic64Parse? (s : String) : Option (List Nat) := do
         let w ← garlic64Char? d
         go (acc ++ [x * 4 + y / 16, (y % 16) * 16 + z / 4, (z % 4) * 64 + w]) rest
     | _ => none
-  let bs ← go [] body
+  let bs ← go [] cs
   guard (386 ≤ bs.length)
   some bs
 
@@ -670,7 +699,7 @@ def valuedProto? (proto value : String) : Option AddrComponent :=
     guard (!value.contains '/')
     some (.ip6zone value)
   else if proto = "ipcidr" then do
-    let n ← value.toNat?
+    let n ← decNat? value
     guard (n < 256)
     some (.ipcidr n)
   else if proto = "tcp" then port? value .tcp
@@ -706,7 +735,7 @@ def valuedProto? (proto value : String) : Option AddrComponent :=
     let mh ← Multihash.decode? (Bytes.toNatList bytes)
     some (.certhash (Multihash.encode mh))
   else if proto = "memory" then do
-    let n ← value.toNat?
+    let n ← decNat? value
     guard (n < 2 ^ 64)
     some (.memory n)
   else if proto = "ech" then do
@@ -715,7 +744,7 @@ def valuedProto? (proto value : String) : Option AddrComponent :=
   else none
 where
   port? (v : String) (k : Nat → AddrComponent) : Option AddrComponent := do
-    let p ← v.toNat?
+    let p ← decNat? v
     guard (p < 65536)
     some (k p)
   name? (v : String) (k : String → AddrComponent) : Option AddrComponent := do
@@ -744,57 +773,81 @@ def valuelessProto? (proto : String) : Option AddrComponent :=
   else if proto = "webrtc" then some .webrtc
   else none
 
-/-- Parse the text form. Path protocols are handled at the raw-string
-level: `unix` consumes the rest of the address verbatim, `http-path` takes
-one percent-escaped segment. -/
+mutual
+/-- One protocol segment of the text form: `s` does not start with `/`
+and is non-empty. Mutually recursive with `parseGo` (segment → boundary
+→ segment). -/
+private partial def parseSeg (fuel : Nat) (s : List Char) :
+    Option (List AddrComponent) := do
+  let proto := String.ofList (s.takeWhile (· != '/'))
+  let rest := s.dropWhile (· != '/')
+  if proto = "unix" then do
+    -- the value is the rest of the address, verbatim, starting with '/'
+    guard (0 < rest.length)
+    let value := String.ofList rest
+    guard (2 ≤ value.length)
+    guard (!value.endsWith "/")
+    some [AddrComponent.unix value]
+  else if proto = "http-path" then do
+    guard (0 < rest.length)
+    let after := rest.drop 1
+    let seg := String.ofList (after.takeWhile (· != '/'))
+    let rest2 := after.dropWhile (· != '/')
+    let p ← percentDecode? seg
+    guard (0 < p.length)
+    return AddrComponent.httpPath p :: (← parseGo fuel rest2)
+  else if rest.isEmpty then
+    match valuelessProto? proto with
+    | some c => some [c]
+    | none => none  -- valued protocol with no value
+  else
+    match valuelessProto? proto with
+    | some c => return c :: (← parseGo fuel rest)
+    | none => do
+        let after := rest.drop 1
+        let value := String.ofList (after.takeWhile (· != '/'))
+        let rest2 := after.dropWhile (· != '/')
+        let c ← valuedProto? proto value
+        -- an ip6zone must be directly followed by ip6
+        if c matches .ip6zone _ then
+          let next := String.ofList ((rest2.drop 1).takeWhile (· != '/'))
+          guard (next = "ip6")
+        return c :: (← parseGo fuel rest2)
+
+/-- Continue at a segment boundary: `s` is empty, or starts with exactly
+one `/` separator (a second one means an empty segment, which names no
+protocol). -/
+private partial def parseGo (fuel : Nat) (s : List Char) :
+    Option (List AddrComponent) :=
+  match fuel with
+  | 0 => none
+  | fuel' + 1 =>
+    match s with
+    | [] => some []
+    | '/' :: rest' =>
+        match rest' with
+        | [] => none
+        | '/' :: _ => none   -- empty segment: no protocol, no value
+        | _ => parseSeg fuel' rest'
+    | _ => parseSeg fuel' s
+
+end
+
+/-- Parse the text form. Strict like Go's `NewString`: the string must
+start with `/`, segments must be non-empty (`//` fails - the empty
+token names no protocol), one optional trailing `/` is tolerated. Path
+protocols are handled at the raw-string level: `unix` consumes the rest
+of the address verbatim, `http-path` takes one percent-escaped segment. -/
 def parse? (s : String) : Option Multiaddr := do
-  -- leading and trailing '/' carry no meaning (Go, TestEqual/TestProtocolsWithString);
-  -- the empty address is rejected (Go) even though js prints `/` for it
-  let body := (s.toList.dropWhile (· == '/')).reverse
-  let body := (body.dropWhile (· == '/')).reverse
-  guard (!body.isEmpty)
-  let rec go (fuel : Nat) (s : List Char) : Option (List AddrComponent) :=
-    match fuel with
-    | 0 => none
-    | fuel' + 1 =>
-      let s := s.dropWhile (· == '/')
-      if s.isEmpty then some []
-      else
-        let proto := String.ofList (s.takeWhile (· != '/'))
-        let rest := s.dropWhile (· != '/')
-        if proto = "unix" then do
-          -- the value is the rest of the address, verbatim, starting with '/'
-          guard (0 < rest.length)
-          let value := String.ofList rest
-          guard (2 ≤ value.length)
-          guard (!value.endsWith "/")
-          some [AddrComponent.unix value]
-        else if proto = "http-path" then do
-          guard (0 < rest.length)
-          let after := rest.drop 1
-          let seg := String.ofList (after.takeWhile (· != '/'))
-          let rest2 := after.dropWhile (· != '/')
-          let p ← percentDecode? seg
-          guard (0 < p.length)
-          return AddrComponent.httpPath p :: (← go fuel' rest2)
-        else if rest.isEmpty then
-          match valuelessProto? proto with
-          | some c => some [c]
-          | none => none  -- valued protocol with no value
-        else
-          match valuelessProto? proto with
-          | some c => return c :: (← go fuel' rest)
-          | none => do
-              let after := rest.drop 1
-              let value := String.ofList (after.takeWhile (· != '/'))
-              let rest2 := after.dropWhile (· != '/')
-              let c ← valuedProto? proto value
-              -- an ip6zone must be directly followed by ip6
-              if c matches .ip6zone _ then
-                let next := String.ofList ((rest2.drop 1).takeWhile (· != '/'))
-                guard (next = "ip6")
-              return c :: (← go fuel' rest2)
-  let comps ← go (s.length + 1) body
+  guard (s.startsWith "/")
+  let cs := s.toList.drop 1
+  -- one trailing '/' carries no meaning (Go, TestEqual/TestProtocolsWithString)
+  let cs := match cs.getLast? with
+    | some '/' => cs.dropLast
+    | _ => cs
+  guard (!cs.isEmpty)   -- the empty address is rejected (Go), even
+                        -- though js prints `/` for it
+  let comps ← parseGo (s.length + 1) cs
   some { components := comps }
 
 /-! ## Wire codec (ByteArray, production)
