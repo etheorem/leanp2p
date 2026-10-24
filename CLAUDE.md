@@ -57,7 +57,7 @@ with the incidents that earned it.
 
 - **Open/Closed (OCP).** Extend by adding code. A new transport, security
   protocol, or muxer lands as a new value of the existing seam
-  (`Transport`, `SecurityProtocol`, `MuxChoice`). If adding one requires
+  (`Transport`, `SecurityProtocol`, `Muxer`). If adding one requires
   editing the upgrader, the seam is wrong.
 
 - **Dependency Inversion (DIP).** Code against the seams, not the
@@ -109,12 +109,12 @@ with the incidents that earned it.
   cancel a task, wake it by closing what it parks on; every task has an
   owner that joins it; shared state changes atomically through
   `OnceRef.update`, never get-then-set on a bare `IO.Ref`. The contracts
-  live in ARCHITECTURE.md §3.1 and §4; treat a violation in review as a
+  live in ARCHITECTURE.md §4.1 and §5; treat a violation in review as a
   build failure in spirit.
 
 - **Bounded inputs.** Every length-prefixed read is capped before
   allocation, and an over-long varint is a protocol error. This is
-  ARCHITECTURE.md §4.1. A new framing layer without a cap does not get
+  ARCHITECTURE.md §5.1. A new framing layer without a cap does not get
   merged.
 
 - **FFI first, Lean later.** A primitive with a mature native
@@ -154,6 +154,7 @@ packages/
     multiformats/              multihash, multibase, base58, cid, multiaddr
     proto/                     protobuf wire codec
   crypto/
+    Crypto.lean                the facade every caller imports
     cores/                     sha256/sha512/sha1/hmac/hkdf, pure and proved
     backend/                   OpenSSL 3 C shim + @[extern] bindings
   net/
@@ -161,8 +162,9 @@ packages/
     yamux/                     the stream muxer
   libp2p/
     identity/                  keys, peer ids
-    security/                  SecurityProtocol, Noise XX
-    mux/                       muxer interface, mplex
+    core/                      ProtocolId, Core.Error, the libp2p seam types
+    security/                  Noise XX as a SecurityProtocol value
+    mux/                       Muxer values: yamux, mplex
     negotiate/                 multistream-select, upgrader
     host/                      host, peerstore, dedup, deadlines
     protocols/                 identify, ping
@@ -270,7 +272,7 @@ the multiformats specs govern behavior. When the code disagrees with a
 spec, the spec wins, and we record the discrepancy rather than paper
 over it.
 
-In scope for v1 (P0 in ARCHITECTURE.md §7): tcp transport, Noise XX,
+In scope for v1 (P0 in ARCHITECTURE.md §8): tcp transport, Noise XX,
 yamux, multistream-select, identity (keys, peer id), identify, host and
 upgrader, req/resp (`ssz_sn`), gossipsub v1.1, and the ENR codec.
 Deferred to seams only: TLS and the X.509 extension, mplex beyond the
@@ -289,11 +291,11 @@ punching, WebSockets, WebRTC, pnet, peer records.
 - Don't import libp2p from the packages below it; the import lint
   exists, keep it green.
 - Don't read past a length prefix without a cap; every framing read is
-  bounded before allocation (ARCHITECTURE.md §4.1).
-- Don't write constant-time primitives in Lean; bind them (§3.6).
-- Don't cancel tasks; wake them by closing what they park on (§3.1).
+  bounded before allocation (ARCHITECTURE.md §5.1).
+- Don't write constant-time primitives in Lean; bind them (§4.6).
+- Don't cancel tasks; wake them by closing what they park on (§4.1).
 - Don't hand a handler a raw stream when negotiation produced buffered
-  bytes; hand the leftovers on (§4.6).
+  bytes; hand the leftovers on (§5.6).
 
 ## Writing Style & Structural Constraints
 
@@ -354,7 +356,9 @@ and each brings terms that no everyday word replaces:
   `tag`, `X.509`, `SPKI`, `DER`, `low-S`, `constant-time`, `TCB`.
 
 The repo's own terms of art stay as well, and they mean one thing each:
-`seam` (a structure value a layer calls out through), `group`, `track`,
+`seam` (a structure value a layer calls out through), `class` (a
+typeclass for behavior the type fixes), `core` (a pure transition
+function), `loop` (the one task that drives a core), `group`, `track`,
 `unit`, `wave`, `gate`, `vector`, `fixture`, `conformance`,
 `differential test`, `oracle`, `deadline`, `pending` (a connection
 still inside its unauthenticated phase).

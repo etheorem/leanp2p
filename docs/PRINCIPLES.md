@@ -48,15 +48,16 @@ docstring needs the word "and" twice, split the module.
 ### 1.3 Open/Closed: extend through seams
 
 A new transport, security protocol, or muxer lands as a new value of an
-existing seam: `Transport`, `SecurityProtocol`, `MuxChoice`. The
+existing seam: `Transport`, `SecurityProtocol`, `Muxer`. The
 upgrader never learns their names. When adding one requires editing the
 dispatcher, the seam is wrong; fix the seam before adding the feature.
 
 The spike kept these as structure values, and the payoff was concrete:
 mplex and yamux swapped freely in every test, and the go interop matrix
-ran the same node code under both. Typeclass seams serve the same
-purpose where dispatch is static; structure values where it is dynamic.
-Choose by how the choice is made at runtime, and keep the choice out of
+ran the same node code under both. A seam is a structure value for a
+choice made at runtime; a class is a typeclass for behavior the type
+fixes. ARCHITECTURE.md §3 assigns one mechanism to each kind of
+connection. Choose by who makes the choice, and keep the choice out of
 the feature code.
 
 ### 1.4 Dependency inversion: code against seams, test against the sim
