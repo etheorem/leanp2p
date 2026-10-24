@@ -72,7 +72,7 @@ has a second implementation (the sim) that tests can use. A seam with
 one implementation and one consumer is a seam in name only; that is
 acceptable at the bottom of the graph, and a smell anywhere else.
 
-### 1.5 One canonical home per fact
+### 1.5 DRY: one canonical home per fact
 
 A frame layout is defined once, in the proved codec. The IO shell
 imports it. Protocol constants (length caps, window sizes, timeouts,
