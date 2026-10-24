@@ -44,6 +44,9 @@ Dependency rule: a group imports only groups to its right in
 - [`docs/PLAN.md`](docs/PLAN.md) — work units, dependency graph, build
   order. Authoritative for **order**; claim a unit there when
   implementing.
+- [`docs/PRINCIPLES.md`](docs/PRINCIPLES.md) — the engineering
+  discipline in detail: what each rule means in practice, and the
+  incidents that earned it.
 - `packages/<group>/<pkg>/docs/ARCHITECTURE.md` and `docs/PLAN.md` —
   written as the first work unit of every package; they refine the root
   documents and never contradict them.

@@ -27,6 +27,8 @@ commands or PR links.
 These have standard names, and good Lean libraries already follow them.
 They appear below as concrete conventions; this section is the *why*, so
 edge cases can be judged on principle instead of pattern-matching.
+[`docs/PRINCIPLES.md`](docs/PRINCIPLES.md) explains each one in detail,
+with the incidents that earned it.
 
 - **Literate by default.** libp2p-in-Lean sits at a small intersection:
   most readers know one side of it. Comments should teach the spec and
