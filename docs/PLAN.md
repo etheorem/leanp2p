@@ -50,7 +50,7 @@ W5.7 → W5.8 → W6.3 → W6.4** (14 units deep).
 |---|---|---|
 | W0.1 | Lake skeleton: `packages/` tree with one `lean_lib` per leaf (§2), empty roots compile | `lake build` green with all leaves present |
 | W0.2 | CI: import-rule lint (group chain §2, grep-enforced), test-runner layout (one suite module per upstream file, `lake test`, `-N1` required) | lint + empty runner green in CI |
-| W0.3 | Vector infrastructure: `scripts/extract-vectors.py`, `VECTORS.lock`, `Tests/vectors/` moved from the spike | a trivial vector suite loads and passes |
+| W0.3 | Vector infrastructure: `scripts/extract-vectors.py`, `VECTORS.lock`, `Tests/vectors/` moved from the `spike` branch | a trivial vector suite loads and passes |
 
 ## W1 — foundations (parallel)
 

@@ -314,7 +314,8 @@ Layered, matching how each part was validated in the spike:
 
 1. **Theorems on pure cores** - varint/protobuf/framing/header codecs:
    round-trip and inverse properties over the byte model.
-2. **Pinned upstream vectors** (`VECTORS.lock`, `scripts/extract-vectors.py`):
+2. **Pinned upstream vectors** (`VECTORS.lock`, `scripts/extract-vectors.py` -
+   on the `spike` branch today; carried into this repo by PLAN.md W0.3):
    RFC test vectors, go-libp2p fixtures, multiformats CSVs, captured
    transcripts (multistream traces, noise transport, identify, envelopes).
 3. **Fuzz property tests** for the `ByteArray` production paths (the
@@ -344,7 +345,7 @@ re-finding its bugs.
 
 Build order (each step is `packages/<group>/<pkg>`):
 
-| # | Package | Reference (spike files) | Public surface | Tests to carry over | Notes |
+| # | Package | Reference (files on the `spike` branch) | Public surface | Tests to carry over | Notes |
 |---|---|---|---|---|---|
 | 1 | `base/conc` | `Conc.lean` | `Chan` (new/send/recv/close/drain), `Pipe`, `TaskSet` (new/spawn/joinAll), `OnceRef` (new/get/set/update), `withinDeadline` | contracts: FIFO, close = broadcast EOF after drain, idempotent close, parked-recv wake, joinAll waits, N×M atomic updates, deadline wakes parked work via the close hook | implement bounded `Chan` + select/first-of + task error surfacing *here*, not later (§7's queues want them) |
 | 2 | `base/bytes` | `Crypto/Bytes.lean` | `Bytes.{ofNatList,toNatList,ofString,toString?,ofHex?,toHex,xorWith,...}` | byte-model round-trips, fuzz equivalence (from the multiaddr/proto suites) | the proof-facing `List Nat` model is the point; document why |
@@ -356,7 +357,7 @@ Build order (each step is `packages/<group>/<pkg>`):
 | 8 | `net/streams` | `Net/{Transport,Tcp}.lean`, `Conn/{Reader,Frame,Stream}.lean`, `Sim.lean` | `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` (+`prependBytes`), sim harness | TCP suite (dial/listen, mss over TCP, noise over TCP, muxers over TCP), silent-peer teardown | contracts: libuv close-wakes discipline; failed write = teardown; no reader strand (one `BufReader` through every stage, leftovers prepended at the app boundary) |
 | 9 | `net/yamux` | `Conn/Yamux.lean` | header codec, session, muxer entry | yamux suite + hostile-frame regressions + interop prereqs | keyed only by `net/streams.Connection`; caps, window enforcement, SYN-only creation, stream retirement, wake hand-off travel as contracts |
 | 10 | `libp2p/*` | everything else in the spike (`Host.lean`, `Conn/{Upgrade,Security,Noise,TlsExt,Mplex}.lean`, `Crypto/{Keys,PeerId,Messages}.lean`, `Protocol/*`, `Peer/*`) | see §3.9 | node suite + noise suite + keys suite + interop prereqs | build order inside: identity → security/noise → negotiate → host → protocols; mplex last (deferred for consensus, §7) |
-| 11 | `cli/` | `Main.lean`, `PingNode.lean`, `Interop.lean`, `scripts/` | node binaries + harness | e2e demo + interop matrix | also move `VECTORS.lock` + `scripts/extract-vectors.py` + `Tests/vectors/` here - they are implementation-independent |
+| 11 | `cli/` | `Main.lean`, `PingNode.lean`, `Interop.lean`, `scripts/` | node binaries + harness | e2e demo + interop matrix | also move `VECTORS.lock` + `scripts/extract-vectors.py` + `Tests/vectors/` here from the spike branch - they are implementation-independent |
 
 Definition of done per package: the contracts of §3 hold, the carried-over
 vector suites pass, and the dependency lint (no imports above the group

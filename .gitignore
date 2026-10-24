@@ -1,2 +1,7 @@
 .lake/
 __pycache__/
+
+# docker-built go harness nodes (built on the spike branch, shared checkout)
+/scripts/interopd
+/scripts/pingd
+/interop/leanp2p/image.json
