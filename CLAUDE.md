@@ -287,7 +287,9 @@ punching, WebSockets, WebRTC, pnet, peer records.
 - Don't bump `lean-toolchain` casually; it cascades through every
   package.
 - Don't add an AI session tag or an AI `Co-authored-by` trailer to a
-  commit message.
+  commit message. The `AI co-author guard` workflow fails on both.
+- Don't untick or delete the license acceptance line in a pull request
+  description. The `License acceptance guard` workflow fails without it.
 - Don't leave `sorry` in committed code without a `TODO` and a tracking
   note.
 - Don't import libp2p from the packages below it; the import lint
