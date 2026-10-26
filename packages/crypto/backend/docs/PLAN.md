@@ -30,8 +30,9 @@ exception: no own shim exists for it, so a failed pin blocks W6.1
 | 2 | W3.1, 1 | the backend side of root W3.3: the facade file at the group root (`packages/crypto/Crypto.lean`) names the production implementations, the `Rng` seam lands beside it, and the cross-check runs at the IO edge | the root W3.3 row holds |
 
 Unit 0 is done. Unit 2 writes no code in this package beyond what the
-facade re-exports; its new work is the facade library, the seam, and the
-cross-check suite.
+facade re-exports; its new work is the facade library, the seam, and
+the backend side of the cross-check, whose suite lives in the pure
+pair (the test split below).
 
 ## Consumers
 
@@ -51,9 +52,22 @@ fixed sequence, so every suite above this package pins its randomness
 
 Behavior tests close the units. The suite follows the root test-runner
 layout of W0.2, and the `-N1` pass is required. Every case is concrete.
+The byte-level known-answer tests for the FFI bindings live in this
+package's suites. The FFI-versus-pure comparisons live in the pure
+package's cross-check (W3.3), the one place that imports both stories.
 
 Milestones for 1a:
 
+- The etheorem pins: four Lake `require` lines, one per routed
+  family, each at a pinned rev with `subDir :=
+  packages/hazmat/<Pkg>`, and only single-family packages.
+- The build prerequisites: the CI runs the monorepo's `just`
+  vendor-fetch recipes for `LeanHazmatSecp256k1`,
+  `LeanHazmatKeccak`, and, on x86_64 Linux, the ISA-L unit of
+  `LeanHazmatSha256` (which needs `nasm`) before `lake build`. A
+  pkg-config check finds the system `libcrypto` for the OpenSSL
+  families. An actionable failure hint fires when either check
+  fails.
 - Ed25519: the RFC 8032 vectors of `keys-rfc8032.json`, the file's four
   entries (TEST 1, empty; TEST 2; TEST 1024; SHA(abc)): the derived
   public key matches `pubHex`, the signature matches `sigHex`, and a

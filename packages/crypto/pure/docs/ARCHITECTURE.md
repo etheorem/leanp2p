@@ -99,7 +99,10 @@ comparison needs a total function on this side.
 4. **The cross-check contract.** The cross-check compares the pure
    copies with the production path, the backend bindings, and the
    etheorem packages for the four routed primitives, property-wise at
-   the IO edge (§4.6; PLAN W3.3). This package's side
+   the IO edge (§4.6; PLAN W3.3). The cross-check runs in this
+   package's suites, the one place that imports both stories through
+   the facade, following
+   the test-split rule of the backend pair. This package's side
    is to stay pure and total, so the comparison is well-defined. Every
    loop names its measure. The two SHA-2 block loops terminate on the
    remaining input length, where the spike marked `partial` (§3.3).

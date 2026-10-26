@@ -70,7 +70,30 @@ and the low-S rule of §4.6 agree. The integration facts constrain the
 split: the etheorem monorepo pins Lean v4.29.1 against this repo's
 v4.34, the license is LGPL-3.0 with a contributor agreement, and the
 packages are monorepo-resident, with per-package publication repos
-promised but not yet present. Root unit W3.2 owns the pins, the
+promised but not yet present.
+
+Consumption follows etheorem's own pattern: a Lake `require` of the
+single family package from the monorepo, at a pinned rev, with
+`subDir := packages/hazmat/<Pkg>`. No mirror repo is needed. The
+backend requires single families, never the `LeanHazmat` umbrella, so
+the build compiles only the families it uses. The monorepo's
+per-family packaging exists for that compile-cost isolation.
+
+The native libraries under the four packages split by origin.
+`LeanHazmatP256` links the system `libcrypto` through pkg-config.
+`LeanHazmatSecp256k1` and `LeanHazmatKeccak` fetch their libraries
+shallow into gitignored `vendor/` trees at the recipes' pins, a tag
+for libsecp256k1 and a rev for keccak-tiny, through the monorepo's
+own `just` vendor recipes, never git submodules. `LeanHazmatSha256`
+is mixed: the system `libcrypto` through pkg-config, plus a vendored
+ISA-L `sha256_mb` unit that the x86_64 Linux build fetches through
+`just hazmat-sha256-vendor` and needs `nasm` for. A checkout that
+skips those recipes fails the build with
+the packages' own actionable hints, so the repo's CI runs the vendor
+fetch steps before `lake build`. The build itself stays offline after
+the fetch.
+
+Root unit W3.2 owns the pins, the
 toolchain-compat checks, and the facade routes. A primitive whose pin
 does not build falls back to this package's own shim for the interim,
 and the plan records the fallback. Keccak-256 is the exception: it
@@ -97,6 +120,19 @@ times instead of judging them, and the caller compares them against the
 ChaCha20-Poly1305 open is an authentication failure, and `CryptoError`
 gives it its own arm, so the Noise layer maps it to a protocol error and
 keeps a backend fault separate (§3.5, §4.9).
+
+**Trust boundary.** Every `@[extern]` declaration's docstring names its
+empirical trust assumption: which library, at which pin, and which
+vector suite validates it. The etheorem packages' own suites validate
+the four routed primitives, and the RFC and fixture suites validate the
+own-bound ones. The declarations are `opaque`, and the assumptions are
+visible under `#axioms`. The bridge to the pure package stays
+empirical: the W3.3 cross-check compares the two sides at the IO edge,
+and this package records no equivalence axiom, because nothing in this
+repo consumes a hash inside a proof. etheorem records named equivalence
+axioms for SHA-256, because its SSZ proofs consume the hash. This
+repo's SSZ stays client-side, so a reader imports that axiom pattern
+only when a proof here starts to consume a digest.
 
 ## Owned contracts
 
