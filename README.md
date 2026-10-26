@@ -55,6 +55,10 @@ group imports only the groups to its right. No package left of
 - `packages/<group>/<pkg>/docs/ARCHITECTURE.md` and `docs/PLAN.md`:
   every package writes these as its first work unit. They refine the
   root documents and never contradict them.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): the pull request and issue
+  workflow, the toolchain setup, and pointers to the code style.
+- [`SECURITY.md`](SECURITY.md): the vulnerability disclosure policy.
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md): the community guidelines.
 
 ## The reference implementation
 
@@ -72,3 +76,9 @@ shape.
 Lean 4 (v4.34; see `lean-toolchain` on the spike branch) and OpenSSL 3
 for `crypto/backend`. `lake test` runs the suite. The suite must pass
 under `+RTS -N1`, the criterion for concurrency starvation.
+
+## License
+
+LGPL-3.0-or-later; see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+Every contribution falls under the contributor agreement in
+[`CLA`](CLA).
