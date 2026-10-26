@@ -138,7 +138,7 @@ and the echo demo handler.
   runtime compiles out, the `LeanHazmatBn254` pattern. The binding
   exposes the block format only, raw `compress` and `decompress`; the
   length prefix stays in this package's framing. No module of this
-  package names a C library.
+  package names the foreign library.
 
 ## What the package must not depend on
 

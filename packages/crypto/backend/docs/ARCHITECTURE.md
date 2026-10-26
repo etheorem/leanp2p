@@ -126,7 +126,11 @@ empirical trust assumption: which library, at which pin, and which
 vector suite validates it. The etheorem packages' own suites validate
 the four routed primitives, and the RFC and fixture suites validate the
 own-bound ones. The declarations are `opaque`, and the assumptions are
-visible under `#axioms`. The bridge to the pure package stays
+visible under `#axioms`. A verifier binding folds every malformed
+input and every shim fault into `false`, fail-closed, and its
+docstring states the fold; no fault channel exists on the `Bool`
+return (§3.6; the etheorem verifiers state the same fold). The bridge
+to the pure package stays
 empirical: the W3.3 cross-check compares the two sides at the IO edge,
 and this package records no equivalence axiom, because nothing in this
 repo consumes a hash inside a proof. etheorem records named equivalence

@@ -303,6 +303,12 @@ rule); the backend pair followed in 658227e and cdd71b8.
 
 ## Open questions
 
-- Root `docs/PLAN.md` W6.2 (snappy FFI) names no package. The
-  affected package PLANs refer to it as "package TBD". The owner
-  decides the home later.
+None. Both questions this stage carried are resolved:
+
+- The snappy binding's home: `codec/snappy` (root PLAN W6.2; the
+  protocols pair records it).
+- The pure-`Bool` verifier fault channel (§3.6): the owner picked the
+  documented fold. Verifier bindings return `Bool`; `false` covers a
+  malformed input and a shim fault alike, fail-closed, and each
+  verifier docstring states the fold. Recorded in the backend pair;
+  etheorem's verifiers follow the same pattern.

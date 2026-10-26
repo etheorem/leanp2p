@@ -47,6 +47,7 @@ packages/
     varint/                    unsigned varint (multiformats and protobuf both need it)
     multiformats/              multihash, multibase, base58, cid, multiaddr
     proto/                     protobuf wire codec
+    snappy/                    snappy block format, google/snappy FFI (W6.2)
   crypto/
     Crypto.lean                the facade every caller imports (§3.6)
     pure/                      sha256/sha512/sha1/hmac/hkdf: pure Lean, proved
