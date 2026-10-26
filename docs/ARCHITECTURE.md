@@ -49,7 +49,7 @@ packages/
     proto/                     protobuf wire codec
   crypto/
     Crypto.lean                the facade every caller imports (§3.6)
-    cores/                     sha256/sha512/sha1/hmac/hkdf: pure Lean, proved
+    pure/                      sha256/sha512/sha1/hmac/hkdf: pure Lean, proved
     backend/                   OpenSSL 3 C shim + @[extern] bindings
   net/                         connections and framing
     streams/                   Connection/Listener/Transport, BufReader,
@@ -375,7 +375,9 @@ Rules:
   "truncated" from "malformed", and §5.2 needs that distinction at
   every layer.
 - **Every package owns one error inductive** (`Varint.Error`,
-  `Yamux.ProtocolError`, `Noise.Error`). A seam returns `Core.Error`
+  `Yamux.ProtocolError`, `Noise.Error`); a package that holds several
+  independent protocols owns one per protocol, each mapped into
+  `Core.Error` at its own seam. A seam returns `Core.Error`
   (§4.9), the coarse type that the upgrader and the host can act on.
   The implementation maps its own type into `Core.Error` once, at the
   seam value, with `Except.mapError`. `libp2p/host` wraps `Core.Error`
@@ -414,11 +416,14 @@ type of each binding states what the C function does:
   shim validates nothing twice.
 
 **The facade.** Callers import `Crypto`, the root module of the group
-at `packages/crypto/Crypto.lean`. No caller imports `crypto/backend` or
-`crypto/cores`. `Crypto` is one `lean_lib` made of `export` and
+at `packages/crypto/Crypto.lean`. No caller imports `crypto/backend`,
+`crypto/pure`, or an etheorem package.
+`Crypto` is one `lean_lib` made of `export` and
 `abbrev` lines that name the production implementation of each
-primitive. It also holds the `Rng` seam. The pure cores are the oracles
-that the cross-check (PLAN W3.3) runs against the backend. To move one
+primitive: the backend for the primitives it binds, the etheorem
+packages for the four primitives that route there. It also holds the
+`Rng` seam. The pure package is the oracle home that the cross-check
+(PLAN W3.3) runs against the production path. To move one
 primitive to pure Lean or to another native library, change one line of
 the facade. No call site changes. A class with a tag type
 (`[Hasher Sha256]`) would give the same swap, at the cost of a class
@@ -440,16 +445,17 @@ def Key32.ofByteArray? (b : ByteArray) : Option Key32 := …
 
 `Key32`, `Nonce12`, `Digest32`, the 12-byte yamux header, `PeerId` (a
 validated multihash), `StreamId` (with its parity), `Multiaddr` (a
-validated component list), and `ProtocolId` all take this form. Lean
-erases the proof field at runtime, so the newtype costs nothing. A core
-that takes `Key32` never indexes with `!` and never checks the size
-again. `Vector UInt8 n` from core Lean does the same job for
+validated component list), `Fields` (every entry fits the varint
+budget of `codec/varint`, §4.5), and `ProtocolId` all take this form.
+Lean erases the proof field at runtime, so the newtype costs nothing. A
+core that takes `Key32` never indexes with `!` and never checks the
+size again. `Vector UInt8 n` from core Lean does the same job for
 fixed-size fields that stay in Lean. `ByteArray` with a size proof is
 the form that crosses the FFI.
 
 Use `abbrev` for a synonym with no invariant and no instances of its
-own (`Fields := List (Nat × Value)` is one). When a type needs an
-instance or carries a fact, make it a `structure`.
+own (a `Payload := ByteArray` synonym would be one). When a type needs
+an instance or carries a fact, make it a `structure`.
 
 ### 3.8 Imports and host registries
 
@@ -529,7 +535,7 @@ later. We consume them in two phases: **FFI first, Lean later**. Phase
 1 binds the existing library through a small C shim behind a Lean
 interface, as `crypto/backend` does with OpenSSL 3. Phase 2 happens
 only where it pays. It re-implements the dependency in pure Lean
-*behind the same interface*, as the SHA/HMAC/HKDF cores of the spike
+*behind the same interface*, as the pure SHA/HMAC/HKDF modules of the spike
 do. Theorems back that code, and a cross-check compares it with the FFI
 at the IO edge.
 
@@ -614,38 +620,59 @@ UTF-8 bytes of the text.
 ### 4.5 `codec/proto`: protobuf wire codec
 
 Encode and decode over the byte model, with lengths framed by
-`codec/varint`. The encoding is deterministic by construction (tag
-order, minimal varints). Decode keeps unknown fields, and for a
-singular field the last occurrence wins. The core carries a round-trip
-theorem. The `ProtoMessage` class (§3.2) lives here. The libp2p
+`codec/varint`. The encoding is deterministic by construction (the
+fixed emit order of the field table, minimal varints). Decode keeps
+unknown fields, and for a singular field the last occurrence wins. The
+core carries a round-trip theorem. The `ProtoMessage` class (§3.2)
+lives here. The libp2p
 messages (`Keys`, `Identify`, `NoiseHandshakePayload`, `Envelope`,
 `PeerRecord`) live *above* this package, in `libp2p`. They are
 `ProtoMessage` instances over hand-written field tables.
 
-### 4.6 `crypto`: the edge and the verified cores
+### 4.6 `crypto`: the edge, the pure copies, and the bindings
 
-Two packages under one group:
+Three kinds of code under one group:
 
-- **`crypto/cores`**: the pure Lean implementations (SHA-256/512,
+- **`crypto/pure`**: the pure Lean implementations (SHA-256/512,
   SHA-1, HMAC, HKDF). Theorems back them, and they serve where a reader
-  must audit the code. The cross-check always compares them with the
-  backend at the IO edge.
+  must audit the code. The backend is the production path for every
+  primitive it binds, the digests included; the pure copies are the
+  audited implementations and the oracles that the cross-check compares
+  with the production path at the IO edge.
 - **`crypto/backend`**: the OpenSSL 3 shim (`c/p2pcrypto.c` plus the
-  bindings) for Ed25519, X25519, secp256k1, ECDSA P-256, RSA,
-  ChaCha20-Poly1305, and X.509. This is the "FFI first" phase of the
-  dependency strategy (§4 preamble). The package binds the mature
-  implementation as it is. Nobody writes constant-time primitives in
-  Lean. The pure cores above are the "Lean later" phase, as verified
-  cross-checks.
+  bindings) for the primitives no etheorem package covers: Ed25519,
+  X25519, RSA, SHA-1, SHA-512, HMAC, HKDF, ChaCha20-Poly1305, and
+  X.509, plus randomness and key generation. This is the "FFI first"
+  phase of the dependency strategy (§4 preamble). The package binds
+  the mature implementation as it is. Nobody writes constant-time
+  primitives in Lean. The pure package above is the "Lean later"
+  phase, as verified cross-checks.
+- **The etheorem bindings.** Where the etheorem monorepo already binds
+  a primitive, the facade routes to its package, and this repo writes
+  no second shim. Four primitives route there today: secp256k1
+  (`LeanHazmatSecp256k1`, libsecp256k1), ECDSA P-256 (`LeanHazmatP256`,
+  OpenSSL), SHA-256 (`LeanHazmatSha256`, OpenSSL and ISA-L), and
+  keccak-256 (`LeanHazmatKeccak`, keccak-tiny). The etheorem facts
+  constrain the integration: the monorepo pins Lean v4.29.1 against this
+  repo's v4.34, the license is LGPL-3.0 with a contributor agreement,
+  and the packages are monorepo-resident, with per-package publication
+  repos promised but not yet present. Unit W3.2 owns the pins, the
+  toolchain-compat checks, and the facade routes; a primitive whose
+  pin does not build falls back to the `crypto/backend` shim for the
+  interim, recorded in the plan. Keccak-256 is the one exception: no
+  own shim exists for it, so a pin that does not build blocks W6.1
+  until the pin builds or the owner records a re-vendor.
 
 The spike rules stay:
 
-- Every `ByteArray` argument to the shim is **borrowed** (`@&`). An
+- Every `ByteArray` argument to a shim is **borrowed** (`@&`). An
   owned parameter leaks one reference per call.
 - Binding types follow §3.6: pure for deterministic primitives, `IO`
   for randomness. Callers import the `Crypto` facade only.
 - Verifiers enforce the **key type and size**: P-256 SPKI only, RSA
-  2048 to 8192 bits only, secp256k1 low-S only.
+  2048 to 8192 bits only, secp256k1 low-S only. The libsecp256k1
+  default already rejects high-S, so the etheorem binding and the
+  rule agree.
 - X.509 validation checks the validity time and rejects unknown
   critical extensions.
 - The libp2p key *marshalings* (the SEC1/PKCS#8/SPKI/PKCS#1 choices,
@@ -854,8 +881,8 @@ The build order, one `packages/<group>/<pkg>` per step:
 | 3 | `codec/varint` | `Net/Varint.lean` | `encode(B)`, `decode?`, `decodeB?` + theorems | RFC examples, non-minimal/too-long rejection tests | over-long varint = protocol error, here at the source |
 | 4 | `codec/proto` | `Crypto/Pb.lean` | `Fields`, `encodeFields(B)`, `decodeFields(B?)`, `get{Varint,Bytes,Sub,Str}?` (last-wins), `getAll*`, `hasField` | round-trip theorem, message-vector suite (field tables stay in libp2p) | deterministic encoding by construction |
 | 5 | `codec/multiformats` | `Crypto/{Multihash,Multibase,Base58,Cid}.lean`, `Net/Multiaddr.lean` | as named, plus `Multiaddr.parse?/toString/toByteArray/ofByteArray?`, operations API | RFC/multiformats vector suites + go/js CSVs + fuzz corpora + proved round-trips | the strictness rules carry over (leading `/`, no empty segments, percent = UTF-8 bytes) |
-| 6 | `crypto/cores` | `Crypto/{Sha256,Sha512,Sha1,Hmac,Hkdf}.lean` | digests, HMAC, HKDF | RFC vector suites + OpenSSL cross-checks | cross-checked against the backend at the IO edge |
-| 7 | `crypto/backend` | `Crypto/OpenSsl.lean`, `c/p2pcrypto.c` | Ed25519/X25519/secp256k1/ECDSA-P256/RSA sign+verify, ChaCha20-Poly1305 seal/open, X.509 helpers; every `ByteArray` argument **borrowed** (`@&`) | fixture suites + verifier-strictness regressions (key type, RSA 2048-8192, low-S, X.509 validity + critical exts) | key *marshalings* go to `libp2p/identity` (§4.6) |
+| 6 | `crypto/pure` | `Crypto/{Sha256,Sha512,Sha1,Hmac,Hkdf}.lean` | digests, HMAC, HKDF | RFC vector suites + cross-checks against the production path | cross-checked against the production path at the IO edge |
+| 7 | `crypto/backend` | `Crypto/OpenSsl.lean`, `c/p2pcrypto.c` | Ed25519/X25519/RSA sign+verify, SHA-1/SHA-512/HMAC/HKDF, ChaCha20-Poly1305 seal/open, X.509 helpers, randomness and key generation, plus the interim fallback bindings (SHA-256, secp256k1, ECDSA P-256) and the pins for LeanHazmatSecp256k1/P256/Sha256/Keccak with the v4.34 build checks; every `ByteArray` argument **borrowed** (`@&`) | fixture suites + verifier-strictness regressions (key type, RSA 2048-8192, low-S, X.509 validity + critical exts) | key *marshalings* go to `libp2p/identity` (§4.6); secp256k1, P-256, SHA-256, and keccak-256 route to the etheorem hazmat packages (§4.6) |
 | 8 | `net/streams` | `Net/{Transport,Tcp}.lean`, `Conn/{Reader,Frame,Stream}.lean`, `Sim.lean` | `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` (+`prependBytes`), sim harness | TCP suite (dial/listen, mss over TCP, noise over TCP, muxers over TCP), silent-peer teardown | contracts: libuv close-wakes discipline; failed write = teardown; no reader strand (each stage hands its leftover on as data, §4.7) |
 | 9 | `net/yamux` | `Conn/Yamux.lean` | header codec, session, muxer entry | yamux suite + hostile-frame regressions + interop prereqs | depends only on `Connection` from `net/streams`; caps, window enforcement, SYN-only creation, stream retirement, and wake hand-off carry over as contracts |
 | 10 | `libp2p/*` | everything else in the spike (`Host.lean`, `Conn/{Upgrade,Security,Noise,TlsExt,Mplex}.lean`, `Crypto/{Keys,PeerId,Messages}.lean`, `Protocol/*`, `Peer/*`) | see §4.9 | node suite + noise suite + keys suite + interop prereqs | build order inside: identity → core → security/noise ∥ mux (yamux) → negotiate → host → protocols; mplex last (deferred for consensus, §8) |
@@ -976,7 +1003,7 @@ The map shows where the content of each spike module goes in the
 | `Net/Varint.lean` | `codec/varint` |
 | `Crypto/{Multihash,Multibase,Base58,Cid}.lean`, `Net/Multiaddr.lean` | `codec/multiformats` |
 | `Crypto/Pb.lean` | `codec/proto` |
-| `Crypto/{Sha256,Sha512,Sha1,Hmac,Hkdf}.lean` | `crypto/cores` |
+| `Crypto/{Sha256,Sha512,Sha1,Hmac,Hkdf}.lean` | `crypto/pure` |
 | `Crypto/OpenSsl.lean`, `c/p2pcrypto.c` | `crypto/backend` (key forms → `libp2p/identity`) |
 | `Net/{Transport,Tcp}.lean`, `Conn/{Reader,Frame,Stream}.lean` | `net/streams` |
 | `Sim.lean` | `net/streams` test support (in-memory transport) |

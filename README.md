@@ -27,7 +27,9 @@ packages/
   base/     conc (concurrency primitives), bytes (byte model)
   codec/    varint, multiformats (multihash/multibase/base58/cid/multiaddr),
             proto (protobuf wire codec)
-  crypto/   Crypto facade; cores (pure, proved), backend (OpenSSL 3 via C shim)
+  crypto/   Crypto facade; pure (pure-Lean digests, proved),
+            backend (OpenSSL 3 via C shim); secp256k1, P-256, SHA-256,
+            and keccak route to the etheorem hazmat packages
   net/      streams (Connection/BufReader/Framing/tcp), yamux
   libp2p/   identity, core (seam types), security, mux, negotiate, host, protocols
   cli/      demo node, ping node, interop harness

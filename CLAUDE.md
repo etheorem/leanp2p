@@ -155,7 +155,7 @@ packages/
     proto/                     protobuf wire codec
   crypto/
     Crypto.lean                the facade every caller imports
-    cores/                     sha256/sha512/sha1/hmac/hkdf, pure and proved
+    pure/                      sha256/sha512/sha1/hmac/hkdf, pure and proved
     backend/                   OpenSSL 3 C shim + @[extern] bindings
   net/
     streams/                   Connection, BufReader, Framing, Stream, tcp
@@ -258,12 +258,14 @@ infrastructure exist.
 ## Dependencies
 
 One pinned toolchain (v4.34; the spike's `lean-toolchain` is the
-reference) and one C dependency: OpenSSL 3 for `crypto/backend`.
-Adding a Lean dependency: add the require block, run `lake update`,
-commit `lake-manifest.json`, and pin the dependency's git rev. Reach for
-`batteries` before anything heavier; `mathlib` stays out. Go and Rust
-tooling is test-only, confined to the harness, and never on a shipped or
-proof path.
+reference). Use a C dependency where a mature implementation exists.
+Bind each one through a small C shim behind a Lean interface
+(ARCHITECTURE.md §4 preamble); OpenSSL 3 for `crypto/backend` is the
+current one. Adding a Lean dependency: add the require block, run
+`lake update`, commit `lake-manifest.json`, and pin the dependency's
+git rev. Reach for `batteries` before anything heavier; `mathlib` stays
+out. Go and Rust tooling is test-only, confined to the harness, and
+never on a shipped or proof path.
 
 ## Scope
 
