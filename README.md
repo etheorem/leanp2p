@@ -1,5 +1,7 @@
 # leanp2p
 
+> leanp2p is a project by [Invisible Garden](https://invisible.garden).
+
 libp2p for Lean 4: the implementation repository.
 
 **Status: bootstrap.** This branch carries the architecture and the
