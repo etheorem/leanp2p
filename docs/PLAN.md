@@ -106,7 +106,7 @@ W5.7 → W5.8 → W5.9 → W6.3 → W6.4**.
 | Unit | Pkg | P | deps | Deliverable |
 |---|---|---|---|---|
 | W6.1 | `libp2p/identity` ENR | P1 | W5.1, W3.2 | RLP from the etheorem monorepo (`etheorem/etheorem`, LGPL-3.0; the RLP package is upstream work not yet on its `main`, and unit 2 tracks it), wrapped behind the package's `Codec` surface, + ENR encode/decode + peer-id/multiaddr mapping (discv5 itself stays out of scope); the `v4` identity scheme verifies through the keccak-256 path of W3.2 (`LeanHazmatKeccak`), with ENR-local handling of the recovery-byte signature |
-| W6.2 | snappy FFI | P0 | W1.2 | bind the C library behind a Lean interface per the dependency strategy (FFI first; a native Lean replacement later, behind the same interface) |
+| W6.2 | `codec/snappy` | P0 | W1.2 | snappy FFI: the package binds upstream `google/snappy` (C++; the C++ runtime compiled out, the `LeanHazmatBn254` pattern) behind a Lean interface per the dependency strategy (FFI first; a native Lean replacement later, behind the same interface); block format only, raw `compress`/`decompress`, the length prefix stays in the req/resp framing (§8) |
 | W6.3 | req/resp framework | P0 | W5.6, W6.2 | `/eth2/.../ssz_sn` framing: uvarint length + snappy, deadlines, error/EOF distinction; SSZ payloads stay client-side |
 | W6.4 | gossipsub v1.1 | P0 | W5.6, W5.7, W1.1 (select/bounded queues) | RPC codec; mesh, scoring, and heartbeat as one pure `step` with time as an `Event` (ARCHITECTURE §3.3); signing policies; **gate**: gossipsub-interop against go and rust with no behavior difference |
 

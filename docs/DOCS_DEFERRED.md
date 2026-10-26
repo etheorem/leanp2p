@@ -61,8 +61,12 @@ Findings and resolutions:
   the libp2p stack) have no library or FFI equivalent and exist for the
   proof strategy; the vendored-C keccak decision stands, with the
   library's pure Keccak256 recorded as a future facade swap.
-- Open, owner decisions: the snappy binding's package home (W6.2);
-  whether a pure-`Bool` verifier may carry a fault channel (§3.6).
+- Resolved. The snappy binding's package home: `codec/snappy`, a
+  standalone binding package in the codec group, wrapping upstream
+  `google/snappy` (C++, runtime compiled out, the `LeanHazmatBn254`
+  pattern). Recorded in root PLAN W6.2 and the protocols pair.
+- Open, owner decisions: whether a pure-`Bool` verifier may carry a
+  fault channel (§3.6).
 
 ## Cleanup pass (stage close-out)
 

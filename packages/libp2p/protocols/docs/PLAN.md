@@ -28,9 +28,9 @@ starts when the snappy binding exists, and unit 2b needs the host's
 streams for the core's loop and the exchange, so the two wait on
 different things. Unit 3a is codec plus scaffolding, unit 3b is the
 protocol body and the largest single deliverable, and unit 3c runs
-against foreign nodes, so it carries its own milestone. W6.2 names no
-package (the open question on record); this plan refers to it as
-package TBD, per the owner's decision.
+against foreign nodes, so it carries its own milestone. The owner
+decided the W6.2 home: `codec/snappy`, a standalone binding package
+in the codec group wrapping upstream `google/snappy`.
 
 ## Consumers
 

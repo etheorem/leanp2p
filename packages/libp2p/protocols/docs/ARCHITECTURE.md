@@ -19,7 +19,7 @@ group is §7, row 10). The spike has no req/resp or gossipsub code.
 | `Libp2p/Protocols/Constants.lean` | the protocol ids and the caps: `/ipfs/id/1.0.0`, `/ipfs/id/push/1.0.0`, `/ipfs/ping/1.0.0`, the `/eth2/.../ssz_sn` pattern of §8, gossipsub's `/meshsub/1.1.0`, and one message cap per protocol; one home per fact (§3.8, §3.4) |
 | `Libp2p/Protocols/Identify.lean` | the `Identify` message with its `ProtoMessage` instance (§3.2), `Identify.Error`, the validate, the client that reads and validates one response, and the handler values for identify and push |
 | `Libp2p/Protocols/Ping.lean` | `Ping.Error`, the echo handler, and the initiator that sends 32 bytes and awaits the echo |
-| `Libp2p/Protocols/ReqResp/Frame.lean` | the `/eth2/.../ssz_sn` framing, a uvarint length over a snappy-compressed chunk, as a `Codec` with a `LawfulCodec` instance (§3.2); the snappy call goes through the binding of root PLAN W6.2, package TBD; the codec feeds the core |
+| `Libp2p/Protocols/ReqResp/Frame.lean` | the `/eth2/.../ssz_sn` framing, a uvarint length over a snappy-compressed chunk, as a `Codec` with a `LawfulCodec` instance (§3.2); the snappy call goes through the `codec/snappy` binding (root PLAN W6.2); the codec feeds the core |
 | `Libp2p/Protocols/ReqResp/Core.lean` | the response-chunk state machine of §3.3: `State`, `Event`, `Action`, the error inductive, and the total `step`; the snappy decompression context carries across chunks, and the chunk count and the error/EOF distinction live in the state |
 | `Libp2p/Protocols/ReqResp/Exchange.lean` | the client and handler seam over the loop: the client function, the handler value the registry stores, and the deadlines |
 | `Libp2p/Protocols/Gossipsub/Rpc.lean` | the RPC message with its `ProtoMessage` instance (§3.2) |
@@ -132,9 +132,13 @@ and the echo demo handler.
   the interop suite against go and rust with no behavior difference,
   closes conformance where no vectors exist.
 - **Snappy arrives only through the binding of root PLAN W6.2**
-  (§4 preamble: FFI first). The binding's package is not decided; the
-  root row names no package, and this doc says "package TBD" until the
-  owner records the home. No module of this package names a C library.
+  (§4 preamble: FFI first). The owner decided the home:
+  `codec/snappy`, a standalone binding package in the codec group.
+  The binding wraps upstream `google/snappy`, which is C++; the C++
+  runtime compiles out, the `LeanHazmatBn254` pattern. The binding
+  exposes the block format only, raw `compress` and `decompress`; the
+  length prefix stays in this package's framing. No module of this
+  package names a C library.
 
 ## What the package must not depend on
 
@@ -149,6 +153,6 @@ and the echo demo handler.
   `withinDeadline` for the req/resp deadlines, and `TaskSet` for the
   loop tasks.
 - No SSZ anywhere. The package frames opaque bytes (§8).
-- No snappy by name. The compression call goes through the W6.2
-  binding interface, wherever the owner places it, so a native Lean
+- No snappy by name. The compression call goes through the
+  `codec/snappy` binding interface, so a native Lean
   replacement can land behind the same interface (§4 preamble).
