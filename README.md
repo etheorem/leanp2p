@@ -4,9 +4,11 @@
 
 libp2p for Lean 4: the implementation repository.
 
-**Status: bootstrap.** This branch carries the architecture and the
-plan. Code arrives package by package, bottom-up, in the order of
-[`docs/PLAN.md`](docs/PLAN.md). No package exists yet.
+**Status: bootstrap.** W0 landed: the package tree builds, the import
+lint and the test runner are green, and the vector infrastructure is
+in place (ARCHITECTURE.md §6). Code arrives package by package,
+bottom-up, in the order of [`docs/PLAN.md`](docs/PLAN.md). W1 starts
+`base/conc` and `base/bytes`.
 
 ## What it is
 
@@ -65,18 +67,21 @@ group imports only the groups to its right. No package left of
 ## The reference implementation
 
 The **`spike` branch** of this repository holds a working libp2p spike.
-Theorems prove its wire formats, and fuzz tests pin them. It holds the
-captured go-libp2p vectors (`VECTORS.lock`), a 3148-check suite, and a
-live go interop cell. Read it before you implement anything, because
-its tests and vectors are the source of the contracts. Treat the spike
-as a reference and `docs/ARCHITECTURE.md` as the spec. Where they
+Theorems prove its wire formats, and fuzz tests pin them. Its captured
+vectors (`VECTORS.lock`, `Tests/vectors/`, `vendor/`) moved onto `main`
+with W0.3; the branch keeps the reference implementation, a
+3148-check suite, and a live go interop cell. Read it before you
+implement anything, because its tests and vectors are the source of
+the contracts. Treat the spike as a reference and
+`docs/ARCHITECTURE.md` as the spec. Where they
 differ, the architecture wins. ARCHITECTURE.md §3 also fixes the code
 shape.
 
 ## Toolchain
 
-Lean 4 (v4.34; see `lean-toolchain` on the spike branch) and OpenSSL 3
-for `crypto/backend`. `lake test` runs the suite. The suite must pass
+Lean 4 (v4.34; see `lean-toolchain`) and OpenSSL 3
+for `crypto/backend` (arrives with W3.2). `lake test` runs the suite.
+The suite must pass
 under `+RTS -N1`, the criterion for concurrency starvation.
 
 ## License

@@ -15,7 +15,7 @@ jobs:
     # The cap ends a deadlocked suite before the 360-minute default would.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Run lake build and lake test
         # lean-action runs the first two gates: lake

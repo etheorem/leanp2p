@@ -10,8 +10,10 @@ mature foreign implementations are consumed FFI first, through small C
 shims behind Lean interfaces; a native Lean replacement may follow,
 behind the same interface.
 
-**Status: bootstrap.** This branch (`main`) carries the documents and
-will carry the packages. The `spike` branch of this same repository
+**Status: bootstrap.** W0 landed on this branch (`main`): the package
+scaffold, the import lint, the test runner, and the vector
+infrastructure. Packages land per `docs/PLAN.md`. The `spike` branch
+of this same repository
 holds the reference implementation: working wire formats, the captured
 go-libp2p vector suites (`VECTORS.lock`), the vendored libp2p and
 multiformats specs (`vendor/specs`), and a 3148-check suite that also
@@ -19,8 +21,8 @@ passes under `+RTS -N1`. When you implement a unit, read the matching
 spike module first; the documents tell you where the spike is not to be
 followed.
 
-No git remote is configured. Do not guess repository URLs for `gh`
-commands or PR links.
+The remote is `etheorem/leanp2p` (GitHub, `origin`). Do not guess
+repository URLs beyond it for `gh` commands or PR links.
 
 ## Principles
 
@@ -133,8 +135,8 @@ the work that interfaces and patterns do elsewhere.
 
 Two branches share this checkout:
 
-- **`main`** (this branch): the implementation. Currently the documents;
-  packages land per `docs/PLAN.md`.
+- **`main`** (this branch): the implementation. The scaffold landed
+  with W0; packages land per `docs/PLAN.md`.
 - **`spike`**: the reference implementation, complete through phase 5.
   Its tree: `LeanP2P/` (the whole stack under one namespace), `Tests/`
   (one suite module per upstream file), `c/p2pcrypto.c` (the OpenSSL

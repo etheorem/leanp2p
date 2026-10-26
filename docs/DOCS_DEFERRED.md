@@ -402,12 +402,16 @@ The owner directed the open deferrals closed. Applied in two commits
 
 Still open, with owners:
 
-- CI observability: the repository has no remote, so no workflow has
-  run. Everything else about CI is verified locally.
 - The multicodec CSV vendor entry: `codec/multiformats` unit 1a, per
   the per-package docs record; the extractor and the vendor path now
   sit ready for it.
 - The `public import` caveat in the lint: reruns on a toolchain bump.
+
+Closed since:
+
+- CI observability. The repository pushes to `etheorem/leanp2p`, and
+  the first CI run is green: all five gates, the vendor verify
+  included.
 
 ## W0.2b and W0.2c: the test runner and the CI workflow
 

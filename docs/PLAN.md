@@ -53,8 +53,8 @@ W5.7 → W5.8 → W5.9 → W6.3 → W6.4**.
 Status: done. The three units are closed; `lake build` builds all 19
 leaf libraries, the lint and the runner are green (also under
 `+RTS -N1 -RTS`), and the vector corpus loads through its provenance
-suite. CI is committed but has not run: the repository has no remote
-yet.
+suite. CI runs on every push to `etheorem/leanp2p` and is green, the
+vendor verify included.
 
 | Unit | Deliverable | Done when |
 |---|---|---|
