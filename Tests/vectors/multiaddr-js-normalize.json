@@ -1,0 +1,46 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/js-multiaddr",
+  "commit": "35cc0d9d7ba94626fa9f5bd4d672b5f616afad3e",
+  "path": "test/index.spec.ts",
+  "upstreamTest": "describe('normalize')",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "cases": [
+  {
+   "name": "ip6 with zeroes",
+   "input": "/ip6/0001:08a0:00c5:4201:3ac9:86ff:fe31:0709",
+   "output": "/ip6/1:8a0:c5:4201:3ac9:86ff:fe31:709"
+  },
+  {
+   "name": "ip6 loopback",
+   "input": "/ip6/0000:0000:0000:0000:0000:0000:0000:0001",
+   "output": "/ip6/::1"
+  },
+  {
+   "name": "ip6 empty",
+   "input": "/ip6/::00:0:000:0:001",
+   "output": "/ip6/::1"
+  },
+  {
+   "name": "ip6 with ip4",
+   "input": "/ip6/::101.45.75.219/tcp/9090",
+   "output": "/ip6/::652d:4bdb/tcp/9090"
+  },
+  {
+   "name": "ip6 with ip4 without padding",
+   "input": "/ip6/::1.45.5.219/tcp/9090",
+   "output": "/ip6/::12d:5db/tcp/9090"
+  },
+  {
+   "name": "ip6 with multiple repeated empty blocks",
+   "input": "/ip6/0:00:0000:0002:0000:059c:0a24:0801/tcp/64142",
+   "output": "/ip6/::2:0:59c:a24:801/tcp/64142"
+  },
+  {
+   "name": "ipfs to p2p",
+   "input": "/ipfs/bafzbeidt255unskpefjmqb2rc27vjuyxopkxgaylxij6pw35hhys4vnyp4",
+   "output": "/p2p/bafzbeidt255unskpefjmqb2rc27vjuyxopkxgaylxij6pw35hhys4vnyp4"
+  }
+ ]
+}

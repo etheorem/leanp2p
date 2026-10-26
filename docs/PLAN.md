@@ -50,6 +50,12 @@ W5.7 → W5.8 → W5.9 → W6.3 → W6.4**.
 
 ## W0: repo scaffold (no dependencies)
 
+Status: done. The three units are closed; `lake build` builds all 19
+leaf libraries, the lint and the runner are green (also under
+`+RTS -N1 -RTS`), and the vector corpus loads through its provenance
+suite. CI is committed but has not run: the repository has no remote
+yet.
+
 | Unit | Deliverable | Done when |
 |---|---|---|
 | W0.1 | Lake skeleton: `packages/` tree with one `lean_lib` per leaf (§2), empty roots compile | `lake build` green with all leaves present |

@@ -312,3 +312,177 @@ None. Both questions this stage carried are resolved:
   malformed input and a shim fault alike, fail-closed, and each
   verifier docstring states the fold. Recorded in the backend pair;
   etheorem's verifiers follow the same pattern.
+
+## W0 cleanup batch (stage close-out)
+
+Applied batch: the four W0.1 docstring findings and the W0.2c
+`timeout-minutes` finding. The review added one more split (the Crypto
+roles sentence), applied with the batch. Dropped, with reasons:
+
+- The "concurrency floor" phrase survives in
+  `packages/base/conc/docs/ARCHITECTURE.md:3` ("byte floor" in the
+  bytes pair likewise). Those package docs predate W0, passed the docs
+  stage with that wording, and the W0.1 finding was scoped to the new
+  root module. Align the term only if the package doc is edited again.
+- The within-group lint rules, the `vendor/` move, the CI provenance
+  diff, and the multicodec CSV vendor entry are unit work with owners
+  (W1.1/W1.2, a later vector unit, `codec/multiformats` 1a), recorded
+  in their sections above.
+
+## W0.1: the lake skeleton
+
+Reviewer verdict: clean, nothing blocking. Four deferred docstring
+findings, for the stage-close cleanup batch:
+
+- Deferred. `packages/base/conc/Conc.lean:4`, "the concurrency floor of
+  the stack" coins a term; §4.1's own title is "concurrency
+  primitives", and one word carries one meaning.
+- Deferred. `packages/codec/snappy/Snappy.lean:4-5`, unit W6.2 appears
+  in two consecutive sentences; cut one statement of it.
+- Deferred. `packages/cli/Cli.lean:7`, "the executables arrive with
+  W5.8" covers all three binaries the docstring names, but the
+  interop harness arrives with W5.9. The sentence also joins two
+  independent claims.
+- Deferred. `packages/crypto/Crypto.lean:4-5`, "one import surface over
+  the pure copies and the backend bindings" names two of the three legs
+  §3.6 enumerates (the etheorem packages are the third) and reads the
+  pure copies as a production leg; §4.6 makes the backend the
+  production path and the pure copies the audited oracles.
+
+Decision of record, from the owner's pointer at the etheorem repo: the
+globs question. The etheorem incident `8d40ef2` (fix(sizzlean): resolve
+the module glob against the package directory) is the same bug class:
+a glob read a directory that did not resolve under the workspace root,
+the read failed, and the library silently built only what its root
+re-exports. Our shape takes the other half of the etheorem answer, the
+`LeanRlp/lakefile.toml` form: no `globs` line, so the Lake default
+(`roots.map Glob.one`) applies, and a unit widens its glob to `X.*`
+only in the commit that adds the first submodule, because `X.*` reads
+the `X/` directory and the load fails while it does not exist. The
+silent-omission guard is the docs rule that every root re-exports its
+public submodules. Carried note for the first `lakefile.lean` in this
+repo (the crypto/backend C target is the likely first): a lakefile
+that computes globs must resolve paths against `__dir__` and treat an
+unreadable directory as a configuration error, per `8d40ef2`.
+
+Rejected, with reasons:
+
+- `lakefile.toml` header comment, first sentence carries two
+  coordinated claims. Kept: one line, reads clean.
+- Untracked `mb` symlink at the repo root. Outside the diff; the
+  owner's local file, untouched.
+
+## W0 deferred closure (post stage close-out)
+
+The owner directed the open deferrals closed. Applied in two commits
+(`ci: W0 (deferred)`, `test: W0 (deferred)`):
+
+- Applied. The W0.2a within-group deferral: rule 3 of the lint encodes
+  the downward orders of §2 for net, codec, crypto, and libp2p, with
+  the §3.1 carve-outs (negotiate and host import core and no
+  implementation). An unknown leaf fails loud. Decision of record,
+  snappy's rank: §2 states an order and names no snappy edge, and a
+  rank table states an order, so snappy sits at the codec bottom
+  (rank 1, beside varint): a snappy file imports no codec leaf, and
+  higher codec leaves may import it as headroom. The docs win on a
+  conflict; a within-codec snappy edge needs a §2 row first.
+- Applied. The W0.3 vendor deferral: `vendor/` (eleven pinned copies)
+  and `scripts/vendor-pull.sh` moved from the spike branch. The
+  extractor rerun on `main` is byte-identical over the whole corpus
+  (proven twice), and CI runs the provenance gate. Two deltas from
+  the spike's copies, both recorded: `--verify` exits nonzero on
+  MISSING, PIN-MISMATCH, or BAD (the spike's printed and exited 0),
+  and the no-arg fetch mode drops a `set -u` abort the spike carried.
+  The CI corpus gate uses `git status --porcelain` rather than the
+  spike's `git diff --exit-code`, so an untracked corpus file fails
+  too.
+- Applied. The suite byte-exactness deferral closes with the gate:
+  the suite pins provenance and three shapes, and the gate pins the
+  byte-exact regeneration.
+
+Still open, with owners:
+
+- CI observability: the repository has no remote, so no workflow has
+  run. Everything else about CI is verified locally.
+- The multicodec CSV vendor entry: `codec/multiformats` unit 1a, per
+  the per-package docs record; the extractor and the vendor path now
+  sit ready for it.
+- The `public import` caveat in the lint: reruns on a toolchain bump.
+
+## W0.2b and W0.2c: the test runner and the CI workflow
+
+W0.2b reviewed clean on the first round; no findings. W0.2c reviewed
+clean with two deferred findings:
+
+- Deferred. `.github/workflows/ci.yml`, the job sets no
+  `timeout-minutes`. A deadlocked suite, the exact failure the `-N1`
+  criterion polices, burns the 360-minute default before CI fails. The
+  spike's CI carries the same gap. Fix in the cleanup pass with a cap
+  (60 minutes is the reviewer's number).
+- Deferred. CI green is unverified: the repo has no git remote, so no
+  run has executed. The W0.2 evidence is command parity with the local
+  gates plus a YAML parse. Revisit when a remote exists.
+
+Rejected, with reasons:
+
+- The bare `on:` key parses as boolean `true` under YAML 1.1 readers.
+  GitHub's parser accepts it and the spike uses the same shape; quoting
+  it serves third-party tooling only.
+- Explicit `build: true` / `test: true` restate lean-action's defaults.
+  Kept: the spike does the same, and the explicit form documents
+  command parity.
+
+## W0.3: the vector infrastructure
+
+Decision of record: the task's literal provenance spec (every file
+carries `repo`/`commit`/`path` strings and `extractedBy` exactly
+`scripts/extract-vectors.py`) is false against the frozen corpus, and
+the corpus is byte-frozen, so the spec yielded. Four files are
+go-libp2p captures (`scripts/capture-vectors.go`), two RFC files embed
+the extractor and carry no `commit`, `protobuf-messages.json` carries
+no `path`. The suite pins the invariant that holds corpus-wide:
+`_provenance` with `repo`, `upstreamTest`, and `extractedBy` strings,
+`extractedBy` containing `scripts/`, and the module docstring
+documents the three kinds. The lead verified the invariant over all
+50 files.
+
+- Closed post stage close-out. `vendor/` and `scripts/vendor-pull.sh`
+  moved to `main`, the extractor rerun is byte-identical, and CI runs
+  the provenance gate; see the W0 deferred closure section.
+- Closed post stage close-out. The CI gate pins byte-exact
+  regeneration over the whole corpus.
+- Deferred, carried. The multicodec CSV vendor entry stays out of
+  `VECTORS.lock`: per-package docs task 5 assigns it to
+  `codec/multiformats` unit 1a, through the W0.3 script. Kept visible
+  here so the assignment does not get lost.
+
+Rejected, with reasons:
+
+- The untracked `mb` symlink. The owner's local file; commits stage by
+  name, never `git add .`.
+
+## W0.2a: the import lint
+
+Reviewer verdict after two rounds: two blocking findings, fixed in the
+same task. The fixed round also applied two comment corrections the
+reviewer had rejected; the lead overrode both rejections because a
+false or misleading comment in a gate script is a defect of its own.
+
+- Deferred. `scripts/lint-imports.sh` (rule 1): `public import` escapes
+  the grep pattern once a toolchain compiles it. On the v4.34.0 pin it
+  parses but cannot compile (`module` support is missing), so the hole
+  is closed today; the caveat lives as a comment in the script and the
+  check reruns on a toolchain bump.
+- Closed post stage close-out. The within-group downward rules and
+  the "negotiate and host import core and no implementation" rule
+  (§3.1) landed as rule 3 of the lint; see the W0 deferred closure
+  section. No unit wait remains.
+
+Rejected, with reasons:
+
+- CR strip placement (before the `case`): verified correct; a CRLF
+  `Conc` resolves to base, not to the external branch.
+- `set -e` interaction of the directory checks: verified safe, explicit
+  `exit 1` inside the `if`, before both loops.
+- The widened pattern can match an `import` inside a block comment.
+  True, and it fails loud instead of silent; the whole-file scan stays.

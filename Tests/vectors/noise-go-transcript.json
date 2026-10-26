@@ -1,0 +1,55 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/libp2p/go-libp2p",
+  "commit": "3c2c902122cb6fae3897f729a3dbb9d4665ae90d",
+  "release": "v0.50.0",
+  "capturedBy": "scripts/capture-vectors.go (run in docker golang:alpine; flynn/noise v1.1.0)",
+  "path": "p2p/security/noise (real go-libp2p Transport as initiator)",
+  "upstreamTest": "Transport.SecureOutbound against a deterministic responder + post-handshake round trips",
+  "note": "go-libp2p completed the handshake against the deterministic responder in this capture, which proves the payload/framing replication is byte-compatible; the responder side (keys + msg2) is fixed so the transcript is replayable",
+  "extractedBy": "scripts/capture-vectors.go"
+ },
+ "protocolName": "Noise_XX_25519_ChaChaPoly_SHA256",
+ "initIdentityPubHex": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+ "initPeerId": "12D3KooWDwTirQce1RRKnasT5fPVFgzXCy6SiRgSwrwPGLC7zE91",
+ "respIdentityPubHex": "",
+ "respPeerId": "12D3KooWQK1wnefoLrcVHbbnf5tLzbopUd3K3bFAoJpA7YJgL5pV",
+ "respStaticNoiseHex": "1111111111111111111111111111111111111111111111111111111111111111",
+ "respEphemeralNoiseHex": "0faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20",
+ "respEphemeralPrivHex": "2222222222222222222222222222222222222222222222222222222222222222",
+ "respPayloadHex": "0a2408011220d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a12406f6c4a9be18fab7daf8f9d8f5840ba2df54d47f7e7d2d5fb15e081aea9adf14b3369775325f30bbbb11e33ef1023ec58d6639a9c83fecb22a47dca093dae9007220e120c2f79616d75782f312e302e30",
+ "extensionsMuxers": [
+  "/yamux/1.0.0"
+ ],
+ "messages": [
+  {
+   "dir": "i2r",
+   "hex": "0020067c2648e3a6866f699e4e6f28272e8884d05deb02cce54e5366d015c2ce7c2c"
+  },
+  {
+   "dir": "r2i",
+   "hex": "00d80faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20fe93d447b1246cbc53ee0de41e67ad53d3c9933515463b8a07301b70d30f3f04fe3d329c865b088df39b52811775e5d2174673cecc73b9fa0b79c5d9326f47c6f413805d9a279fb55aa3d1968e82d7a20e087ee6c9bcf8312b63976e65bba64564fe2e286dfbd13729dabcc8db966468003a64d420cefac4eeaf8f9d3a144b4a3bd926e99a7013730ab95825ca447b3b75f5d37eab138e3b004176b92f0e97f3ca081c546f7617edd941b5c112894bbc20858548cd62dada"
+  },
+  {
+   "dir": "i2r",
+   "hex": "00aa07a02462c9a497aa0bd347e89be28c0986d4cbe82f3972daf664e1e4fa25952cc64122fefa78216b660b48e24d9626dae4f5fbb2edacc48c4f4ec2d168329b5afeb6cb402e7962a8c994e0ec931bcc02d183c3de2d6de02a023e5255816e087245699b607bdae806a1e85ac3dd5f846ebee6755f2f448bb2e697bf3316c5f66d796689188fe1ce65873196b7e81bd22876e57897731080faa3b3c0ba0900c41526708cdf8f86b0f5eba3"
+  },
+  {
+   "dir": "i2r",
+   "hex": "0016ddc6ab70fe2b5e53bcd92d31c41104da9e30682644e2"
+  },
+  {
+   "dir": "r2i",
+   "hex": "001bf29543ea130a1f3dacc388c466afbec7edb1dd8b873735df3e9e75"
+  },
+  {
+   "dir": "i2r",
+   "hex": "0016bdf38f795746125690f9942b0176b21625675bf7218d"
+  },
+  {
+   "dir": "r2i",
+   "hex": "001bbcc19e441f5087e815feca290f40f1d4e0f7169c9612ad43e469ba"
+  }
+ ],
+ "initPayloadHex": "0a24080112203d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c124082dc5e1c7f9bfeff25c5e21dc8e9c3adc597a8fe4aaad58170d53b02c5bb6d681b8754e520b19f0d5159b4a574fda3e2c695f4d3cd574d674f16128ed98359032200"
+}

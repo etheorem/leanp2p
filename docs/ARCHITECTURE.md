@@ -831,8 +831,10 @@ The layers match how the spike validated each part:
    functions (§3.3) prove their invariants: the window never goes
    negative, ids keep their parity, and a retired id is never reused.
 2. **Pinned upstream vectors** (`VECTORS.lock`,
-   `scripts/extract-vectors.py`). They live on the `spike` branch
-   today, and PLAN.md W0.3 carries them into `main`. They include RFC
+   `scripts/extract-vectors.py`). They live on `main` since W0.3,
+   with the pinned sources under `vendor/` and the provenance gate in
+   CI: the gate re-pulls the pins, reruns the extractor, and fails on
+   any corpus drift. They include RFC
    test vectors, go-libp2p fixtures, multiformats CSVs, and captured
    transcripts (multistream traces, Noise transport, identify,
    envelopes).

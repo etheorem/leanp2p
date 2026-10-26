@@ -1,0 +1,17 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/js-multiaddr",
+  "commit": "35cc0d9d7ba94626fa9f5bd4d672b5f616afad3e",
+  "path": "test/index.spec.ts",
+  "upstreamTest": "describe('.decapsulate')",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "cases": [
+  {
+   "addr": "/ip4/127.0.0.1",
+   "sub": "/ip4/198.168.0.0",
+   "ok": false
+  }
+ ],
+ "note": "js throws 'does not contain subaddress'; we model a none result"
+}

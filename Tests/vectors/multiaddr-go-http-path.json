@@ -1,0 +1,22 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestHTTPPath",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "bad": "/http-path/thisIsMissingAfullByte%f",
+ "roundTrip": [
+  "/http-path/tmp%2Fbar",
+  "/http-path/tmp%2Fbar%2Fbaz",
+  "/http-path/foo",
+  "/ip4/127.0.0.1/tcp/0/p2p/12D3KooWCryG7Mon9orvQxcS1rYZjotPgpwoJNHHKcLLfE4Hf5mV/http-path/foo",
+  "/ip4/127.0.0.1/tcp/443/tls/sni/example.com/http/http-path/foo"
+ ],
+ "valueCase": {
+  "addr": "/http-path/tmp%2Fbar/p2p-circuit",
+  "proto": "http-path",
+  "value": "tmp%2Fbar"
+ }
+}

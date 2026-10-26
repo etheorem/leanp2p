@@ -1,0 +1,42 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestRoundTrip",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "cases": [
+  {
+   "string": "/unix/a/b/c/d"
+  },
+  {
+   "string": "/ip6/::ffff:127.0.0.1/tcp/111"
+  },
+  {
+   "string": "/ip4/127.0.0.1/tcp/123"
+  },
+  {
+   "string": "/ip4/127.0.0.1/tcp/123/tls"
+  },
+  {
+   "string": "/ip4/127.0.0.1/udp/123"
+  },
+  {
+   "string": "/ip4/127.0.0.1/udp/123/ip6/::"
+  },
+  {
+   "string": "/ip4/127.0.0.1/udp/1234/quic-v1/webtransport/certhash/uEiDDq4_xNyDorZBH3TlGazyJdOWSwvo4PUo5YHFMrvDE8g"
+  },
+  {
+   "string": "/p2p/QmbHVEEepCi7rn7VL7Exxpd2Ci9NNB6ifvqwhsrbRMgQFP"
+  },
+  {
+   "string": "/p2p/QmbHVEEepCi7rn7VL7Exxpd2Ci9NNB6ifvqwhsrbRMgQFP/unix/a/b/c"
+  },
+  {
+   "string": "/http-path/tmp%2Fbar"
+  }
+ ],
+ "note": "IPv4-mapped IPv6 prints in Go's dotted ::ffff:a.b.c.d form (decision recorded in plan section 5)"
+}

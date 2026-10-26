@@ -1,0 +1,139 @@
+# Every library takes the Lake default globs: the root module only
+# (`roots.map Glob.one`). A unit that adds the first submodule widens its
+# glob to `X.*` in the same commit. `X.*` reads the `X/` directory, and
+# the load fails while the directory does not exist (`Glob.forEachModuleIn`).
+# The root re-exports every public submodule, so the default builds the
+# public surface until then.
+name = "leanp2p"
+defaultTargets = [
+  "Conc",
+  "Bytes",
+  "Varint",
+  "Multiformats",
+  "Proto",
+  "Snappy",
+  "Crypto",
+  "CryptoPure",
+  "Backend",
+  "Streams",
+  "Yamux",
+  "Libp2pIdentity",
+  "Libp2pCore",
+  "Libp2pSecurity",
+  "Libp2pMux",
+  "Libp2pNegotiate",
+  "Libp2pHost",
+  "Libp2pProtocols",
+  "Cli",
+  "Tests",
+]
+# `lake test` builds and runs the executable named here.
+testDriver = "tests"
+
+[[lean_lib]]
+name = "Conc"
+srcDir = "packages/base/conc"
+roots = ["Conc"]
+
+[[lean_lib]]
+name = "Bytes"
+srcDir = "packages/base/bytes"
+roots = ["Bytes"]
+
+[[lean_lib]]
+name = "Varint"
+srcDir = "packages/codec/varint"
+roots = ["Varint"]
+
+[[lean_lib]]
+name = "Multiformats"
+srcDir = "packages/codec/multiformats"
+roots = ["Multiformats"]
+
+[[lean_lib]]
+name = "Proto"
+srcDir = "packages/codec/proto"
+roots = ["Proto"]
+
+[[lean_lib]]
+name = "Snappy"
+srcDir = "packages/codec/snappy"
+roots = ["Snappy"]
+
+[[lean_lib]]
+name = "Crypto"
+srcDir = "packages/crypto"
+roots = ["Crypto"]
+
+[[lean_lib]]
+name = "CryptoPure"
+srcDir = "packages/crypto/pure"
+roots = ["CryptoPure"]
+
+[[lean_lib]]
+name = "Backend"
+srcDir = "packages/crypto/backend"
+roots = ["Backend"]
+
+[[lean_lib]]
+name = "Streams"
+srcDir = "packages/net/streams"
+roots = ["Streams"]
+
+[[lean_lib]]
+name = "Yamux"
+srcDir = "packages/net/yamux"
+roots = ["Yamux"]
+
+[[lean_lib]]
+name = "Libp2pIdentity"
+srcDir = "packages/libp2p/identity"
+roots = ["Libp2p.Identity"]
+
+[[lean_lib]]
+name = "Libp2pCore"
+srcDir = "packages/libp2p/core"
+roots = ["Libp2p.Core"]
+
+[[lean_lib]]
+name = "Libp2pSecurity"
+srcDir = "packages/libp2p/security"
+roots = ["Libp2p.Security"]
+
+[[lean_lib]]
+name = "Libp2pMux"
+srcDir = "packages/libp2p/mux"
+roots = ["Libp2p.Mux"]
+
+[[lean_lib]]
+name = "Libp2pNegotiate"
+srcDir = "packages/libp2p/negotiate"
+roots = ["Libp2p.Negotiate"]
+
+[[lean_lib]]
+name = "Libp2pHost"
+srcDir = "packages/libp2p/host"
+roots = ["Libp2p.Host"]
+
+[[lean_lib]]
+name = "Libp2pProtocols"
+srcDir = "packages/libp2p/protocols"
+roots = ["Libp2p.Protocols"]
+
+[[lean_lib]]
+name = "Cli"
+srcDir = "packages/cli"
+roots = ["Cli"]
+
+# The test tree: one suite module per upstream file, with the shared
+# runner in `Tests/Support.lean`. The `tests` executable is the
+# `lake test` driver. `Tests.+` is Lake's TOML spelling of
+# `.submodules `Tests` (the spike's glob); `Tests.*` would be
+# `.andSubmodules`, and the `Tests.lean` root it asks for does not exist.
+[[lean_lib]]
+name = "Tests"
+globs = ["Tests.+"]
+
+[[lean_exe]]
+name = "tests"
+root = "Tests.Main"

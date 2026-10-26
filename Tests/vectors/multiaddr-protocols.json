@@ -1,0 +1,245 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/multiaddr",
+  "commit": "7a0710a4a2a425f9280a148561a3ff5af80aa2f5",
+  "path": "protocols.csv",
+  "upstreamTest": "authoritative protocol table",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "protocols": [
+  {
+   "code": 4,
+   "size": 32,
+   "name": "ip4"
+  },
+  {
+   "code": 6,
+   "size": 16,
+   "name": "tcp"
+  },
+  {
+   "code": 273,
+   "size": 16,
+   "name": "udp"
+  },
+  {
+   "code": 33,
+   "size": 16,
+   "name": "dccp"
+  },
+  {
+   "code": 41,
+   "size": 128,
+   "name": "ip6"
+  },
+  {
+   "code": 42,
+   "size": -1,
+   "name": "ip6zone",
+   "comment": "rfc4007 IPv6 zone"
+  },
+  {
+   "code": 43,
+   "size": 8,
+   "name": "ipcidr",
+   "comment": "CIDR mask for IP addresses"
+  },
+  {
+   "code": 53,
+   "size": -1,
+   "name": "dns",
+   "comment": "domain name resolvable to both IPv6 and IPv4 addresses"
+  },
+  {
+   "code": 54,
+   "size": -1,
+   "name": "dns4",
+   "comment": "domain name resolvable only to IPv4 addresses"
+  },
+  {
+   "code": 55,
+   "size": -1,
+   "name": "dns6",
+   "comment": "domain name resolvable only to IPv6 addresses"
+  },
+  {
+   "code": 56,
+   "size": -1,
+   "name": "dnsaddr"
+  },
+  {
+   "code": 132,
+   "size": 16,
+   "name": "sctp"
+  },
+  {
+   "code": 301,
+   "size": 0,
+   "name": "udt"
+  },
+  {
+   "code": 302,
+   "size": 0,
+   "name": "utp"
+  },
+  {
+   "code": 400,
+   "size": -1,
+   "name": "unix",
+   "comment": "Percent-encoded path to a Unix domain socket"
+  },
+  {
+   "code": 421,
+   "size": -1,
+   "name": "p2p",
+   "comment": "preferred over /ipfs"
+  },
+  {
+   "code": 421,
+   "size": -1,
+   "name": "ipfs",
+   "comment": "backwards compatibility; equivalent to /p2p"
+  },
+  {
+   "code": 444,
+   "size": 96,
+   "name": "onion"
+  },
+  {
+   "code": 445,
+   "size": 296,
+   "name": "onion3"
+  },
+  {
+   "code": 446,
+   "size": -1,
+   "name": "garlic64"
+  },
+  {
+   "code": 447,
+   "size": -1,
+   "name": "garlic32"
+  },
+  {
+   "code": 448,
+   "size": 0,
+   "name": "tls",
+   "comment": "Transport Layer Security"
+  },
+  {
+   "code": 449,
+   "size": -1,
+   "name": "sni",
+   "comment": "Server Name Indication RFC 6066 § 3"
+  },
+  {
+   "code": 454,
+   "size": 0,
+   "name": "noise"
+  },
+  {
+   "code": 460,
+   "size": 0,
+   "name": "quic"
+  },
+  {
+   "code": 461,
+   "size": 0,
+   "name": "quic-v1"
+  },
+  {
+   "code": 465,
+   "size": 0,
+   "name": "webtransport"
+  },
+  {
+   "code": 466,
+   "size": -1,
+   "name": "certhash"
+  },
+  {
+   "code": 480,
+   "size": 0,
+   "name": "http",
+   "comment": "HyperText Transfer Protocol"
+  },
+  {
+   "code": 481,
+   "size": -1,
+   "name": "http-path",
+   "comment": "Percent-encoded path to an HTTP resource"
+  },
+  {
+   "code": 443,
+   "size": 0,
+   "name": "https",
+   "comment": "Deprecated alias for /tls/http"
+  },
+  {
+   "code": 477,
+   "size": 0,
+   "name": "ws",
+   "comment": "WebSockets"
+  },
+  {
+   "code": 478,
+   "size": 0,
+   "name": "wss",
+   "comment": "Deprecated alias for /tls/ws"
+  },
+  {
+   "code": 479,
+   "size": 0,
+   "name": "p2p-websocket-star",
+   "comment": "Deprecated"
+  },
+  {
+   "code": 277,
+   "size": 0,
+   "name": "p2p-stardust",
+   "comment": "Deprecated"
+  },
+  {
+   "code": 275,
+   "size": 0,
+   "name": "p2p-webrtc-star",
+   "comment": "Deprecated - Use webrtc or webrtc-direct instead"
+  },
+  {
+   "code": 276,
+   "size": 0,
+   "name": "p2p-webrtc-direct",
+   "comment": "Deprecated - Use webrtc or webrtc-direct instead"
+  },
+  {
+   "code": 280,
+   "size": 0,
+   "name": "webrtc-direct",
+   "comment": "ICE-lite webrtc transport with SDP munging during connection establishment and without use of a STUN server"
+  },
+  {
+   "code": 281,
+   "size": 0,
+   "name": "webrtc",
+   "comment": "webrtc transport where connection establishment is according to w3c spec"
+  },
+  {
+   "code": 290,
+   "size": 0,
+   "name": "p2p-circuit"
+  },
+  {
+   "code": 777,
+   "size": -1,
+   "name": "memory",
+   "comment": "in memory transport for self-dialing and testing; arbitrary"
+  },
+  {
+   "code": 9849,
+   "size": -1,
+   "name": "ech",
+   "comment": "ECHConfigList per RFC 9849"
+  }
+ ],
+ "sizeSemantics": "-1 = uvarint-length-prefixed value (upstream writes 'V'), 0 = no value, n > 0 = exactly n bytes"
+}

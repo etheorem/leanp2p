@@ -1,0 +1,26 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestInvalidP2PAddrBytes, TestInvalidP2PAddrString",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "bytesHex": "a503221221c05877cbae039d70a5e600ea02c6f9f2942439285c9e344e26f8d280c850fad6",
+ "bytesNote": "Go rejects: the sha2-256 multihash declares digest length 33 but carries 32 bytes",
+ "strings": [
+  {
+   "string": "/p2p/k2k4r8oqamigqdo6o7hsbfwd45y70oyynp98usk7zmyfrzpqxh1pohl-"
+  },
+  {
+   "string": "/p2p/?unknownmultibase"
+  },
+  {
+   "string": "/p2p/k2jmtxwoe2phm1hbqp0e7nufqf6umvuu2e9qd7ana7h411a0haqj6i2z"
+  }
+ ],
+ "derivedNote": "the inline \"/p2p/\" + unknownCodecCID entries use a CIDv1 whose codec is not libp2p-key (0x72); rejected by the CID codec check",
+ "derivedSkipped": [
+  "\"/p2p/\" + unknownCodecCID, // impossible codec"
+ ]
+}

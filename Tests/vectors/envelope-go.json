@@ -1,0 +1,22 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/libp2p/go-libp2p",
+  "commit": "3c2c902122cb6fae3897f729a3dbb9d4665ae90d",
+  "release": "v0.50.0",
+  "capturedBy": "scripts/capture-vectors.go (run in docker golang:alpine; flynn/noise v1.1.0)",
+  "path": "core/record + core/peer (PeerRecord)",
+  "upstreamTest": "record.Seal of a PeerRecord envelope (RFC 0002/0003), consumed back through record.ConsumeEnvelope in the same run",
+  "extractedBy": "scripts/capture-vectors.go"
+ },
+ "pubKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+ "peerId": "12D3KooWQK1wnefoLrcVHbbnf5tLzbopUd3K3bFAoJpA7YJgL5pV",
+ "domain": "libp2p-peer-record",
+ "payloadTypeHex": "0301",
+ "payloadHex": "0a26002408011220d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a10011a0a0a08047f000001060fa1",
+ "signatureHex": "31ec4f7e412e9d52165ed032bc926e48622b8e26651c8fce9d54755cc672632cbe7d29d46a5bec6e6b4321fb2f85ff5bc363f4659750d39ff24683d7a017ad0b",
+ "envelopeHex": "0a2408011220d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a120203011a360a26002408011220d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a10011a0a0a08047f000001060fa12a4031ec4f7e412e9d52165ed032bc926e48622b8e26651c8fce9d54755cc672632cbe7d29d46a5bec6e6b4321fb2f85ff5bc363f4659750d39ff24683d7a017ad0b",
+ "seq": 1,
+ "addrs": [
+  "/ip4/127.0.0.1/tcp/4001"
+ ]
+}

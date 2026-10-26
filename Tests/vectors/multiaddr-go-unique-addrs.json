@@ -1,0 +1,56 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestUniqueAddrs",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "tables": [
+  {
+   "in": [],
+   "out": []
+  },
+  {
+   "in": [
+    "/ip4/127.0.0.1/tcp/1234"
+   ],
+   "out": [
+    "/ip4/127.0.0.1/tcp/1234"
+   ]
+  },
+  {
+   "in": [
+    "/ip4/127.0.0.1/tcp/1234",
+    "/ip4/127.0.0.1/tcp/1234",
+    "/ip4/127.0.0.1/tcp/1234"
+   ],
+   "out": [
+    "/ip4/127.0.0.1/tcp/1234"
+   ]
+  },
+  {
+   "in": [
+    "/ip4/127.0.0.1/tcp/1234",
+    "/ip4/127.0.0.1/udp/1234/quic-v1",
+    "/ip4/127.0.0.1/tcp/1234"
+   ],
+   "out": [
+    "/ip4/127.0.0.1/tcp/1234",
+    "/ip4/127.0.0.1/udp/1234/quic-v1"
+   ]
+  },
+  {
+   "in": [
+    "/ip4/127.0.0.1/tcp/1234",
+    "/ip4/127.0.0.1/udp/1234/quic-v1",
+    "/ip4/127.0.0.1/tcp/1234/ws"
+   ],
+   "out": [
+    "/ip4/127.0.0.1/tcp/1234",
+    "/ip4/127.0.0.1/udp/1234/quic-v1",
+    "/ip4/127.0.0.1/tcp/1234/ws"
+   ]
+  }
+ ]
+}

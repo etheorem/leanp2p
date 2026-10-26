@@ -1,0 +1,25 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/libp2p/go-libp2p",
+  "commit": "3c2c902122cb6fae3897f729a3dbb9d4665ae90d",
+  "release": "v0.50.0",
+  "capturedBy": "scripts/capture-vectors.go (run in docker golang:alpine; flynn/noise v1.1.0)",
+  "path": "core/identify service",
+  "upstreamTest": "/ipfs/id/1.0.0 response protobuf captured from a live go-libp2p host",
+  "extractedBy": "scripts/capture-vectors.go"
+ },
+ "protocolVersion": "/ipfs/1.0.0",
+ "agentVersion": "cap@",
+ "publicKeyHex": "c5c01dc52cbe476ca94efcc07a1371d7d3b753e9edb141b8043123db7ae82e8c",
+ "peerId": "12D3KooWP8JPoJKoyxCrNW3Do9gWGoKRNALPyEYwro4713afJT8f",
+ "protocols": [
+  "/ipfs/id/1.0.0",
+  "/ipfs/id/push/1.0.0",
+  "/ipfs/ping/1.0.0",
+  "/libp2p/circuit/relay/0.2.0/stop"
+ ],
+ "listenAddrs": [
+  "/ip4/127.0.0.1/tcp/35371"
+ ],
+ "responseHex": "ca020a2408011220c5c01dc52cbe476ca94efcc07a1371d7d3b753e9edb141b8043123db7ae82e8c1208047f000001068a2b1a0e2f697066732f69642f312e302e301a132f697066732f69642f707573682f312e302e301a102f697066732f70696e672f312e302e301a202f6c69627032702f636972637569742f72656c61792f302e322e302f73746f702208047f0000010686832a0032046361704042ac010a2408011220c5c01dc52cbe476ca94efcc07a1371d7d3b753e9edb141b8043123db7ae82e8c120203011a3e0a26002408011220c5c01dc52cbe476ca94efcc07a1371d7d3b753e9edb141b8043123db7ae82e8c10a593cdceb9c0ffeb181a0a0a08047f000001068a2b2a40c97577646e7059b6daea215c8310fa42e882006fabb85c44e69c131572878de65e71ff29a1d27a81403dec36e301896707e7deb7a139337b722fe8a7b0a4d701"
+}

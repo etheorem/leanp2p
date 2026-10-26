@@ -1,0 +1,29 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multiaddr",
+  "commit": "7fae00adf671d9d4b931e591f2357a261567fee5",
+  "path": "multiaddr_test.go",
+  "upstreamTest": "TestEncapsulate",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "encapsulate": [
+  {
+   "left": "/ip4/127.0.0.1/udp/1234",
+   "right": "/udp/5678",
+   "expected": "/ip4/127.0.0.1/udp/1234/udp/5678"
+  }
+ ],
+ "decapsulate": [
+  {
+   "left": "/ip4/127.0.0.1/udp/1234/udp/5678",
+   "right": "/udp/5678",
+   "expected": "/ip4/127.0.0.1/udp/1234"
+  },
+  {
+   "left": "/ip4/127.0.0.1/udp/1234",
+   "right": "/ip4/127.0.0.1",
+   "expected": null
+  }
+ ],
+ "note": "expected null means Decapsulate returns nil; strings mirrored from the literals in the upstream test"
+}

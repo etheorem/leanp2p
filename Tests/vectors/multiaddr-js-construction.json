@@ -1,0 +1,11 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/js-multiaddr",
+  "commit": "35cc0d9d7ba94626fa9f5bd4d672b5f616afad3e",
+  "path": "test/index.spec.ts",
+  "upstreamTest": "describe('construction')",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "addr": "/ip4/127.0.0.1/udp/1234",
+ "emptyDivergence": "js parses '' and '////////' into an empty address printed as '/'; Go rejects them - we follow Go for parsing and js for printing the empty address"
+}

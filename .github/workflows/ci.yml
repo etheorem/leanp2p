@@ -1,0 +1,59 @@
+name: CI
+
+# W0.2: build the tree and run the checks on every push and pull
+# request. The steps run the five gates: lake build, lake
+# test, the -N1 pass, the import lint, and the provenance check.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    # The cap ends a deadlocked suite before the 360-minute default would.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run lake build and lake test
+        # lean-action runs the first two gates: lake
+        # build, then lake test. The remaining three appear as explicit
+        # steps below, so each command runs exactly once. The toolchain
+        # version needs no input; elan reads it from lean-toolchain.
+        uses: leanprover/lean-action@v1
+        with:
+          build: true
+          test: true
+
+      - name: Run lake test -- +RTS -N1 -RTS
+        # The suite must keep passing under +RTS -N1, the starvation
+        # criterion (docs/ARCHITECTURE.md §6). One capability must
+        # leave no test starved. lean-action already ran the suite;
+        # this run repeats it under one capability.
+        run: lake test -- +RTS -N1 -RTS
+
+      - name: Run the import lint
+        # scripts/lint-imports.sh enforces the group chain (cli →
+        # libp2p → net → crypto → codec → base), the
+        # no-libp2p-below-libp2p rule
+        # (docs/ARCHITECTURE.md §2, docs/PRINCIPLES.md 4.3), and the
+        # within-group downward orders with the §3.1 carve-out
+        # (docs/ARCHITECTURE.md §2, §3.1).
+        run: scripts/lint-imports.sh
+
+      - name: Verify vector provenance
+        # The step reruns the extractor over the pinned vendor copies
+        # and diffs the corpus, so the committed JSON regenerates
+        # byte-for-byte from the pinned sources (VECTORS.lock). The
+        # status check catches a modified or an untracked corpus file,
+        # which a plain diff of tracked files would miss. The clones
+        # need network.
+        run: |
+          scripts/vendor-pull.sh --verify
+          python3 scripts/extract-vectors.py
+          test -z "$(git status --porcelain -- Tests/vectors)" || {
+            echo "::error::Tests/vectors is stale; re-run scripts/extract-vectors.py"
+            exit 1
+          }

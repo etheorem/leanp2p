@@ -1,0 +1,105 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/multibase",
+  "commit": "d7406cdea189b82a0b3937f5737b440f5fa92f92",
+  "path": "tests/leading_zero.csv",
+  "upstreamTest": "multibase CSV vectors",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "input": "\u0000yes mani !",
+ "cases": [
+  {
+   "encoding": "base2",
+   "expected": "00000000001111001011001010111001100100000011011010110000101101110011010010010000000100001"
+  },
+  {
+   "encoding": "base8",
+   "expected": "7000745453462015530267151100204"
+  },
+  {
+   "encoding": "base10",
+   "expected": "90573277761329450583662625"
+  },
+  {
+   "encoding": "base16",
+   "expected": "f00796573206d616e692021"
+  },
+  {
+   "encoding": "base16upper",
+   "expected": "F00796573206D616E692021"
+  },
+  {
+   "encoding": "base32",
+   "expected": "bab4wk4zanvqw42jaee"
+  },
+  {
+   "encoding": "base32upper",
+   "expected": "BAB4WK4ZANVQW42JAEE"
+  },
+  {
+   "encoding": "base32hex",
+   "expected": "v01smasp0dlgmsq9044"
+  },
+  {
+   "encoding": "base32hexupper",
+   "expected": "V01SMASP0DLGMSQ9044"
+  },
+  {
+   "encoding": "base32pad",
+   "expected": "cab4wk4zanvqw42jaee======"
+  },
+  {
+   "encoding": "base32padupper",
+   "expected": "CAB4WK4ZANVQW42JAEE======"
+  },
+  {
+   "encoding": "base32hexpad",
+   "expected": "t01smasp0dlgmsq9044======"
+  },
+  {
+   "encoding": "base32hexpadupper",
+   "expected": "T01SMASP0DLGMSQ9044======"
+  },
+  {
+   "encoding": "base32z",
+   "expected": "hybhskh3ypiosh4jyrr"
+  },
+  {
+   "encoding": "base36",
+   "expected": "k02lcpzo5yikidynfl"
+  },
+  {
+   "encoding": "base36upper",
+   "expected": "K02LCPZO5YIKIDYNFL"
+  },
+  {
+   "encoding": "base58flickr",
+   "expected": "Z17Pznk19XTTzBtx"
+  },
+  {
+   "encoding": "base58btc",
+   "expected": "z17paNL19xttacUY"
+  },
+  {
+   "encoding": "base64",
+   "expected": "mAHllcyBtYW5pICE"
+  },
+  {
+   "encoding": "base64pad",
+   "expected": "MAHllcyBtYW5pICE="
+  },
+  {
+   "encoding": "base64url",
+   "expected": "uAHllcyBtYW5pICE"
+  },
+  {
+   "encoding": "base64urlpad",
+   "expected": "UAHllcyBtYW5pICE="
+  },
+  {
+   "encoding": "base256emoji",
+   "expected": "🚀🚀🏃✋🌈😅🌷🤤😻🌟😅👏"
+  }
+ ],
+ "note": "encode checked in both directions for basic/leading_zero/two_leading_zeros; the case-insensitivity file is a decode-tolerance file (values are non-canonical)"
+}
