@@ -48,7 +48,7 @@ imports it and wires it; it keeps no copy.
   a numeric code table, so it has no `toCode`/`ofCode?` pair, by the
   core pair's `Role` reasoning.
 - `Negotiate.upgrade : Role → Connection → ByteArray → Option PeerId →
-  List SecurityProtocol → List Muxer → ExceptT Core.Error IO
+  List SecurityProtocol → List Muxer → ExceptT Core.Error Async
   (MuxSession × PeerId)` is the upgrader entry. The inputs: the
   `Connection`, which the host has already dialed or accepted (the host
   runs the upgrader inside its dial and accept paths, §4.9); the
@@ -169,7 +169,8 @@ connection-level selection.
 - From the codec group, `codec/varint` only (§2). The multistream
   message is uvarint-length prefixed, so the varint appears, and the
   `Msg` codec imports the encoder and decoder of `codec/varint`.
-- From `base`, `withinDeadline` from `base/conc`, and the byte model,
+- From `base`, `Async` and `withinDeadline` from `base/conc`, and the
+  byte model,
   `DecodeError`, and the `Codec`/`LawfulCodec` classes from
   `base/bytes`.
 - No crypto. The security negotiation runs before the handshake. The

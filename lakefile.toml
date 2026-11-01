@@ -34,6 +34,7 @@ testDriver = "tests"
 name = "Conc"
 srcDir = "packages/base/conc"
 roots = ["Conc"]
+globs = ["Conc.*"]
 
 [[lean_lib]]
 name = "Bytes"

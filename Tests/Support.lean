@@ -77,6 +77,21 @@ def Runner.summary (r : Runner) : IO UInt32 := do
     return 1
   return 0
 
+/-! ## `Except` checks
+
+The core library gives `Except` no `BEq` instance, so a check matches on
+the result. -/
+
+/-- True when the result is the error `e`. -/
+def failsWith {ε β : Type} [BEq ε] (e : ε) : Except ε β → Bool
+  | .error e' => e == e'
+  | .ok _ => false
+
+/-- True when the result is the value `b`. -/
+def succeedsWith {ε β : Type} [BEq β] (b : β) : Except ε β → Bool
+  | .ok b' => b == b'
+  | .error _ => false
+
 /-! ## JSON vector loading
 
 Vector files live in `Tests/vectors` (override with `LEANP2P_VECTORS`); each

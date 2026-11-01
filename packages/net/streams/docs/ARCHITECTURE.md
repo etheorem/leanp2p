@@ -138,9 +138,9 @@ The names are §7 row 8's. The types follow §3.1.
   import never runs the other way (§2).
 - The chain also allows `crypto`, `codec`, and `base` (§2). The
   package uses `codec/multiformats` for `Multiaddr` (dial, listen,
-  and the connection addresses), and `base`: `Chan`, `select`,
-  `TaskSet`, `OnceRef`, `withinDeadline`, and the `Clock` from
-  `base/conc`, and the byte model and `DecodeError` from `base/bytes`.
+  and the connection addresses), and `base`: `Async`, `Chan`,
+  `select`, `TaskSet`, `OnceRef`, `withinDeadline`, and the `Clock`
+  from `base/conc`, and the byte model and `DecodeError` from `base/bytes`.
   It uses nothing from `crypto`.
 - No protocol knowledge: no multistream message, no Noise frame, no
   yamux header. `Framing` knows the length-prefix shape alone, and the

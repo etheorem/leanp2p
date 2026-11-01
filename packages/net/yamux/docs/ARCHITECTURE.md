@@ -166,8 +166,9 @@ statement is about `step`, and `simp` and `omega` close it (§6).
 - `net/streams` is the only import from its own group (§2, §7 row 9):
   the package reads and writes through `Connection` and serves the
   `Stream` seam.
-- From `base`, what the loop needs: `Chan`, `TaskSet`, and `OnceRef`
-  from `base/conc`, and the `Clock` if a shell schedules ticks. From
+- From `base`, what the loop needs: `Async`, `Chan`, `TaskSet`, and
+  `OnceRef` from `base/conc`, and the `Clock` if a shell schedules
+  ticks. From
   `base/bytes`: the byte model, the shared `DecodeError`, and the
   `Codec` and `LawfulCodec` classes.
 - Nothing from the `codec` group, and nothing from `crypto`. Every

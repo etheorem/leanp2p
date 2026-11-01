@@ -41,7 +41,8 @@ stack, and command-line executables. Each group holds its packages.
 ```
 packages/
   base/                        foundations, no wire-format knowledge
-    conc/                      Chan, Pipe, TaskSet, OnceRef, withinDeadline
+    conc/                      Chan, Pipe, TaskSet, OnceRef, withinDeadline,
+                               Clock, Alarm, Outcome
     bytes/                     List-Nat byte model <-> ByteArray/String
   codec/                       encodings shared by everything above
     varint/                    unsigned varint (multiformats and protobuf both need it)
@@ -385,7 +386,9 @@ Rules:
   in `Host.Error` with arms of its own, so the host and `cli/` match on
   one type.
 - **An IO shell that can fail with a protocol error has the type
-  `ExceptT E IO α`**, which is `IO (Except E α)` with `do` notation. A
+  `ExceptT E Async α`**, which is `Async (Except E α)` with `do`
+  notation. `Async` is the monad of every operation that can park
+  (§4.1). A shell that cannot park may stay in `ExceptT E IO α`. A
   `throw` inside it throws `E`. An `IO.Error` from a socket passes
   underneath and reaches the owner as a fault.
 - **No `IO.userError` for a protocol condition.** A string error hides
@@ -560,6 +563,10 @@ The package provides these primitives:
 - `OnceRef`: an atomic cell.
 - `withinDeadline`: a `select` over the work and a timer. On expiry,
   it closes what the work parks on.
+- `Alarm`: the task that wakes a loop at the due time its core asked
+  for last (§3.3).
+- `Outcome`: the answer and the first fault of a session, joined into
+  the answer its owner sees (§3.5).
 - `Clock`: the time seam, with a test value that the test advances.
 
 Three rules hold in every package above it:
@@ -575,12 +582,26 @@ Three rules hold in every package above it:
 The spike missed three requirements, and this package builds them from
 the start. Every `Chan` has a capacity. An unbounded channel is a named
 exception, with its reason in the docstring. `select` replaces every
-hand-rolled first-of loop. `joinAll` reports task errors to the owner.
-Lean v4.34 ships the primitives: `Std.Sync.CloseableChannel` with a
+hand-rolled first-of loop. `joinAll` reports task errors to the owner:
+it counts every failure, and it keeps the first ones up to a bound, so
+a long series of failing tasks cannot grow the set. A `TaskSet` holds no
+ended task, so an owner with a long life pays only for its live tasks.
+Lean v4.34 ships the primitives: `Std.CloseableChannel` with a
 capacity, `Std.Async.Selectable`, and `Std.Async.Selector.sleep`.
 `conc` wraps them so that no other package imports `Std.Sync` or
-`Std.Async`. When the toolchain API moves, the wrapper is the one
+`Std.Async`. The one exception is `Std.Async.TCP` in `net/streams`
+(§9, delta 7). When the toolchain API moves, the wrapper is the one
 module to change.
+
+Every operation that can park runs in `Conc.Async`, the `Async` monad
+of `Std`. A parked `Async` computation is a continuation on a promise,
+and it holds no thread. A blocking `IO.wait` on a pool task holds one:
+on v4.34, 5000 receivers parked by `IO.wait` cost 5005 OS threads, and
+5000 parked in `Async` cost 12 (`scripts/park-threads.lean`). A node with a loop and a reader per
+connection (§3.3) must not pay a thread per park. A signature that can
+park therefore names `Async`, and `Async.run` enters it once, at the
+program edge. An operation that never parks, such as `close`, stays in
+`IO` or `BaseIO`, and an `Async` caller lifts it.
 
 ### 4.2 `base/bytes`: the byte model
 
@@ -749,12 +770,13 @@ Everything with libp2p semantics, in subpackages:
   implementation, rendered for the log. `core/` also holds the seam
   structures that every implementation fills: `SecurityProtocol` with
   `SecureConn`, `Muxer` with `MuxSession`, `StreamHandler`, and the
-  policy hooks. It depends on `identity` (for `PeerId`) and on
-  `net/streams` (for `Connection` and `Stream`), and on nothing else.
+  policy hooks. It depends on `identity` (for `PeerId`), on
+  `net/streams` (for `Connection` and `Stream`), and on `base/conc`
+  (for `Async`, §4.1), and on nothing else.
 - **`security/`**: Noise XX (`Noise_XX_25519_ChaChaPoly_SHA256`) as a
   pure core (§3.3). The handshake is a `step`, and its ephemeral keys
   arrive as an `Event`. A `SecurityProtocol` value wraps the core, with
-  `handshake : Role → Connection → ByteArray → ExceptT Core.Error IO
+  `handshake : Role → Connection → ByteArray → ExceptT Core.Error Async
   SecureConn`. The `ByteArray` holds what the negotiation over-read.
   The `SecureConn` already holds what the handshake over-read. A second
   value, with fixed keys, is the test value. Transport rules:

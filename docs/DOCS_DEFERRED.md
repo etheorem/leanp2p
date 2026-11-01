@@ -319,11 +319,10 @@ Applied batch: the four W0.1 docstring findings and the W0.2c
 `timeout-minutes` finding. The review added one more split (the Crypto
 roles sentence), applied with the batch. Dropped, with reasons:
 
-- The "concurrency floor" phrase survives in
-  `packages/base/conc/docs/ARCHITECTURE.md:3` ("byte floor" in the
-  bytes pair likewise). Those package docs predate W0, passed the docs
-  stage with that wording, and the W0.1 finding was scoped to the new
-  root module. Align the term only if the package doc is edited again.
+- The "byte floor" phrase survives in the bytes pair. That package doc
+  predates W0, passed the docs stage with that wording, and the W0.1
+  finding was scoped to the new root module. Align the term only if the
+  package doc is edited again. W1.1 aligned the conc pair.
 - The within-group lint rules, the `vendor/` move, the CI provenance
   diff, and the multicodec CSV vendor entry are unit work with owners
   (W1.1/W1.2, a later vector unit, `codec/multiformats` 1a), recorded

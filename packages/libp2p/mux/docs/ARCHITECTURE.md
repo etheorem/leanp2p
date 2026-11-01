@@ -35,7 +35,7 @@ and predicts every id (§3.1, PRINCIPLES 1.4).
 ## Public surface
 
 - `Mux.yamux : Muxer` carries `id := Mux.yamuxId` and the core seam's
-  `open : Role → Connection → ByteArray → ExceptT Core.Error IO
+  `open : Role → Connection → ByteArray → ExceptT Core.Error Async
   MuxSession` (§4.9; the core pair, public surface). The `Role` picks
   the stream-id parity inside the session entry of `net/yamux` (the
   yamux pair, public surface). The `ByteArray` argument is the
@@ -127,8 +127,8 @@ and predicts every id (§3.1, PRINCIPLES 1.4).
 - From the codec group, `codec/varint` only: the mplex header and
   length are uvarints, and §2's group chain puts `codec` to the right
   of `libp2p`.
-- From `base`, what the mplex loop needs: `Chan`, `TaskSet`, and
-  `OnceRef` from `base/conc`, and the byte model, `DecodeError`, and
+- From `base`, what the mplex loop needs: `Async`, `Chan`, `TaskSet`,
+  and `OnceRef` from `base/conc`, and the byte model, `DecodeError`, and
   the `Codec`/`LawfulCodec` classes from `base/bytes`, the sets the
   yamux pair lists for the same job.
 - No crypto. The muxer runs after security and moves plaintext, and no

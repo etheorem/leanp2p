@@ -149,7 +149,8 @@ The `main` tree once W0.1 lands:
 ```
 packages/
   base/                        foundations, no wire-format knowledge
-    conc/                      Chan, Pipe, TaskSet, OnceRef, withinDeadline
+    conc/                      Chan, Pipe, TaskSet, OnceRef, withinDeadline,
+                               Clock, Alarm, Outcome
     bytes/                     List-Nat byte model <-> ByteArray/String
   codec/                       encodings
     varint/                    unsigned varint

@@ -32,7 +32,7 @@ shape (§9, delta 8).
 - The two `SecurityProtocol` values of §3.1 and §4.9:
   `Noise.securityProtocol`, and the fixed-key test value beside it.
   Both carry the `/noise` id and the §4.9 handshake signature,
-  `handshake : Role → Connection → ByteArray → ExceptT Core.Error IO
+  `handshake : Role → Connection → ByteArray → ExceptT Core.Error Async
   SecureConn`. The `ByteArray` argument is the negotiation leftover,
   and the `SecureConn` result holds the handshake's own leftover.
 - The core surface: `State`, `Event`, `Action`, and `step` (§3.3),
@@ -86,7 +86,7 @@ connection down on `error` (§3.5).
 
 The transport keeps the same shape at the small scale it has: the two
 cipher states are data, and one frame in or out is one pure transition
-over them. The framed IO path types as `ExceptT Noise.Error IO` (§3.5),
+over them. The framed IO path types as `ExceptT Noise.Error Async` (§3.5),
 and keys and nonces cross the facade as the proof-carrying newtypes
 `Key32` and `Nonce12` (§3.7). Where the proofs sit: the crypto arrives
 through the `Crypto` facade, which names the backend for every
@@ -212,6 +212,8 @@ the spike's own recorded rule.
   for it, so this package imports `net/streams` directly and records
   the import here, per the core pair's rule. The direction is the
   group-legal one (§2: libp2p → net).
+- From `base`, `Async` from `base/conc`, for the handshake signature
+  of §4.9 and the framed IO path.
 - No knowledge of multistream-select, yamux, or mplex bytes. The
   negotiation hands this package bytes through the leftover argument,
   and the handshake consumes them without knowing what produced them.
