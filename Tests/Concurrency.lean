@@ -309,6 +309,24 @@ private def sharedChecks (r : Runner) : Async Unit := do
     ts.joinAll
     r.check s!"{n}x{m} OnceRef updates lose none" ((← cell.get) == n * m)
 
+  -- A `set` survives concurrent `get`s. Readers read the cell a fixed
+  -- number of times, so they end with one worker too. A writer sets
+  -- each value in turn and reads it back. With one worker the tasks do
+  -- not overlap and the check holds trivially.
+  do
+    let cell : OnceRef Nat ← OnceRef.new 0
+    let lost : OnceRef Nat ← OnceRef.new 0
+    let ts ← TaskSet.new
+    for _ in [0:3] do
+      ts.spawn do
+        for _ in [0:200000] do discard (cell.get : BaseIO Nat)
+    ts.spawn do
+      for v in [1:200000] do
+        cell.set v
+        if (← cell.get) != v then lost.update (· + 1)
+    ts.joinAll
+    r.check "a set survives concurrent gets" ((← lost.get) == 0)
+
   -- Parked tasks hold no thread: 2000 tasks parked on one channel keep
   -- the process near its starting thread count, and one close wakes all.
   do
@@ -480,9 +498,8 @@ private def clockChecks (r : Runner) : Async Unit := do
 /-- `Alarm` on the test clock. -/
 private def alarmChecks (r : Runner) : Async Unit := do
   -- The alarm fires at the due time, and a later `set` replaces the due
-  -- time. `run` may arm a spare timer for a due time that it reads twice,
-  -- but each answer below holds in either order: a timer armed late for
-  -- a time already past has 0 ms left, and fires at once.
+  -- time. Each due time arms one timer, so `nextTimer` before `advance`
+  -- means the timer of that due time exists.
   do
     let tc ← TestClock.new
     let a ← Alarm.new

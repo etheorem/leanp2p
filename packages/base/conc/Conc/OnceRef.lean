@@ -29,9 +29,14 @@ def get (r : OnceRef α) : BaseIO α :=
   r.ref.get
 
 /-- Replace the value. A value that depends on the old one goes through
-`update` instead. -/
+`update` instead.
+
+A bare `IO.Ref.set` can lose its value here. `IO.Ref.get` takes the value
+out of a shared cell and puts it back, and a `set` between those two
+steps is overwritten by the old value. `modify` waits for the cell to
+hold a value, so the write goes through it. -/
 def set (r : OnceRef α) (a : α) : BaseIO Unit :=
-  r.ref.set a
+  r.ref.modify fun _ => a
 
 /-- Apply `f` to the value in one atomic step. -/
 def update (r : OnceRef α) (f : α → α) : BaseIO Unit :=

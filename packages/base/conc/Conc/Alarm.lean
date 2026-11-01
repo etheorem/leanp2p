@@ -75,19 +75,25 @@ and then calls `fire` with the time on `clock`. It ends at `close`, or
 when `fire` answers `.error`, since the loop then takes no more
 events. -/
 def run (a : Alarm) (clock : Clock) (fire : Nat → Async (Except Error Unit)) : Async Unit := do
+  -- The timer and the due time it serves. A wake with the same due time
+  -- keeps this timer, so each due time arms one timer.
+  let mut armed : Option (Nat × Park Unit) := none
   repeat
     let due ← (a.due.get : BaseIO (Option Nat))
+    if armed.map (·.1) != due then
+      armed ← match due with
+        | none => pure none
+        | some t =>
+          let left := t - (← (clock.nowMs : BaseIO Nat))
+          pure (some (t, ← (clock.after left : BaseIO (Park Unit))))
     let onSignal := Park.recv a.signal fun
       | some _ => Wake.request
       | none => Wake.closed
     -- Park: the due time wakes it, so does a new request, and `close`
     -- closes the signal.
-    let woke ← match due with
+    let woke ← match armed with
       | none => select #[onSignal]
-      | some t =>
-        let left := t - (← (clock.nowMs : BaseIO Nat))
-        let timer ← (clock.after left : BaseIO (Park Unit))
-        select #[onSignal, timer.map fun _ => Wake.due]
+      | some (_, timer) => select #[onSignal, timer.map fun _ => Wake.due]
     match woke with
     | .closed => break
     | .request => pure ()
@@ -95,6 +101,7 @@ def run (a : Alarm) (clock : Clock) (fire : Nat → Async (Except Error Unit)) :
       -- The loop asks again after the wake if it needs one. A request
       -- that came meanwhile stays.
       a.due.update (clearDue due)
+      armed := none
       if let .error _ ← fire (← (clock.nowMs : BaseIO Nat)) then break
 
 end Alarm

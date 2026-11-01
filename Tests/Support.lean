@@ -45,6 +45,10 @@ def Runner.section (r : Runner) (_title : String) (upstream : String) : IO Unit 
 /-- One check: on a miss, print `FAIL`, record the name, and fail the run
 at `summary` time. -/
 def Runner.check (r : Runner) (name : String) (b : Bool) : IO Unit := do
+  -- `LEANP2P_TRACE` prints every check to stderr as it runs, so the last
+  -- line before a hang names the check that ran before it.
+  if (← IO.getEnv "LEANP2P_TRACE").isSome then
+    IO.eprintln s!"{if b then "ok  " else "FAIL"} {name}"
   if b then
     r.passed.set ((← r.passed.get) + 1)
   else do

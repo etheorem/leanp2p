@@ -45,6 +45,7 @@ and the `-N1` pass is required.
   runs new tasks after it.
 - N tasks update one `OnceRef` M times each; the cell holds N×M
   updates, with none lost.
+- A `set` survives concurrent `get`s.
 - 2000 tasks parked on one channel hold no thread, and one close wakes
   them all.
 - `withinDeadline` closes what the work parks on, and the work ends on

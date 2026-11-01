@@ -65,7 +65,8 @@ the program edge.
 - `OnceRef.new`, `get`, `set`, `update`. `update` is the atomic
   read-modify-write, so a shared cell changes in one step
   (ARCHITECTURE §3.8). `updateGet` is the same step with a returned
-  value.
+  value. `set` writes through the same step (Decisions, "`OnceRef.set`
+  goes through `modify`").
 - `withinDeadline` is a `select` over the work and a timer. On expiry
   it runs `onExpiry : BaseIO Unit`, which closes what the work parks
   on, so the work ends on its own (ARCHITECTURE §4.1; §5.4). `BaseIO`
@@ -177,6 +178,11 @@ theorem covers the wake protocol of `Chan`.
   cost: one signal per transfer, an occasional spare wakeup, and no
   strict arrival order among senders. Capacity 0 would need a send to
   meet a receive inside `Std`, so `Chan.new` takes a proof of `0 < capacity`.
+- **`OnceRef.set` goes through `modify`.** A bare `IO.Ref.set` can lose
+  its value to a concurrent `IO.Ref.get`. On v4.34, a writer that read
+  back each value lost 1387 of 199999 writes against three readers.
+  Every read in the stack may race a write, so `OnceRef` exposes no
+  bare `set` (PRINCIPLES 3.3).
 - **A `TaskSet` counts its tasks and keeps none.** The owner joins on
   close (PRINCIPLES 3.2), so a set can live as long as the program. An
   accept loop that spawns per connection (the streams pair, contract 5)
