@@ -13,13 +13,18 @@ You implement pieces of Ethereum's networking layer in Lean 4 and
 prove properties of what you build. Every proof is checked by Lean's
 kernel, and implementation and proofs live together in one codebase.
 The tasks are the issues of this repository that carry the HACKATHON
-label. The dependency tree of the issues is the build order: an issue
-opens for claims only when every issue it depends on is closed, and
-closed means merged.
+label. The dependency tree of the issues is the merge order. Every
+issue is claimable from the start of the week, because the interface
+of every unit is frozen in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+§4 ahead of the work. You may build ahead of your dependencies against
+mocks of their frozen interfaces; the section after the claiming loop
+says how.
 
 ## Claiming an issue
 
-1. Pick an issue whose dependencies are all closed, merged included.
+1. Pick any issue. When every dependency of the issue is merged, you
+   build on the real code. When a dependency is still open, you build
+   against a mock of its frozen interface.
 2. Comment `claim` on the issue. An organiser assigns it to you. You
    hold one issue at a time.
 3. Open a pull request within 8 hours of the assignment. The clock is
@@ -28,9 +33,37 @@ closed means merged.
 4. Miss the window, lose the claim. The issue is unassigned, and
    anyone can claim it again.
 5. Organisers review within 12 hours. When the pull request merges,
-   the issue closes, and the issues that depend on it open for
-   claims.
+   the issue closes, and the owners of the dependent issues integrate
+   the real code.
 6. Repeat, all week.
+
+## Working ahead of the tree
+
+The interfaces of every unit are frozen in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3 and §4, so the tree
+does not serialize the work. Claim any issue on day one. When a
+dependency of your issue is not merged yet, build against a mock of
+its frozen interface.
+
+- The mock lives in a `Mock` namespace inside your package. It
+  declares the surface of the dependency, the types and the constants,
+  with `opaque` declarations, and it imports nothing from the real
+  package.
+- Where your proofs need a theorem of the dependency, state the
+  theorem as an axiom of the mock. `#print axioms` in the pull request
+  body lists every mock axiom you assumed. No `sorry` anywhere, and CI
+  stays green.
+- A pull request with mocks can open and go through review. It merges
+  only when every dependency of its issue has merged. The merge is the
+  integration point.
+- When your last dependency merges, you drop the mocks and integrate
+  within 12 hours. After the window, the pull request waits at the end
+  of the review queue until it is green without mocks.
+
+The frozen interfaces stay frozen for the week. A change that breaks
+a frozen interface needs the approval of an organiser on the issue
+first, and you post a comment on every issue that depends on yours.
+The owners of the dependent issues rebase after your change lands.
 
 ## Deadlines
 
@@ -58,7 +91,9 @@ whole body of merged work from the week, and they have the final say
 on what counts. The baseline:
 
 - Your work closes at least one claimed issue, with the pull request
-  opened before code close and merged.
+  opened before code close and merged. A pull request that is open at
+  code close with CI green, and is blocked only by dependencies that
+  did not merge in time, also counts. State the blocker in your video.
 - The contribution is real implementation work or real proof work.
   Mechanical changes, typo fixes, formatting, dependency bumps, and
   trivial refactors do not count by themselves.
