@@ -277,10 +277,9 @@ def apply (s : State) (fr : Frame) : Except ProtocolError (State × List Action)
     | .windowUpdate =>
         match findStream? fr.header.streamId s.streams with
         | some st =>
-            let delta := fr.header.length.val
-            if st.sendWindow + delta > maxWindow then .error .windowOverflow
+            if st.sendWindow + fr.header.length.val > maxWindow then .error .windowOverflow
             else
-              let s' := { s with streams := updateStream fr.header.streamId (addCredit delta) s.streams }
+              let s' := { s with streams := updateStream fr.header.streamId (addCredit fr.header.length.val) s.streams }
               .ok (s', [])
         | none =>
             if fr.header.flags.syn then
@@ -297,10 +296,38 @@ def apply (s : State) (fr : Frame) : Except ProtocolError (State × List Action)
           match findStream? fr.header.streamId s.streams with
           | none => .ok (s, [])
           | some st =>
-              if fr.header.length.val > credit st then .error .overlongData
+              if st.buffered + fr.header.length.val > initialWindow then .error .overlongData
               else
                 let s' := { s with streams := updateStream fr.header.streamId (receiveData fr.header.length.val fr.header.flags.fin) s.streams }
                 .ok (s', [.deliver fr.header.streamId fr.payload])
+
+/-! ## Window preservation -/
+
+/-- An update that keeps every stream inside the window keeps the
+invariant. -/
+theorem WindowOK_update {sid : StreamId} {f : Stream → Stream} {s : State}
+    (hw : WindowOK s) (hf : ∀ x ∈ s.streams, (f x).buffered ≤ initialWindow) :
+    WindowOK { s with streams := updateStream sid f s.streams } := by
+  intro st hst
+  rcases mem_updateStream hst with h | ⟨x, hx, _, rfl⟩
+  · exact hw st h
+  · exact hf x hx
+
+/-- Appending a stream inside the window keeps the invariant. -/
+theorem WindowOK_append {s : State} {st : Stream} (hw : WindowOK s)
+    (hst : st.buffered ≤ initialWindow) :
+    WindowOK { s with streams := s.streams ++ [st] } := by
+  intro x hx
+  rcases List.mem_append.mp hx with h | h
+  · exact hw x h
+  · rcases List.mem_singleton.mp h with rfl
+    exact hst
+
+/-- A fresh stream is inside the window. -/
+theorem fresh_buffered (sid : StreamId) (ours : Bool) :
+    (Stream.fresh sid ours).buffered ≤ initialWindow := by
+  unfold Stream.fresh
+  exact Nat.zero_le _
 
 /-! ## The drain loop -/
 
