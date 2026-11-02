@@ -61,27 +61,27 @@ def segments? : List Nat → Option (List UInt16)
   | [_] => none
 
 /-- A 16-bit value survives the trip through its two bytes. -/
-theorem be16_bytes16 (v : UInt16) : be16 (v.toNat / 256) (v.toNat % 256) = v := by
+theorem be16Bytes16 (v : UInt16) : be16 (v.toNat / 256) (v.toNat % 256) = v := by
   have h : v.toNat / 256 * 256 + v.toNat % 256 = v.toNat := by omega
   simp only [be16, h, UInt16.ofNat_toNat]
 
 /-- The two bytes of a 16-bit value are bytes. -/
-theorem lt_of_mem_bytes16 {v : UInt16} {x : Nat} (h : x ∈ bytes16 v) : x < 256 := by
+theorem ltOfMemBytes16 {v : UInt16} {x : Nat} (h : x ∈ bytes16 v) : x < 256 := by
   have := v.toNat_lt
   simp only [bytes16, List.mem_cons, List.not_mem_nil, or_false] at h
   omega
 
 /-- Segments survive the trip through their bytes. -/
-theorem segments?_flatMap_bytes16 (l : List UInt16) :
+theorem segments?FlatMapBytes16 (l : List UInt16) :
     segments? (l.flatMap bytes16) = some l := by
   induction l with
   | nil => rfl
   | cons v vs ih =>
     simp only [List.flatMap_cons, bytes16, List.cons_append, List.nil_append, segments?, ih,
-      Option.map_some, be16_bytes16]
+      Option.map_some, be16Bytes16]
 
 /-- The bytes of the segments: two for each segment. -/
-theorem length_flatMap_bytes16 (l : List UInt16) : (l.flatMap bytes16).length = 2 * l.length := by
+theorem lengthFlatMapBytes16 (l : List UInt16) : (l.flatMap bytes16).length = 2 * l.length := by
   induction l with
   | nil => rfl
   | cons v vs ih =>

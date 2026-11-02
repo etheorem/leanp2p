@@ -18,8 +18,9 @@ The mock takes one of three forms for each name:
   frozen shapes as the package docs of `base/bytes` give them.
 * **The harness is a copy.** ARCHITECTURE §4.2 freezes "the generic
   round-trip harness" and no names. So the names and the types of
-  `checkRoundTrips` and `checkModelPins` follow the open W1.2 pull
-  request, etheorem/leanp2p#30. The tests use the same calls before
+  `checkRoundTrips` and `checkModelPins`, and the field names of
+  `LawfulCodec`, follow the open W1.2 pull request,
+  etheorem/leanp2p#30. The tests use the same calls before
   and after the swap.
 
 The mock states no axiom. The framing proofs need no fact about the
@@ -66,17 +67,17 @@ class Codec (α : Type) where
 class LawfulCodec (α : Type) [Codec α] : Prop where
   /-- The encoding of a value decodes to the value, and no input
   remains. -/
-  decode_encode : ∀ a : α, Codec.decode? (Codec.encode a) = .ok (a, [])
+  decodeEncode : ∀ a : α, Codec.decode? (Codec.encode a) = .ok (a, [])
   /-- A successful decode re-encodes to its input. -/
-  encode_decode : ∀ (l : List Nat) (a : α) (rest : List Nat),
-    Codec.decode? l = .ok (a, rest) → Codec.encode a ++ rest = l
+  encodeDecode : ∀ (bs : List Nat) (a : α) (rest : List Nat),
+    Codec.decode? bs = .ok (a, rest) → Codec.encode a ++ rest = bs
 
 /-! ## The harness -/
 
 /-- Every lawful codec reads back exactly the bytes that it writes. -/
 theorem codecRoundTrip {α : Type} [Codec α] [LawfulCodec α] (a : α) :
     Codec.decode? (Codec.encode a) = .ok (a, []) :=
-  LawfulCodec.decode_encode a
+  LawfulCodec.decodeEncode a
 
 /-- The round trip on the sample values, checked with executable
 equality. -/

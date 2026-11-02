@@ -120,29 +120,29 @@ def Fresh (s : State σ) : Prop :=
   ∀ k, k ∈ s.waiting → k < s.next
 
 /-- The empty table is fresh. -/
-theorem fresh_empty : (empty : State σ).Fresh := by
+theorem freshEmpty : (empty : State σ).Fresh := by
   intro k hk
   simp [empty] at hk
 
 /-- A closed table gives no tag, and nothing changes. -/
-theorem register_closed (slot : σ) (s : State σ) (h : s.closed = true) :
+theorem registerClosed (slot : σ) (s : State σ) (h : s.closed = true) :
     register slot s = (none, s) := by
   simp [register, h]
 
 /-- An open table gives `next` as the tag. -/
-theorem register_open (slot : σ) (s : State σ) (h : s.closed = false) :
+theorem registerOpen (slot : σ) (s : State σ) (h : s.closed = false) :
     (register slot s).1 = some s.next := by
   simp [register, h]
 
 /-- In a fresh table, the tag that `register` gives waits nowhere yet:
 two requests never share a tag. -/
-theorem next_not_mem (s : State σ) (h : s.Fresh) : s.next ∉ s.waiting := by
+theorem nextNotMem (s : State σ) (h : s.Fresh) : s.next ∉ s.waiting := by
   intro hm
   have := h s.next hm
   omega
 
 /-- `register` keeps the table fresh. -/
-theorem fresh_register (slot : σ) (s : State σ) (h : s.Fresh) :
+theorem freshRegister (slot : σ) (s : State σ) (h : s.Fresh) :
     (register slot s).2.Fresh := by
   unfold register
   split
@@ -156,37 +156,37 @@ theorem fresh_register (slot : σ) (s : State σ) (h : s.Fresh) :
       omega
 
 /-- After an answer, the tag waits no more. -/
-theorem not_mem_resolve (tag : Nat) (s : State σ) : tag ∉ (resolve tag s).2.waiting := by
+theorem notMemResolve (tag : Nat) (s : State σ) : tag ∉ (resolve tag s).2.waiting := by
   simp [resolve]
 
 /-- A second answer for one tag finds no slot, so a slot takes one
 answer at most. -/
-theorem resolve_resolve (tag : Nat) (s : State σ) :
+theorem resolveResolve (tag : Nat) (s : State σ) :
     (resolve tag (resolve tag s).2).1 = none := by
   simp [resolve]
 
 /-- `resolve` keeps the table fresh. -/
-theorem fresh_resolve (tag : Nat) (s : State σ) (h : s.Fresh) : (resolve tag s).2.Fresh := by
+theorem freshResolve (tag : Nat) (s : State σ) (h : s.Fresh) : (resolve tag s).2.Fresh := by
   intro k hk
   simp only [resolve, Std.HashMap.mem_erase] at hk
   exact h k hk.2
 
 /-- `resolve` keeps the closed flag. -/
-@[simp] theorem closed_resolve (tag : Nat) (s : State σ) :
+@[simp] theorem closedResolve (tag : Nat) (s : State σ) :
     (resolve tag s).2.closed = s.closed := rfl
 
 /-- After `closeAll`, the table is closed, and no slot waits. -/
-theorem closeAll_closed (s : State σ) :
+theorem closeAllClosed (s : State σ) :
     (closeAll s).2.closed = true ∧ ∀ k, k ∉ (closeAll s).2.waiting := by
   simp [closeAll]
 
 /-- After `closeAll`, `register` gives no tag. -/
-theorem register_closeAll (slot : σ) (s : State σ) :
+theorem registerCloseAll (slot : σ) (s : State σ) :
     (register slot (closeAll s).2).1 = none := by
   simp [register, closeAll]
 
 /-- `closeAll` keeps the table fresh. -/
-theorem fresh_closeAll (s : State σ) : (closeAll s).2.Fresh := by
+theorem freshCloseAll (s : State σ) : (closeAll s).2.Fresh := by
   intro k hk
   simp [closeAll] at hk
 

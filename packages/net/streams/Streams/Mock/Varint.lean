@@ -9,20 +9,23 @@ ARCHITECTURE §4.3). The mock imports nothing from `Varint`. When W2.1
 merges, the package drops this module, and each `open` of
 `Streams.Mock.Varint` becomes an `open` of `Varint`.
 
-The forms follow `Streams.Mock.Bytes`. `maxBytes`, the `UVarint`
-newtype, and `encode` are copies, since the frame proofs compute with
-them. The model functions and the `ByteArray` decoder are `opaque`, with
-bodies, so the tests run real varints and no proof can unfold them.
+The forms follow `Streams.Mock.Bytes`. `maxBytes`, `limit`, the
+`UVarint` newtype, and `encode` are copies, since the frame proofs
+compute with them. The model functions and the `ByteArray` decoder are
+`opaque`, with bodies, so the tests run real varints and no proof can
+unfold them. The names follow the open W2.1 pull request,
+etheorem/leanp2p#34.
 
 ## The mock axioms
 
 The framing proofs need two facts about the varint. Each one is an
-axiom here, and each one is a theorem of W2.1:
+axiom here, and each one is a theorem of W2.1, with the same name and
+statement:
 
-* `decode?_encode_append`: the decode of an encoding, with any rest
-  after it.
-* `encode_decode`: a successful decode re-encodes to its input. It is
-  the second field of the `LawfulCodec` instance.
+* `decodeEncodeSuffix`: the decode of an encoding, with any rest after
+  it.
+* `encodeDecode`: a successful decode consumed exactly the encoding of
+  its value, and the rest is the input after it.
 
 `#print axioms` in the pull request lists them. The package deletes
 them with the mock.
@@ -37,12 +40,15 @@ open Streams.Mock.Bytes
 /-- The byte budget of a varint: at most 9 bytes, so 63 bits. -/
 def maxBytes : Nat := 9
 
+/-- The first value outside the budget. -/
+def limit : Nat := 2 ^ (7 * maxBytes)
+
 /-- A varint value: a `Nat` inside the 63 bits that 9 bytes carry. -/
 structure UVarint where
   /-- The value. -/
   val : Nat
   /-- The value fits the 9-byte budget. -/
-  lt : val < 2 ^ (7 * maxBytes)
+  isLt : val < limit
   deriving DecidableEq, Repr
 
 /-- The body of `encodeNat`: a continuation byte per 7-bit group while
@@ -76,7 +82,7 @@ private def decodeGroups (i : Nat) : List Nat → Except DecodeError (Nat × Lis
 opaque decode? (l : List Nat) : Except DecodeError (UVarint × List Nat) :=
   match decodeGroups 0 l with
   | .error e => .error e
-  | .ok (n, rest) => if h : n < 2 ^ (7 * maxBytes) then .ok (⟨n, h⟩, rest) else .error .malformed
+  | .ok (n, rest) => if h : n < limit then .ok (⟨n, h⟩, rest) else .error .malformed
 
 /-- The body of `decodeB?`: byte `i` on, with `acc` the value of the
 groups before it. -/
@@ -87,7 +93,7 @@ private def decodeBFrom (b : ByteArray) (i acc : Nat) : Except DecodeError (UVar
       if byte = 0 ∧ 0 < i then .error .malformed
       else
         let v := acc + byte * 128 ^ i
-        if hv : v < 2 ^ (7 * maxBytes) then .ok (⟨v, hv⟩, i + 1) else .error .malformed
+        if hv : v < limit then .ok (⟨v, hv⟩, i + 1) else .error .malformed
     else if i + 1 < maxBytes then decodeBFrom b (i + 1) (acc + (byte - 128) * 128 ^ i)
     else .error .malformed
   else .error .truncated
@@ -103,19 +109,19 @@ instance : Codec UVarint where
 
 /-- Mock axiom, a theorem of W2.1: the decode of an encoding, with any
 rest after it. -/
-axiom decode?_encode_append (v : UVarint) (rest : List Nat) :
+axiom decodeEncodeSuffix (v : UVarint) (rest : List Nat) :
     decode? (encode v ++ rest) = .ok (v, rest)
 
-/-- Mock axiom, a theorem of W2.1: a successful decode re-encodes to
-its input. -/
-axiom encode_decode (l : List Nat) (v : UVarint) (rest : List Nat)
-    (h : decode? l = .ok (v, rest)) : encode v ++ rest = l
+/-- Mock axiom, a theorem of W2.1: a successful decode consumed exactly
+the encoding of its value. -/
+axiom encodeDecode {bs rest : List Nat} {v : UVarint}
+    (h : decode? bs = .ok (v, rest)) : bs = encode v ++ rest
 
 instance : LawfulCodec UVarint where
-  decode_encode v := by
+  decodeEncode v := by
     -- `Codec.encode` and `Codec.decode?` unfold to the module functions.
     show decode? (encode v) = _
-    simpa using decode?_encode_append v []
-  encode_decode := encode_decode
+    simpa using decodeEncodeSuffix v []
+  encodeDecode _ _ _ h := (encodeDecode h).symm
 
 end Streams.Mock.Varint

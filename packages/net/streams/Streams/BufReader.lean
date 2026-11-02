@@ -107,46 +107,46 @@ def drop (r : BufReader) (k : Nat) : BufReader :=
 /-! ## Theorems -/
 
 /-- A new reader holds its seed, whole. -/
-@[simp] theorem leftover_new (conn : Connection) (seed : ByteArray) :
+@[simp] theorem leftoverNew (conn : Connection) (seed : ByteArray) :
     (new conn seed).leftover = seed := by
   simp [new, leftover]
 
 /-- A new reader has its seed available. -/
-@[simp] theorem available_new (conn : Connection) (seed : ByteArray) :
+@[simp] theorem availableNew (conn : Connection) (seed : ByteArray) :
     (new conn seed).available = seed.size := by
   simp [new, available]
 
 /-- The leftover is exactly the available bytes. -/
-theorem size_leftover (r : BufReader) : r.leftover.size = r.available := by
+theorem sizeLeftover (r : BufReader) : r.leftover.size = r.available := by
   simp [leftover, available]
 
 /-- `drop` consumes the bytes that it names, or every byte when fewer
 are available. `omega` decides the arithmetic of the `min`. -/
-theorem available_drop (r : BufReader) (k : Nat) :
+theorem availableDrop (r : BufReader) (k : Nat) :
     (r.drop k).available = r.available - k := by
   simp only [drop, available]
   omega
 
 /-- A drop of no byte changes no count. -/
-theorem available_drop_zero (r : BufReader) : (r.drop 0).available = r.available := by
-  simp [available_drop]
+theorem availableDropZero (r : BufReader) : (r.drop 0).available = r.available := by
+  simp [availableDrop]
 
 /-- Two drops consume as one drop of both counts. -/
-theorem available_drop_drop (r : BufReader) (j k : Nat) :
+theorem availableDropDrop (r : BufReader) (j k : Nat) :
     ((r.drop j).drop k).available = (r.drop (j + k)).available := by
-  simp only [available_drop]
+  simp only [availableDrop]
   omega
 
 /-- `drop` keeps the connection. -/
-@[simp] theorem conn_drop (r : BufReader) (k : Nat) : (r.drop k).conn = r.conn := rfl
+@[simp] theorem connDrop (r : BufReader) (k : Nat) : (r.drop k).conn = r.conn := rfl
 
 /-- `peek` copies at most the bytes that it names. -/
-theorem size_peek_le (r : BufReader) (k : Nat) : (r.peek k).size ≤ k := by
+theorem sizePeekLe (r : BufReader) (k : Nat) : (r.peek k).size ≤ k := by
   simp only [peek, ByteArray.size_extract]
   omega
 
 /-- `peek` copies at most the bytes that are available. -/
-theorem size_peek_le_available (r : BufReader) (k : Nat) :
+theorem sizePeekLeAvailable (r : BufReader) (k : Nat) :
     (r.peek k).size ≤ r.available := by
   simp only [peek, available, ByteArray.size_extract]
   omega

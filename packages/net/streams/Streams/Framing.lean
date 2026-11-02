@@ -28,7 +28,7 @@ the message inside the payload.
   `base/bytes` pins them to the model (§6, layer 3).
 * **The IO path.** `read` takes a frame through a `BufReader`. The cap
   applies to the header, before the payload read allocates (§5.1).
-  `headerB?_le_cap` proves that a header that passes holds a length
+  `headerB?LeCap` proves that a header that passes holds a length
   inside the cap.
 
 ## Failures
@@ -67,7 +67,7 @@ def take? (k : Nat) (l : List Nat) : Except DecodeError (List Nat × List Nat) :
   else .ok (l.take k, l.drop k)
 
 /-- A take of the bytes in front of any rest returns them whole. -/
-theorem take?_append {b : List Nat} (rest : List Nat) (h : ∀ x ∈ b, x < 256) :
+theorem take?Append {b : List Nat} (rest : List Nat) (h : ∀ x ∈ b, x < 256) :
     take? b.length (b ++ rest) = .ok (b, rest) := by
   have htake : (b ++ rest).take b.length = b := by simp
   unfold take?
@@ -80,7 +80,7 @@ theorem take?_append {b : List Nat} (rest : List Nat) (h : ∀ x ∈ b, x < 256)
 
 /-- A successful take split the input at `k`, and the part it took holds
 bytes. -/
-theorem of_take? {k : Nat} {l b rest : List Nat} (h : take? k l = .ok (b, rest)) :
+theorem ofTake? {k : Nat} {l b rest : List Nat} (h : take? k l = .ok (b, rest)) :
     b ++ rest = l ∧ b.length = k ∧ ∀ x ∈ b, x < 256 := by
   unfold take? at h
   split at h
@@ -97,7 +97,7 @@ theorem of_take? {k : Nat} {l b rest : List Nat} (h : take? k l = .ok (b, rest))
 
 /-- A take from an input shorter than `k` that holds bytes is
 `truncated`. -/
-theorem take?_short {k : Nat} {l : List Nat} (hb : ∀ x ∈ l, x < 256) (hl : l.length < k) :
+theorem take?Short {k : Nat} {l : List Nat} (hb : ∀ x ∈ l, x < 256) (hl : l.length < k) :
     take? k l = .error .truncated := by
   have hall : ∀ x ∈ l.take k, x < 256 := fun x hx => hb x (List.mem_of_mem_take hx)
   unfold take?
@@ -140,7 +140,7 @@ def decodeLength? : Prefix → List Nat → Except DecodeError (Nat × List Nat)
 
 /-- A length that the prefix can carry decodes from its prefix, with any
 rest after it. -/
-theorem decodeLength?_encodeLength (p : Prefix) (n : Nat) (rest : List Nat)
+theorem decodeLength?EncodeLength (p : Prefix) (n : Nat) (rest : List Nat)
     (h : n ≤ p.maxLen) : decodeLength? p (encodeLength p n ++ rest) = .ok (n, rest) := by
   cases p with
   | uvarint =>
@@ -148,7 +148,7 @@ theorem decodeLength?_encodeLength (p : Prefix) (n : Nat) (rest : List Nat)
     -- from `maxLen`. `omega` treats the power as an opaque number.
     have hpos := Nat.two_pow_pos (7 * Varint.maxBytes)
     have hlt : n < 2 ^ (7 * Varint.maxBytes) := by simp only [Prefix.maxLen] at h; omega
-    have hv := Varint.decode?_encode_append ⟨n, hlt⟩ rest
+    have hv := Varint.decodeEncodeSuffix ⟨n, hlt⟩ rest
     simp only [decodeLength?, encodeLength]
     -- `Varint.encode ⟨n, _⟩` unfolds to `encodeNat n` by definition.
     rw [show Varint.encodeNat n = Varint.encode ⟨n, hlt⟩ from rfl, hv]
@@ -162,7 +162,7 @@ theorem decodeLength?_encodeLength (p : Prefix) (n : Nat) (rest : List Nat)
 
 /-- A decoded length re-encodes to the bytes that it came from, and the
 prefix can carry it. -/
-theorem encodeLength_of_decodeLength? {p : Prefix} {l rest : List Nat} {n : Nat}
+theorem encodeLengthOfDecodeLength? {p : Prefix} {l rest : List Nat} {n : Nat}
     (h : decodeLength? p l = .ok (n, rest)) :
     encodeLength p n ++ rest = l ∧ n ≤ p.maxLen := by
   cases p with
@@ -175,9 +175,12 @@ theorem encodeLength_of_decodeLength? {p : Prefix} {l rest : List Nat} {n : Nat}
       simp only [hv, Except.map, Except.ok.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl⟩ := h
       -- The varint law gives the bytes back.
-      have hl := LawfulCodec.encode_decode l v r hv
+      have hl := LawfulCodec.encodeDecode l v r hv
       have hpos := Nat.two_pow_pos (7 * Varint.maxBytes)
-      exact ⟨hl, by have := v.lt; simp only [Prefix.maxLen]; omega⟩
+      -- `limit` unfolds to the power by definition, so the annotation
+      -- hands `omega` the bound in the form `maxLen` uses.
+      have hlt : v.val < 2 ^ (7 * Varint.maxBytes) := v.isLt
+      exact ⟨hl, by simp only [Prefix.maxLen]; omega⟩
   | u16be =>
     match l, h with
     | [], h => simp [decodeLength?] at h
@@ -196,12 +199,12 @@ theorem encodeLength_of_decodeLength? {p : Prefix} {l rest : List Nat} {n : Nat}
 
 /-- A `u16be` prefix with one byte of two is `truncated`: the second byte
 can still arrive. -/
-theorem decodeLength?_u16be_short {a : Nat} (h : a < 256) :
+theorem decodeLength?U16beShort {a : Nat} (h : a < 256) :
     decodeLength? .u16be [a] = .error .truncated := by
   simp [decodeLength?, h]
 
 /-- Every prefix byte of a `u16be` length inside the prefix is a byte. -/
-theorem lt_of_mem_encodeLength_u16be {n x : Nat} (h : n ≤ Prefix.maxLen .u16be)
+theorem ltOfMemEncodeLengthU16be {n x : Nat} (h : n ≤ Prefix.maxLen .u16be)
     (hx : x ∈ encodeLength .u16be n) : x < 256 := by
   simp only [Prefix.maxLen] at h
   simp only [encodeLength, List.mem_cons, List.not_mem_nil, or_false] at hx
@@ -240,14 +243,14 @@ def ofList? (p : Prefix) (cap : Nat) (l : List Nat) : Option (Frame p cap) :=
 
 /-- `ofList?` accepts the payload of every frame, and gives the frame
 back. -/
-theorem ofList?_payload (f : Frame p cap) : ofList? p cap f.payload = some f := by
+theorem ofList?Payload (f : Frame p cap) : ofList? p cap f.payload = some f := by
   unfold ofList?
   -- The proof fields of the frame satisfy the check, and structure eta
   -- with proof irrelevance closes `⟨f.payload, _, _⟩ = f`.
   rw [dite_eq_left ⟨f.bytes, f.fits⟩]
 
 /-- `ofList?` refuses a payload longer than the cap. -/
-theorem ofList?_over_cap {l : List Nat} (h : cap < l.length) : ofList? p cap l = none := by
+theorem ofList?OverCap {l : List Nat} (h : cap < l.length) : ofList? p cap l = none := by
   simp only [ofList?]
   split
   · next hfit => omega
@@ -267,25 +270,25 @@ def decode? (p : Prefix) (cap : Nat) (l : List Nat) :
   | .error e => .error e
   | .ok (len, rest) =>
     if hfit : len ≤ cap ∧ len ≤ p.maxLen then
-      -- `ht` names the take, so `of_take?` can turn it into the proof
+      -- `ht` names the take, so `ofTake?` can turn it into the proof
       -- fields of the frame.
       match ht : take? len rest with
       | .error e => .error e
       | .ok (payload, after) =>
-        have hp := of_take? ht
+        have hp := ofTake? ht
         .ok (⟨payload, hp.2.2, by rw [hp.2.1]; exact hfit⟩, after)
     else .error .malformed
 
 /-- The decode of an encoding, with any rest after it. -/
-theorem decode?_encode_append (f : Frame p cap) (rest : List Nat) :
+theorem decode?EncodeAppend (f : Frame p cap) (rest : List Nat) :
     decode? p cap (encode f ++ rest) = .ok (f, rest) := by
   unfold decode? encode
-  rw [List.append_assoc, decodeLength?_encodeLength p _ _ f.fits.2]
+  rw [List.append_assoc, decodeLength?EncodeLength p _ _ f.fits.2]
   simp only [dite_eq_left f.fits]
   split
-  · next e ht => rw [take?_append rest f.bytes] at ht; cases ht
+  · next e ht => rw [take?Append rest f.bytes] at ht; cases ht
   · next payload after ht =>
-    rw [take?_append rest f.bytes] at ht
+    rw [take?Append rest f.bytes] at ht
     simp only [Except.ok.injEq, Prod.mk.injEq] at ht
     obtain ⟨rfl, rfl⟩ := ht
     rfl
@@ -293,7 +296,7 @@ theorem decode?_encode_append (f : Frame p cap) (rest : List Nat) :
 /-- A prefix with a length over the cap is `malformed`, whatever
 follows it. This is the cap rule of §5.1 on the model: the decode stops
 before the payload. -/
-theorem decode?_over_cap {l rest : List Nat} {len : Nat}
+theorem decode?OverCap {l rest : List Nat} {len : Nat}
     (hd : decodeLength? p l = .ok (len, rest)) (hcap : cap < len) :
     decode? p cap l = .error .malformed := by
   unfold decode?
@@ -305,7 +308,7 @@ theorem decode?_over_cap {l rest : List Nat} {len : Nat}
 
 /-- A prefix that fits the cap, with fewer payload bytes after it than it
 names, is `truncated`: more input can complete the frame. -/
-theorem decode?_short_payload {l rest : List Nat} {len : Nat}
+theorem decode?ShortPayload {l rest : List Nat} {len : Nat}
     (hd : decodeLength? p l = .ok (len, rest)) (hcap : len ≤ cap) (hmax : len ≤ p.maxLen)
     (hb : ∀ x ∈ rest, x < 256) (hshort : rest.length < len) :
     decode? p cap l = .error .truncated := by
@@ -316,8 +319,8 @@ theorem decode?_short_payload {l rest : List Nat} {len : Nat}
   simp only
   split
   · split
-    · next e ht => rw [take?_short hb hshort] at ht; cases ht; rfl
-    · next payload after ht => rw [take?_short hb hshort] at ht; cases ht
+    · next e ht => rw [take?Short hb hshort] at ht; cases ht; rfl
+    · next payload after ht => rw [take?Short hb hshort] at ht; cases ht
   · next hfit => exact absurd ⟨hcap, hmax⟩ hfit
 
 instance : Codec (Frame p cap) where
@@ -325,11 +328,11 @@ instance : Codec (Frame p cap) where
   decode? := decode? p cap
 
 instance : LawfulCodec (Frame p cap) where
-  decode_encode f := by
+  decodeEncode f := by
     -- `Codec.encode` and `Codec.decode?` unfold to the functions above.
     show decode? p cap (encode f) = _
-    simpa using decode?_encode_append f []
-  encode_decode l f rest h := by
+    simpa using decode?EncodeAppend f []
+  encodeDecode l f rest h := by
     show encode f ++ rest = l
     simp only [Codec.decode?, decode?] at h
     split at h
@@ -341,8 +344,8 @@ instance : LawfulCodec (Frame p cap) where
         · next payload after ht =>
           simp only [Except.ok.injEq, Prod.mk.injEq] at h
           obtain ⟨rfl, rfl⟩ := h
-          obtain ⟨hsplit, hlen, -⟩ := of_take? ht
-          obtain ⟨hl, -⟩ := encodeLength_of_decodeLength? hd
+          obtain ⟨hsplit, hlen, -⟩ := ofTake? ht
+          obtain ⟨hl, -⟩ := encodeLengthOfDecodeLength? hd
           simp only [encode, List.append_assoc, hsplit, hlen, hl]
       · cases h
 
@@ -377,7 +380,7 @@ def headerB? (p : Prefix) (cap : Nat) (b : ByteArray) : Except DecodeError (Nat 
 /-- A header that passes holds a length inside the cap and the prefix.
 `read` allocates the payload from this length, so the theorem is the
 cap rule of §5.1 on the IO path. -/
-theorem headerB?_le_cap {p : Prefix} {cap : Nat} {b : ByteArray} {len size : Nat}
+theorem headerB?LeCap {p : Prefix} {cap : Nat} {b : ByteArray} {len size : Nat}
     (h : headerB? p cap b = .ok (len, size)) : len ≤ cap ∧ len ≤ p.maxLen := by
   unfold headerB? at h
   split at h
@@ -390,7 +393,7 @@ theorem headerB?_le_cap {p : Prefix} {cap : Nat} {b : ByteArray} {len size : Nat
     · cases h
 
 /-- A length over the cap is `malformed` on the production path too. -/
-theorem headerB?_over_cap {p : Prefix} {cap : Nat} {b : ByteArray} {len size : Nat}
+theorem headerB?OverCap {p : Prefix} {cap : Nat} {b : ByteArray} {len size : Nat}
     (hl : lengthB? p b = .ok (len, size)) (hcap : cap < len) :
     headerB? p cap b = .error .malformed := by
   simp only [headerB?, hl]
@@ -406,7 +409,7 @@ def encodeB? (p : Prefix) (cap : Nat) (payload : ByteArray) : Option ByteArray :
   else none
 
 /-- `encodeB?` writes a frame exactly when the payload fits. -/
-theorem isSome_encodeB? (p : Prefix) (cap : Nat) (payload : ByteArray) :
+theorem isSomeEncodeB? (p : Prefix) (cap : Nat) (payload : ByteArray) :
     (encodeB? p cap payload).isSome = decide (payload.size ≤ cap ∧ payload.size ≤ p.maxLen) := by
   simp only [encodeB?]
   split <;> simp_all
@@ -438,7 +441,7 @@ the bytes after it.
   caller closes the connection (§3.5).
 
 The payload read allocates at most `cap` bytes and one chunk more
-(`headerB?_le_cap`). -/
+(`headerB?LeCap`). -/
 def read (r : BufReader) (p : Prefix) (cap : Nat) :
     Async (Except DecodeError (Option (ByteArray × BufReader))) := do
   let mut r := r

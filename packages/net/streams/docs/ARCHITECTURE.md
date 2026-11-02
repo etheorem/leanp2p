@@ -199,25 +199,25 @@ The pure parts of the package carry theorems (§6, layer 1). The suite
 in `Tests/Streams.lean` pins the IO parts.
 
 - `Framing`: the `LawfulCodec` instance of `Frame p cap`, the round
-  trip of each prefix shape (`decodeLength?_encodeLength`,
-  `encodeLength_of_decodeLength?`), the `truncated` answer of a short
-  input (`decodeLength?_u16be_short`, `Frame.decode?_short_payload`),
-  and the cap rule of §5.1 on the model (`Frame.decode?_over_cap`) and
+  trip of each prefix shape (`decodeLength?EncodeLength`,
+  `encodeLengthOfDecodeLength?`), the `truncated` answer of a short
+  input (`decodeLength?U16beShort`, `Frame.decode?ShortPayload`),
+  and the cap rule of §5.1 on the model (`Frame.decode?OverCap`) and
   on the IO path
-  (`headerB?_le_cap`, `headerB?_over_cap`). `read` allocates its
+  (`headerB?LeCap`, `headerB?OverCap`). `read` allocates its
   payload from the length that `headerB?` passed, so
-  `headerB?_le_cap` bounds the allocation by the cap.
+  `headerB?LeCap` bounds the allocation by the cap.
 - `take?`, the payload step: a take of the bytes in front of any rest
-  returns them whole (`take?_append`), a successful take splits the
-  input (`of_take?`), and a short input is `truncated` (`take?_short`).
+  returns them whole (`take?Append`), a successful take splits the
+  input (`ofTake?`), and a short input is `truncated` (`take?Short`).
 - `BufReader`: a new reader holds its seed, `drop` consumes what it
   names and no more, two drops act as one, and `peek` copies at most
   what it names.
 - `Completions.State`: the rules of the decision above, with the
   freshness invariant kept by every step.
 - `Tcp`: a port survives the trip through its two bytes
-  (`be16_bytes16`), and the 16 bytes of an IPv6 value survive the trip
-  through their 8 segments (`segments?_flatMap_bytes16`).
+  (`be16Bytes16`), and the 16 bytes of an IPv6 value survive the trip
+  through their 8 segments (`segments?FlatMapBytes16`).
 
 ## The mocks
 
@@ -234,11 +234,13 @@ and imports nothing from the real package.
   `Multiaddr.components` needs them.
 - §4.2 freezes "the generic round-trip harness" and no names. So the
   harness of the bytes mock, `checkRoundTrips` and `checkModelPins`,
-  follows the open W1.2 pull request, etheorem/leanp2p#30. The suite
-  calls it in the same way before and after the swap.
-- The varint mock states two axioms, `decode?_encode_append` and
-  `encode_decode`. Each one is a theorem of W2.1. They are the only
-  axioms of the package beyond the three standard axioms of Lean.
+  and the field names of `LawfulCodec` follow the open W1.2 pull
+  request, etheorem/leanp2p#30. The suite calls them in the same way
+  before and after the swap.
+- The varint mock states two axioms, `decodeEncodeSuffix` and
+  `encodeDecode`. Each one is a theorem of W2.1, with the same name and
+  statement (etheorem/leanp2p#34). They are the only axioms of the
+  package beyond the three standard axioms of Lean.
 - The multiaddr mock knows four protocols: `ip4`, `ip6`, `tcp`, and
   `memory`. The sim and the TCP stub use these four alone.
 
