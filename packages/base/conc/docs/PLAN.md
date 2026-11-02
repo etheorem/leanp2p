@@ -21,8 +21,9 @@ package.
 
 Behavior tests and the theorems of the package ARCHITECTURE ("What the
 proofs cover") close unit 1. The package has no wire vectors: the vector
-infrastructure of root W0.3 does not concern `base/conc`. The suite follows the root test-runner layout of W0.2,
-and the `-N1` pass is required.
+infrastructure of root W0.3 does not concern `base/conc`. The suite
+follows the root test-runner layout of W0.2, and the `-N1` pass is
+required.
 
 - A parked `recv` wakes when another task closes the channel, and it
   returns `none` after the queued values drain.
@@ -50,8 +51,8 @@ and the `-N1` pass is required.
   them all.
 - `withinDeadline` closes what the work parks on, and the work ends on
   its own. A value that the work returns after the expiry goes to
-  `release`. A tied race answers with the value or the expiry, never
-  both.
+  `release`. A tied race gives one answer, and the teardown agrees
+  with it.
 - The test `Clock` advances by the step the test gives. A timer on
   that clock fires at the advanced time.
 - `Alarm` fires at the due time, a later `set` replaces the due time,

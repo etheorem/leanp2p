@@ -13,9 +13,8 @@ to the caller. A swallowed error would hide a failed subsystem from the
 shutdown path (the package ARCHITECTURE, "the three things the spike
 missed").
 
-The tasks are `Async` computations on the shared pool. A task that
-parks holds no thread, so parked tasks add no threads, however many
-tasks the set owns (`Conc.Wrap`, "Parks hold no thread").
+The tasks are `Async` computations on the shared pool, so a parked task
+holds no thread (`Conc.Wrap`, "Parks hold no thread").
 
 ## The count
 

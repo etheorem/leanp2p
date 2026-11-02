@@ -597,11 +597,12 @@ Every operation that can park runs in `Conc.Async`, the `Async` monad
 of `Std`. A parked `Async` computation is a continuation on a promise,
 and it holds no thread. A blocking `IO.wait` on a pool task holds one:
 on v4.34, 5000 receivers parked by `IO.wait` cost 5005 OS threads, and
-5000 parked in `Async` cost 12 (`scripts/park-threads.lean`). A node with a loop and a reader per
-connection (§3.3) must not pay a thread per park. A signature that can
-park therefore names `Async`, and `Async.run` enters it once, at the
-program edge. An operation that never parks, such as `close`, stays in
-`IO` or `BaseIO`, and an `Async` caller lifts it.
+5000 parked in `Async` cost 12 (`scripts/park-threads.lean`). A node
+with a loop and a reader per connection (§3.3) must not pay a thread
+per park. A signature that can park therefore names `Async`, and
+`Async.run` enters it once, at the program edge. An operation that
+never parks, such as `close`, stays in `IO` or `BaseIO`, and an `Async`
+caller lifts it.
 
 ### 4.2 `base/bytes`: the byte model
 

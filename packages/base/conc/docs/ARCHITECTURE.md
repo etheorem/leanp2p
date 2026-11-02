@@ -2,10 +2,10 @@
 
 `base/conc` holds the concurrency primitives of the stack. Every
 package above it gets its tasks, channels, and deadlines from here. The
-package knows no wire format, and it imports no other group (ARCHITECTURE §2). It
-owns the three concurrency rules that every package above must keep
-(ARCHITECTURE §4.1), and it owns the `Clock` seam type (ARCHITECTURE
-§3.1).
+package knows no wire format, and it imports no other group
+(ARCHITECTURE §2). It owns the three concurrency rules that every
+package above must keep (ARCHITECTURE §4.1), and it owns the `Clock`
+seam type (ARCHITECTURE §3.1).
 
 ## Modules
 
@@ -141,9 +141,9 @@ layer 1):
 
 `select` takes a proof that its array is not empty, and `Chan.new`
 takes a proof that its capacity is not 0 (ARCHITECTURE §3.7). The
-channels and the parks wrap `Std`, so
-the suite pins their behavior (CLAUDE.md, "Proofs and tests"). No
-theorem covers the wake protocol of `Chan`.
+channels and the parks wrap `Std`, so the suite pins their behavior
+(CLAUDE.md, "Proofs and tests"). No theorem covers the wake protocol of
+`Chan`.
 
 ## Decisions
 
@@ -177,7 +177,8 @@ theorem covers the wake protocol of `Chan`.
   `Std` close wakes every receiver, so every parked sender wakes. The
   cost: one signal per transfer, an occasional spare wakeup, and no
   strict arrival order among senders. Capacity 0 would need a send to
-  meet a receive inside `Std`, so `Chan.new` takes a proof of `0 < capacity`.
+  meet a receive inside `Std`, so `Chan.new` takes a proof of
+  `0 < capacity`.
 - **`OnceRef.set` goes through `modify`.** A bare `IO.Ref.set` can lose
   its value to a concurrent `IO.Ref.get`. On v4.34, a writer that read
   back each value lost 1387 of 199999 writes against three readers.
@@ -191,16 +192,16 @@ theorem covers the wake protocol of `Chan`.
   therefore holds a `Tally`, and `Wrap.onEnd` records each end in one
   atomic step. The cost: the kept errors follow the order the tasks
   ended in, and `joinAll` names at most `maxTaskErrors` of them. A scan
-  for ended tasks does not work: `IO.hasFinished` is an IO call, so it
-  cannot run inside `OnceRef.update`, and a `joinAll` during the scan
-  would miss the tasks that the scan holds.
+  for ended tasks fails. `IO.hasFinished` is an IO call, so it cannot
+  run inside `OnceRef.update`. A `joinAll` during the scan would miss
+  the tasks that the scan holds.
 - **`Alarm` and `Outcome` live here.** They need only `Chan`, `Clock`,
   and `OnceRef`, and neither one knows a protocol. Every loop of
   ARCHITECTURE §3.3 with timers needs the first, and every session
   needs the second, so each fact has one home (PRINCIPLES 1.5).
 - **`Outcome` records no fault after the owner's close** (`Outcome`,
-  "The owner's close"). A `close` that shuts the connection at once breaks
-  the writes in flight. The owner asked for that end, so it is no
+  "The owner's close"). A `close` that shuts the connection at once
+  breaks the writes in flight. The owner asked for that end, so it is no
   failure of the session. One `OnceRef` holds the answer, the faults,
   and the mark, so the check of the end and the record of a fault are
   one atomic step (PRINCIPLES 3.3).

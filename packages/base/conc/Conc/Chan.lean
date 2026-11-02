@@ -28,7 +28,7 @@ frees a slot, one sender per receive, so a closer that stops reading
 would strand it, against rule 1.
 
 A `Chan` therefore keeps the values in a `Std` channel, and a sender
-only ever offers a value with `trySend`. On a full channel the sender
+offers a value only with `trySend`. On a full channel the sender
 parks as a *receiver* on `room`, a second `Std` channel of capacity 1,
 and a `Std` close wakes every receiver. The signals on `room`:
 
@@ -134,7 +134,7 @@ never parks. -/
 def drain (c : Chan α) : BaseIO (List α) := do
   let mut out : Array α := #[]
   -- The loop ends at the first empty poll. A concurrent sender can
-  -- keep it going, and the caller closes first when that matters.
+  -- extend it, and the caller closes first when that matters.
   repeat
     match ← c.tryRecv with
     | some v => out := out.push v

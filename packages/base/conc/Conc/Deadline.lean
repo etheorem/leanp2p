@@ -12,10 +12,9 @@ by itself, and `withinDeadline` joins it. Nothing cancels a task
 (rule 1), and the work task has an owner that joins it on every exit
 (rule 2).
 
-`onExpiry` has the type `BaseIO Unit`, so it cannot throw: a throw
-would leave the work parked with nothing to wake it, and the join would
-wait forever. It must still reach the park of the work. When it does
-not, the join waits forever. A cancel would only hide that bug.
+`onExpiry` has the type `BaseIO Unit`, so a throw cannot leave the work
+parked with nothing to wake it. `onExpiry` must still reach the park of
+the work, or the join waits forever. A cancel would only hide that bug.
 -/
 
 set_option autoImplicit false

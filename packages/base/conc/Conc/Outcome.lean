@@ -22,7 +22,7 @@ them fail. `Outcome` holds both facts and that rule in one atomic cell.
 
 A shell whose `close` shuts the connection at once marks the outcome
 first (`markClosing`). A write that the close interrupts then fails
-after the end, and `answer` gives the orderly close. Without the mark,
+after the end, and `answer` reports an orderly end. Without the mark,
 the writer could record that failure before the loop's teardown set the
 answer, and `answer` would report a fault the owner caused. A `close`
 that lets the writer flush before it shuts the connection needs no

@@ -14,7 +14,7 @@ No answer depends on how the scheduler orders the tasks:
 * A check on a parked task arranges the events so that one answer is
   possible in every order.
 * Timers run on the test clock. `TestClock.nextTimer` waits until the
-  code under test arms its timer, so `advance` cannot run ahead of it.
+  code under test arms its timer, so `advance` cannot run before it.
 
 Three checks wait in real time. The production timer waits on its own
 timer, with the margin stated there. The production deadline waits
@@ -422,7 +422,7 @@ private def deadlineChecks (r : Runner) : Async Unit := do
       let torn ← tornDown.get
       consistent := consistent &&
         ((succeedsWith 7 res && !torn) || (failsWith .deadlineExpired res && torn))
-    r.check "a tied race answers with the value or the expiry, never both" consistent
+    r.check "a tied race gives one answer, and the teardown agrees" consistent
     tc.close
 
   -- The production clock drives the same deadline: a short timer closes

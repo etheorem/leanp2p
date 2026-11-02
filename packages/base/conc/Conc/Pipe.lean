@@ -4,12 +4,12 @@ import Conc.Chan
 # `Pipe`: a byte queue
 
 A `Pipe` carries byte chunks from one task to another over a bounded
-`Chan` (the package ARCHITECTURE). The bound limits the number of
-chunks in flight, so a fast writer parks until the reader catches up.
-The bound counts chunks and ignores their size, so the caller bounds the
-chunk size (PRINCIPLES 3.4).
-An in-memory transport can stand on it: the writer is one side of a
-connection, and the reader is the other side.
+`Chan` (the package ARCHITECTURE). A fast writer parks until the reader
+frees a slot. The bound counts chunks, so the caller bounds the chunk
+size (PRINCIPLES 3.4).
+
+An in-memory transport can use a pipe for each direction: the writer is
+one side of a connection, and the reader is the other side.
 -/
 
 set_option autoImplicit false
@@ -32,7 +32,7 @@ chunk, so a read never returns one. `.error .closed` when the pipe is
 closed. -/
 def write (p : Pipe) (b : ByteArray) : Async (Except Error Unit) := do
   if !b.isEmpty then return ← p.chan.send b
-  -- The empty chunk goes nowhere, but a closed pipe still says so.
+  -- A closed pipe refuses an empty chunk too.
   return if ← p.chan.isClosed then .error .closed else .ok ()
 
 /-- The next chunk, in write order. The read parks on an empty pipe. A

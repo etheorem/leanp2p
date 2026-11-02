@@ -28,9 +28,9 @@ def recv (c : Chan β) (k : Option β → α) : Park α :=
   ⟨c.recvPark k⟩
 
 /-- The park on a timer of the monotonic clock. The timer is due `ms`
-milliseconds after this call. This call fixes the due time, so a `select` that loses does
-not restart the count. Production code takes its timers from a `Clock`,
-so a test can drive time. -/
+milliseconds after this call. This call fixes the due time, so a
+`select` that loses does not restart the count. Production code takes
+its timers from a `Clock`, so a test can drive time. -/
 def sleep (ms : Nat) (k : α) : BaseIO (Park α) :=
   return ⟨Wrap.RawPark.sleepUntil ((← IO.monoMsNow) + ms) k⟩
 

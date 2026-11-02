@@ -3,9 +3,10 @@ import Conc
 /-!
 # The thread cost of a park
 
-This script measures the figures of ARCHITECTURE §4.1: the OS threads that 5000
-parked receivers hold, parked by a blocking `IO.wait` on pool tasks and
-parked in `Async`. It reads `/proc/self/status`, so it needs Linux.
+This script measures the figures of ARCHITECTURE §4.1: the OS threads
+that 5000 parked receivers hold, parked by a blocking `IO.wait` on pool
+tasks and parked in `Async`. It reads `/proc/self/status`, so it needs
+Linux.
 
 ```
 lake env lean --run scripts/park-threads.lean parked
