@@ -13,9 +13,10 @@ error boundary" below.
 | Module | Holds, and why |
 |---|---|
 | `Varint.lean` | the root module; one import line per public submodule |
-| `Varint/UVarint.lean` | the newtype `structure UVarint where val : Nat` with its proof field, the model core `encode` and `decode?`, and the `Codec UVarint` / `LawfulCodec UVarint` instances; the instances live with the type (ARCHITECTURE §3.2), and the 9-byte budget constant lives here, its one home (PRINCIPLES 1.5) |
-| `Varint/Theorems.lean` | the theorems over the model beyond the instance law: the suffix form, the accepted-input split, and the budget lemma (ARCHITECTURE §6); the instance-law proof lives with the instance, in `Varint/UVarint.lean` |
+| `Varint/UVarint.lean` | the newtype `structure UVarint where val : Nat` with its proof field, the model core `encode` and `decode?`, and the `Codec UVarint` / `LawfulCodec UVarint` instances; the instances live with the type (ARCHITECTURE §3.2). The 9-byte budget constant `maxBytes` and the value bound `limit` live here, their one home (PRINCIPLES 1.5). The suffix form `decodeEncodeSuffix` and the budget lemma `lengthEncodeLe` live here too, because the proof of the instance law uses them |
+| `Varint/Theorems.lean` | the theorems over the model beyond the instance law (ARCHITECTURE §6): the accepted-input split `encodeDecode`, `encodeNonempty`, and `encodeBytes`, with the spec examples as `example` blocks |
 | `Varint/Bytes.lean` | the production `ByteArray` path, `encodeB` and `decodeB?`; it imports the 9-byte budget constant from `Varint/UVarint.lean` |
+| `Varint/Mock/Bytes.lean` | the mock of the `base/bytes` surface while W1.2 is open ("Temporary dependency" below); internal, and the root does not re-export it |
 
 All declarations live in the `Varint` namespace. The root module
 re-exports the public submodules.
@@ -117,6 +118,10 @@ by `rfl`, `simp`, and `omega` (ARCHITECTURE §6; PRINCIPLES 5.1):
 - The budget lemma: the encoding of a `UVarint` is at most 9 bytes.
   The proof field makes this true at the type level, and the encoder
   preserves it (ARCHITECTURE §4.3).
+- The shape facts: every encoding holds at least one byte, and every
+  entry of an encoding is below 256. A framing layer above uses the
+  first to show that a decode consumes input, and the second to move
+  the model to the wire with `ofNatList`.
 
 A `List Nat` input can hold 256 or more in a byte position.
 `decode?` reports `malformed` for it, so the ported accepted-input
@@ -126,6 +131,22 @@ The `ByteArray` decoder carries no theorem of its own. The generic
 harness of `base/bytes` pins it to the model over generated inputs, in
 the `decodeB? b = decode? (toNatList b)` shape (ARCHITECTURE §4.2,
 §6; `base/bytes` docs, owned contracts 1 and 2).
+
+## Temporary dependency
+
+W1.2 (`base/bytes`) is open, so the package builds against
+`Varint/Mock/Bytes.lean` in the `Varint.Mock.Bytes` namespace, as
+`RULES.md` allows. The mock imports nothing from `Bytes`. Its
+functions are `opaque` with executable bodies, so the suite runs real
+bytes and no proof can unfold them. The `DecodeError` type and the two
+classes are copies of the frozen shapes. The field names of
+`LawfulCodec` and the harness names, `checkRoundTrips` and
+`checkModelPins`, follow the open W1.2 pull request.
+
+The mock states no axiom: the theorems work on `List Nat` alone, and
+`#print axioms` on each of them lists `propext`, `Quot.sound`, and at
+most `Classical.choice`. When W1.2 merges, the package drops the mock,
+and each `open Varint.Mock.Bytes` becomes `open Bytes`.
 
 ## What the package must not depend on
 

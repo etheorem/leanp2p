@@ -3,6 +3,7 @@ import Tests.Vectors
 import Tests.Concurrency
 import Tests.Protobuf
 import Tests.Bytes
+import Tests.Varint
 
 /-!
 # Test entry point
@@ -21,4 +22,5 @@ def main : IO UInt32 := do
   Tests.Concurrency.run r
   Tests.Protobuf.run r
   Bytes.runTests r
+  Tests.Varint.run r
   r.summary
