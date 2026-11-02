@@ -23,4 +23,5 @@ def main : IO UInt32 := do
   Tests.Yamux.run r
   Tests.Yamux.CoreTests.run r
   Tests.Yamux.CoreTests.runSink r
+  Tests.Yamux.CoreTests.runSession r
   r.summary

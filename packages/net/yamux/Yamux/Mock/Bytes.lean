@@ -39,6 +39,14 @@ class LawfulCodec (α : Type) [Codec α] : Prop where
   encodeDecode : ∀ (bs : List Nat) (a : α) (rest : List Nat),
     Codec.decode? bs = .ok (a, rest) → Codec.encode a ++ rest = bs
 
+/-- The model as production bytes: one byte per value, taken mod 256. -/
+def ofNatList (l : List Nat) : ByteArray :=
+  ByteArray.mk (l.map (fun n => UInt8.ofNat n)).toArray
+
+/-- The production bytes as the model. -/
+def toNatList (b : ByteArray) : List Nat :=
+  b.toList.map (fun x => x.toNat)
+
 /-- Check generated values with executable equality. -/
 def checkRoundTrips {α : Type} [Codec α] [LawfulCodec α] [DecidableEq α]
     (samples : List α) : Bool :=

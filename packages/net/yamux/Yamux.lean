@@ -5,6 +5,7 @@ import Yamux.Error
 import Yamux.Frame
 import Yamux.Core
 import Yamux.Sink
+import Yamux.Session
 
 /-!
 # Yamux

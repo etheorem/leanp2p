@@ -17,6 +17,8 @@ laws of `Yamux/Header.lean` keep the codec honest by construction.
 
 set_option autoImplicit false
 
+open Conc
+
 namespace Tests.Yamux
 
 open _root_.Yamux
@@ -302,6 +304,57 @@ def runSink (r : Runner) : IO Unit := do
   | .error _ => pure ()
   let entries3 ← log3.get
   r.check "yamux sink goaway closes" (entries3 == ["close"])
+
+/-- A connection whose inbound bytes come from a channel and whose
+writes are recorded. -/
+private def fakeConn (inbound : Chan ByteArray) (writes : IO.Ref (List (List Nat))) :
+    Mock.Streams.Connection :=
+  { read := Chan.recv inbound
+    write := fun bs => do
+      let xs ← writes.get
+      writes.set (xs ++ [Mock.Bytes.toNatList bs])
+    close := pure ()
+    localAddr := ⟨[]⟩
+    remoteAddr := ⟨[]⟩ }
+
+def runSession (r : Runner) : IO Unit := do
+  r.section "yamux session"
+    "packages/net/yamux/docs/ARCHITECTURE.md: the session shell"
+
+  let inbound ← Chan.new 8
+  let writes ← IO.mkRef ([] : List (List Nat))
+  let s ← Session.new (fakeConn inbound writes) .client
+  let ts ← TaskSet.new
+  ts.spawn (Session.pump s)
+  ts.spawn (Session.reader s)
+
+  -- Opening a stream sends the SYN window update and reports id 1.
+  let opened ← Async.run (Session.openStream s)
+  let ws ← writes.get
+  r.check "yamux session opens a stream" opened.isSome
+  r.check "yamux session sends the syn window update"
+    (ws.any fun bs => bs.length == 12 && bs.getD 1 9 == 1)
+
+  -- A data frame from the peer reaches the application on that stream.
+  let payload := [1, 2, 3]
+  let frame := Header.encode (Header.ofParts .data Flags.empty ⟨1, by decide⟩
+    (Word32.ofNat payload.length)) ++ payload
+  Async.run do
+    discard (Chan.send inbound (Mock.Bytes.ofNatList frame))
+  match opened with
+  | some st =>
+      let got ← Async.run st.read
+      r.check "yamux session delivers the payload"
+        (match got with
+         | .ok (some bs) => Mock.Bytes.toNatList bs == payload
+         | _ => false)
+  | none => r.check "yamux session delivers the payload" false
+
+  -- Closing the session ends both tasks.
+  Chan.close inbound
+  Session.close s
+  Async.run ts.joinAll
+  r.check "yamux session closes" true
 
 end CoreTests
 
