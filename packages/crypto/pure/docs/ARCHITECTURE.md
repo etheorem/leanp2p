@@ -21,22 +21,26 @@ none does today. The constant-time code stays in the C shim of
 | Module | Holds, and why |
 |---|---|
 | `CryptoPure.lean` | the root module; one import line per public submodule |
-| `CryptoPure/Constants.lean` | block sizes, digest sizes, the round constants, and the initial states (the `K` and `H0` tables of FIPS 180-4 and 180-1); one canonical home per fact (§3.8; PRINCIPLES 1.5) |
-| `CryptoPure/Sha256.lean` | the compression, the padding, and the digest, over the model and over `ByteArray` |
+| `CryptoPure/Constants.lean` | the block, length-field, and digest sizes, the round constants, and the initial states (the `K` and `H0` tables of FIPS 180-4), the HMAC pads, and the HKDF block cap; one canonical home per fact (§3.8; PRINCIPLES 1.5) |
+| `CryptoPure/Preprocess.lean` | the padding and the block split of FIPS 180-4 §5, stated once over the block size and the length-field width, and the big-endian word conversions of §3.1, with their theorems |
+| `CryptoPure/Sha256.lean` | the round functions, the message schedule, the compression, and the digest, over the model and over `ByteArray` |
 | `CryptoPure/Sha512.lean` | the same shape over `UInt64` words and 128-byte blocks |
-| `CryptoPure/Sha1.lean` | the 160-bit digest, for the multihash framing (see "Decisions") |
-| `CryptoPure/Hmac.lean` | key normalization and `hmac` over the hash and block size given as arguments, with its reduction theorem |
-| `CryptoPure/Hkdf.lean` | `extract` and `expand` over HMAC, with the reduction theorems |
+| `CryptoPure/Sha1.lean` | the 160-bit digest in the shape of SHA-256, for the multihash framing (see "Decisions") |
+| `CryptoPure/Hmac.lean` | key normalization and `hmac` over the hash and block size given as arguments, and the SHA-256 and SHA-512 instances, with the reduction and length theorems |
+| `CryptoPure/Hkdf.lean` | `extract` and `expand` over HMAC, and the SHA-256 instances, with the reduction, length, and prefix theorems |
+| `CryptoPure/Mock/Bytes.lean` | temporary: the four `base/bytes` conversions this package and its suite use, until W1.2 merges (see "Working ahead of W1.2") |
 
 The package keeps the spike's one-module-per-primitive shape
 (`Crypto/{Sha256,Sha512,Sha1,Hmac,Hkdf}.lean`; ARCHITECTURE §10,
 row 6). Each primitive reads on its own, and that is the point of an
 audit copy. The theorems live beside the constructions they state: the
-HMAC theorem in `CryptoPure/Hmac.lean`, the HKDF theorems in
-`CryptoPure/Hkdf.lean`. A separate theorem module would import three
-modules and state nothing of its own. The constants move out of the
-primitive modules into `CryptoPure/Constants.lean`, so the two padding
-rules and the three block sizes have one home.
+padding theorems in `CryptoPure/Preprocess.lean`, the HMAC theorems in
+`CryptoPure/Hmac.lean`, the HKDF theorems in `CryptoPure/Hkdf.lean`. A
+separate theorem module would import the constructions and state
+nothing of its own. The constants move into
+`CryptoPure/Constants.lean`, and the padding moves into
+`CryptoPure/Preprocess.lean`, so the padding rule and the three block
+sizes each have one home.
 
 All declarations live in the `CryptoPure` namespace. The name avoids
 the collision with Lean's standard `Pure` typeclass, which a bare
@@ -62,6 +66,18 @@ The names are the root names (§7, row 6): digests, HMAC, HKDF.
 - `Hkdf.extract` and `Hkdf.expand` over HMAC (RFC 5869). An empty salt
   becomes a zero key of the hash length, as RFC 5869 and the spike
   specify.
+- `Hkdf.expand` returns `Option (List Nat)`. It returns `none` exactly
+  when the requested length is above `255 × HashLen`, the cap of RFC
+  5869 §2.3, and the docstring states that one meaning (§3.5). The
+  package cannot name `CryptoError`, which lives in `crypto/backend`.
+  The backend lifts its raw `Option` binding to `Except CryptoError`
+  once, in its own package, and W3.3 maps the pure `none` to the error
+  the backend reports for the same request.
+- `Hmac.sha256`, `Hmac.sha512`, `Hkdf.extractSha256`, and
+  `Hkdf.expandSha256` fix the hash for the callers that need one. The
+  current HMAC and HKDF vector families use SHA-256.
+- Each hash holds its state as a `Vector` of words, so the state size
+  is part of the type.
 
 Callers do not import this package. They import the `Crypto` facade
 (§3.6), which names the production implementation of every primitive
@@ -90,6 +106,14 @@ comparison needs a total function on this side.
    The spike proved no streaming or chunking theorem either; its
    digests have one form, and the size sweep covers the padding
    boundaries as behavior, so that check stays a test.
+   The padding carries theorems as well, for every message length: the
+   padded length is a whole number of blocks, no shorter zero run
+   reaches a block boundary, the message is a prefix, `0x80` follows
+   it, and the last field reads back as the bit length modulo
+   `2 ^ (8 × width)`. Every block the compression reads is full. HMAC
+   has its key-block and output lengths. HKDF-Expand returns exactly
+   `L` bytes under the cap, `none` past it, and a prefix of every
+   longer output.
 2. **The model pin.** `digestB b` is `ofNatList (digest (toNatList
    b))` by construction, and the suite checks the agreement on every
    run, in the spike's shape (§4.2, §6).
@@ -104,11 +128,12 @@ comparison needs a total function on this side.
    the facade, following
    the test-split rule of the backend pair. This package's side
    is to stay pure and total, so the comparison is well-defined. Every
-   loop names its measure. The two SHA-2 block loops terminate on the
-   remaining input length, where the spike marked `partial` (§3.3).
-   The HKDF expand loop terminates on the remaining output length.
-   HMAC is the fixed two-call form over the hash, and its termination
-   follows from that structure.
+   loop names its measure. The block split of `Preprocess` terminates
+   on the remaining input length, where the spike's block loops were
+   `partial` (§3.3), and each hash folds its compression over the
+   finished block list. The HKDF block loop is structural recursion on
+   the block count. HMAC is the fixed two-call form over the hash, and
+   its termination follows from that structure.
 
 ## Decisions
 
@@ -148,6 +173,38 @@ comparison needs a total function on this side.
   constant-time primitives in Lean. The constant-time code stays in
   the C shim. The Lean copy serves the audit and the cross-check, and
   each digest docstring states the limit.
+- **HKDF-Expand refuses an over-long request.** The spike does not
+  enforce the cap of RFC 5869 §2.3. It returns a list for every length,
+  and past `255 × HashLen` its counter no longer fits in one byte, so
+  the output leaves RFC 5869 with no error. The spec wins (PRINCIPLES
+  2.1), so `expand` returns `none` for such a request. §3.5 allows the
+  `Option`, because `none` has one meaning, and the function stays
+  total, as owned contract 4 requires. No production caller reaches
+  this copy: Noise takes HKDF through the facade.
+- **SHA-1 takes the shape of SHA-256.** The spike's SHA-1 works on
+  `Nat` with masks. Here it uses `UInt32` words, the shared padding,
+  and the shared block split, so one proof covers the padding of both.
+- **What the proofs do not cover.** The theorems prove the structure:
+  the padding, the block split, the output lengths, and the HMAC and
+  HKDF formulas. The vectors pin the compression functions on the
+  tested inputs, and the W3.3 cross-check compares them with the
+  production path. No theorem relates a compression function to the
+  text of FIPS 180-4 for every input, and none claims a security
+  property.
+
+## Working ahead of W1.2
+
+W1.2 (#2) is open. The package uses `CryptoPure/Mock/Bytes.lean`
+under the `CryptoPure.Mock.Bytes` namespace, as `RULES.md` permits.
+The mock imports no real dependency. Its four `opaque` functions,
+`ofNatList`, `toNatList`, `ofString`, and `ofHex?`, have executable
+bodies, so the suite runs. No proof unfolds them, so the mock adds no
+axiom.
+
+Integration replaces the mock module with `import Bytes`, renames
+`Mock.Bytes.` to `Bytes.` at each use, and reruns the build, both test
+modes, the import lint, and the axiom audit. `RULES.md` gives the
+integration a twelve-hour window after W1.2 merges.
 
 ## What the package must not depend on
 

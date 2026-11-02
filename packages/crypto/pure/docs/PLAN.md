@@ -19,7 +19,7 @@ and `codec/multiformats` set the pattern.
 | Unit | Root deps | Deliverable | Done when |
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
-| 1a | W1.2 | `CryptoPure/Constants.lean` and the three hashes: SHA-256, SHA-512, SHA-1, with the model functions, the `ByteArray` forms, and the model pins | the 1a milestones below pass |
+| 1a | W1.2 | `CryptoPure/Constants.lean`, `CryptoPure/Preprocess.lean`, and the three hashes: SHA-256, SHA-512, SHA-1, with the model functions, the `ByteArray` forms, and the model pins | the 1a milestones below pass |
 | 1b | W1.2, 1a | HMAC over the hashes and HKDF over HMAC, with the reduction theorems | the 1b milestones below pass, and the root W3.1 row holds |
 
 Unit 0 is done. Sub-units 1a and 1b close root W3.1 together.
@@ -70,6 +70,10 @@ Milestones for 1a:
   55, 56, 63, 64, 65, 119, 120, 128, and 1000 for SHA-256, and 0 to
   300 plus 511, 512, 513, 1000, and 4096 for SHA-512. The pure side
   closes here, and the production side closes at W3.3.
+- SHA-1: the SHA-256 sweep lengths, with the pin and the digest size.
+- The padding and block theorems of `CryptoPure/Preprocess.lean`
+  build. The FIPS 180-4 §5.1.1 "abc" padding is an `example`, and each
+  hash checks its FIPS "abc" digest in a `#guard`.
 
 Milestones for 1b:
 
@@ -85,6 +89,10 @@ Milestones for 1b:
 - Empty-input and block-boundary HMAC: the spike's key lengths 0, 1,
   63, 64, 65, 128, and 200. The pure side closes here, and the
   production side closes at W3.3.
+- HKDF-SHA-256 at the cap: a request for 8160 bytes returns 8160
+  bytes, and a request for 8161 bytes returns `none` (RFC 5869 §2.3).
+- The length theorems of HMAC and HKDF and the HKDF prefix theorem
+  build.
 
 ## Vector stance
 
@@ -105,4 +113,5 @@ the family is no longer closed by vectors alone. All files arrive
 on `main` through root W0.3.
 
 The sweep lengths above are the package's own tests, in the spike's
-shape. The production comparisons inside them are W3.3's to run.
+shape. They are named values in `Tests/Hashes.lean`, so the W3.3
+cross-check runs the same lists through the production path.
