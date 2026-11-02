@@ -1,6 +1,7 @@
 import Tests.Support
 import Tests.Vectors
 import Tests.Concurrency
+import Tests.Protobuf
 
 /-!
 # Test entry point
@@ -17,4 +18,5 @@ def main : IO UInt32 := do
   let r ← Tests.Runner.new
   Tests.Vectors.run r
   Tests.Concurrency.run r
+  Tests.Protobuf.run r
   r.summary

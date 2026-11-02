@@ -35,8 +35,9 @@ The names are the root names (§7, row 4), shaped by the mechanisms of
 §3:
 
 - `Fields` is a proof-carrying structure in the shape of §3.7: it
-  carries the entry list and a proof field stating that every entry
-  fits the varint budget of `codec/varint`. `Value` has one constructor
+  carries `entries : List Entry` and `valid : ∀ e ∈ entries, e.Valid`.
+  `Fields.ofList?` checks a raw table. `Fields.empty` constructs the
+  empty message. `Value` has one constructor
   per wire type: `varint`, `fixed64`, `bytes` (length-delimited),
   `fixed32`. The group markers, wire types 3 and 4, have no
   constructor, so a closed match rejects them (§3.4).
@@ -51,6 +52,10 @@ The names are the root names (§7, row 4), shaped by the mechanisms of
   through `base/bytes`. The repeated lookups return every occurrence in
   wire order: `getAllVarints`, `getAllBytes`, `getAllStrs`. `hasField`
   reports presence.
+  A last occurrence with another wire type gives a lookup miss.
+  `getSub? : Nat → Fields → Except Error (Option Fields)` separates
+  an absent payload from a nested decoding error. `getStr?` returns
+  `none` for invalid UTF-8. `getAllStrs` skips invalid UTF-8 payloads.
 - `Codec Fields` and `LawfulCodec Fields` are the instances of §3.2.
   The generic harness of `base/bytes` runs once for them.
 - `ProtoMessage α` carries `toFields : α → Pb.Fields` and `ofFields? :
@@ -79,7 +84,7 @@ The names are the root names (§7, row 4), shaped by the mechanisms of
    scans the wire order and returns the last one (§4.5). The repeated
    lookups return both.
 4. **The round-trip theorem on the pure core.** The theorem states
-   `decodeFields (encodeFields fs)` returns `fs` for every
+   `decodeFields? (encodeFields fs)` returns `(fs, [])` for every
    `fs : Fields`, over the model, closed by `rfl`, `simp`, and `omega`
    (§6; PRINCIPLES 5.1). The law needs no hypothesis, because the type
    itself carries the budget fact; that is what makes `LawfulCodec
@@ -101,12 +106,11 @@ arms of this package:
   `codec/varint` boundary verbatim. A cut tag or a cut length prefix
   reports `truncated`. A prefix that runs past the budget reports
   `malformed` (`codec/varint` docs; §3.2).
-- `badField` reports a tag whose field number cannot fit the budget.
-  This is the rule the varint layer enforces at its boundary
-  (ARCHITECTURE §4.3): a value that cannot complete within the budget
-  is a protocol error, and the reader stops waiting.
+- `badField` reports an invalid field number. Field zero and numbers
+  at least `2^29` fail this check. `Fields.ofList?` also uses this
+  error for invalid values in a raw field table.
 - `badWireType` reports a tag whose wire type has no constructor: a
-  group marker, wire type 3 or 4.
+  group marker, wire type 3 or 4, or the invalid wire type 6 or 7.
 
 The two entry points differ in what a caller sees. The core
 `decodeFields?` reports `Pb.Error`, so a caller can match the wire
@@ -144,6 +148,75 @@ type, and each maps it into `Core.Error` once, at its own seam (§3.5).
   (the spike's Identify case runs 5, 6, 1, 2, 2, 4, 3, 3), so a
   re-encode stays byte-exact at every layer. The earlier root wording,
   "tag order", was amended at the root, and this document follows it.
+
+## Wire bounds and message boundaries
+
+`Entry.Valid` requires `0 < fieldNumber < 2^29`. This follows the
+[protobuf field-number range](https://protobuf.dev/programming-guides/proto3/#assigning-field-numbers)
+and the uint32 tag in the
+[wire encoding reference](https://protobuf.dev/programming-guides/encoding/#condensed-reference-card).
+The spike's broader arithmetic bound also allowed field zero. These
+checks reject those invalid tags. The raw wire codec preserves unknown
+numbers, including numbers reserved by a particular message schema.
+Schema validation belongs to the message table.
+
+`Value.Valid` requires a varint below `2^63`, a fixed64 below `2^64`,
+and a fixed32 below `2^32`. Length-delimited values carry a length below
+`2^63` and payload entries below 256. The minimal, nine-byte varint
+policy comes from root §4.3. This package does not implement the full
+ten-byte protobuf uint64 range or signed scalar conversions.
+
+The caller supplies one externally framed message. The decoder consumes
+the complete buffer, so a successful model result has an empty suffix.
+The production result reports the full buffer size. Concatenated field
+encodings form one message; this codec cannot infer a boundary between
+two messages.
+
+The production decoder walks the `ByteArray` with a cursor. It gives
+the varint dependency a window bounded by that dependency's byte budget.
+It checks payload lengths against the available bytes before extraction.
+A peer cannot cause an allocation from a promised length alone.
+
+`getSub?` returns the last payload as specified by this package's
+singular-lookup contract. It does not merge embedded messages. A typed
+consumer that needs protobuf message-merge behavior can use
+`getAllBytes` and apply its schema rules.
+
+## Proof boundary and temporary dependencies
+
+W1.2 (#2) and W2.1 (#3) are open. The implementation uses
+`Proto/Mock/Bytes.lean` and `Proto/Mock/Varint.lean` under the
+`Pb.Mock` namespace, as permitted by `RULES.md`. They import no real
+dependency package. Their opaque functions have executable bodies so
+the vector tests can run.
+
+The byte mock supplies the documented classes, conversions, error type,
+and a temporary generic harness. The class member names and harness
+arguments remain local until W1.2 supplies its concrete declarations.
+The protobuf instances prove both class laws from the core theorems.
+
+The varint mock assumes four dependency facts:
+
+- `Pb.Mock.Varint.decodeEncodeSuffix`: encoding a bounded integer
+  decodes with an arbitrary suffix untouched.
+- `Pb.Mock.Varint.encodeDecode`: successful decoding splits the input
+  into the encoded value and its suffix.
+- `Pb.Mock.Varint.encodeNonempty`: every encoding contains a byte.
+- `Pb.Mock.Varint.encodeBytes`: every emitted model entry is below 256.
+
+The protobuf layer adds no axioms of its own. Its main theorems are
+`decodeEncode`, `encodeDecode`, `encodeInjective`, and `encodeFieldsBytes`.
+`lookupLastAppend` proves the last-occurrence lookup rule. The proofs
+use the Lean kernel and the listed dependency facts. Tests compare the
+production decoder with the model; that comparison is not a theorem.
+
+This package can be reviewed with the mocks. It can merge after both
+dependencies merge and the mocks disappear. Integration replaces the
+mock imports and harness, maps the concrete dependency names, and proves
+the four assumed facts from the dependency's theorems. It then reruns
+the build, both test modes, the import lint, and the axiom audit.
+`RULES.md` gives this integration a twelve-hour window after the last
+dependency merges.
 
 ## What the package must not depend on
 

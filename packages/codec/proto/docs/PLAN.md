@@ -18,6 +18,20 @@ lint is green.
 Unit 0 is done. Unit 1 is the only implementation unit of the
 package.
 
+Unit 1 has an implementation and proofs against isolated dependency
+mocks. The local suite includes the four wire types, boundary values,
+2,048 small fields, ordered duplicates, nested messages, UTF-8 checks,
+malformed framing, and the captured fixtures. It runs the generic mock
+harness on 256 generated messages and compares both decoders on all
+256 single-byte inputs and 4,096 generated buffers. Fixture prefixes
+exercise valid field boundaries and truncated values.
+
+Completion still requires W1.2 and W2.1. Replace the mocks and the
+temporary harness with those dependencies, discharge the listed mock
+axioms, and rerun all gates within twelve hours of the last merge.
+The architecture document lists the four assumptions and the API
+mapping needed at integration.
+
 ## Consumers
 
 Root W2.2 feeds everything above that carries a protobuf message (root
