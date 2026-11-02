@@ -10,6 +10,9 @@ hardening rules of `docs/ARCHITECTURE.md` §4.8. The package reads the
 spec through `net/streams` and knows nothing above its own group (§2).
 -/
 
+set_option autoImplicit false
+
+
 namespace Yamux
 
 /-- The frame header is 12 bytes: version (8 bits), type (8 bits), flags

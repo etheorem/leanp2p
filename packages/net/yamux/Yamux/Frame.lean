@@ -16,6 +16,9 @@ error when the bytes already present violate the specification. A short
 input is never an error (ARCHITECTURE §3.5).
 -/
 
+set_option autoImplicit false
+
+
 namespace Yamux
 
 /-- One yamux unit on the wire. -/

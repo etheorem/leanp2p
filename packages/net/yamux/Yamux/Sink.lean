@@ -18,6 +18,9 @@ is the asynchronous driver; this layer stays small enough to read in
 one sitting.
 -/
 
+set_option autoImplicit false
+
+
 namespace Yamux
 
 /-- The effects one action asks for. -/

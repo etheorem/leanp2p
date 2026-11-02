@@ -13,6 +13,9 @@ A short input is not an error. `Frame.parse?` answers `none` for it and
 the reader waits for more bytes.
 -/
 
+set_option autoImplicit false
+
+
 namespace Yamux
 
 /-- Why the session tore the connection down. -/

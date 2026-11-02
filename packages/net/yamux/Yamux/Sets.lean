@@ -19,6 +19,9 @@ bit arithmetic happens once, in the `Yamux.Mock.Bytes.Codec` instance below, and
 every other module reads the `Bool` fields.
 -/
 
+set_option autoImplicit false
+
+
 namespace Yamux
 
 /-! ## The frame type -/

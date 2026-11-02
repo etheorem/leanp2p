@@ -24,6 +24,9 @@ The connection and the stream come from `Yamux.Mock.Streams` until W4.1
 merges; the swap is one import and one namespace.
 -/
 
+set_option autoImplicit false
+
+
 namespace Yamux
 
 open Conc
@@ -97,7 +100,12 @@ def perform (s : Session) : Action → Async Unit
       | none => pure ()
   | .close => s.conn.close
 
-/-- The loop: one event at a time, one `step`, then the actions. -/
+/-- The loop: one event at a time, one `step`, then the actions.
+
+The definition is `partial` because the channel has no promised end: it
+ends when `close` closes it, and the recursion follows the events, not a
+measure. It is the loop the package doc names as its one `partial def`
+for the core (§3.3). -/
 partial def pump (s : Session) : Async Unit := do
   match ← Chan.recv s.events with
   | none => pure ()
@@ -113,7 +121,12 @@ partial def pump (s : Session) : Async Unit := do
 
 /-- The reader: bytes off the connection become one `bytes` event. A
 closed connection ends the reader, and the loop keeps its own channel,
-so a close of one side wakes the other. -/
+so a close of one side wakes the other.
+
+The definition is `partial` for the same reason as the loop: the
+connection promises no end, and a closed one ends the recursion with
+`none`. PRINCIPLES 1.8 records the IO read loops as the standing
+precedent. -/
 partial def reader (s : Session) : Async Unit := do
   match ← s.conn.read with
   | none => pure ()

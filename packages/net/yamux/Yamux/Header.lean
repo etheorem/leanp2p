@@ -21,6 +21,9 @@ so an input that decodes is spelled the way the encoder spells it. That
 spelling rule is what makes the second law, `encodeDecode`, true.
 -/
 
+set_option autoImplicit false
+
+
 namespace Yamux
 
 /-! ## 32-bit words -/
@@ -229,16 +232,19 @@ def AllBytes (l : List Nat) : Prop := ∀ b ∈ l, b < 256
 
 namespace AllBytes
 
+/-- The empty list is a byte list. -/
 theorem nil : AllBytes [] := by
   intro b hb
   cases hb
 
+/-- A byte in front of a byte list keeps it a byte list. -/
 theorem cons {x : Nat} {l : List Nat} (hx : x < 256) (hl : AllBytes l) : AllBytes (x :: l) := by
   intro b hb
   rcases List.mem_cons.mp hb with rfl | hb
   · exact hx
   · exact hl b hb
 
+/-- Two byte lists appended are a byte list. -/
 theorem append {l1 l2 : List Nat} (h1 : AllBytes l1) (h2 : AllBytes l2) :
     AllBytes (l1 ++ l2) := by
   intro b hb

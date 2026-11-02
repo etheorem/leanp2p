@@ -15,6 +15,9 @@ the import and the namespace move to `Streams` and this module goes
 away; the ledger on issue #25 records that connection.
 -/
 
+set_option autoImplicit false
+
+
 namespace Yamux.Mock.Streams
 
 /-- The monad of the operations that can park. -/

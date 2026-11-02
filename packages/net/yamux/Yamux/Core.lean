@@ -29,6 +29,9 @@ The loop that drives this core and the session that serves `Stream`
 values live in the modules above (ARCHITECTURE §3.3).
 -/
 
+set_option autoImplicit false
+
+
 namespace Yamux
 
 /-- Which side of the session this endpoint is. The client opens odd

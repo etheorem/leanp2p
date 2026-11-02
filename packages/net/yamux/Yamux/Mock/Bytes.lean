@@ -14,6 +14,9 @@ When W1.2 merges, the import and the namespace move to `Bytes` and this
 module goes away. The ledger on issue #25 records that connection.
 -/
 
+set_option autoImplicit false
+
+
 namespace Yamux.Mock.Bytes
 
 /-- Why a decoder refused a byte sequence. -/
