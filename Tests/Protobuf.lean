@@ -22,22 +22,28 @@ private def checked (entries : List Entry) : IO Fields :=
   | .ok fs => pure fs
   | .error e => throw <| IO.userError s!"invalid protobuf test fields: {repr e}"
 
+/-- A model byte list as a production-path fixture. -/
 private def bytes (bs : List Nat) : ByteArray := Pb.Mock.Bytes.ofNatList bs
 
+/-- The production decoder reports through the coarse codec error. -/
 private def production (bs : ByteArray) : Except Pb.Mock.Bytes.DecodeError (Fields × Nat) :=
   (decodeFieldsB? bs).mapError Error.toDecodeError
 
+/-- The model pin for one arbitrary buffer, valid or hostile. -/
 private def pin (bs : ByteArray) : Bool :=
   Pb.Mock.Bytes.productionAgrees production bs
 
+/-- The generic codec harness over one sample. -/
 private def roundtrip (fs : Fields) : Bool :=
   Pb.Mock.Bytes.checkCodec production [fs]
 
+/-- The model decoder reports exactly the expected error. -/
 private def modelError (input : List Nat) (expected : Error) : Bool :=
   match decodeFields? input with
   | .error e => e == expected
   | .ok _ => false
 
+/-- The production decoder reports exactly the expected error. -/
 private def byteError (input : List Nat) (expected : Error) : Bool :=
   match decodeFieldsB? (bytes input) with
   | .error e => e == expected
@@ -94,6 +100,7 @@ private instance : ProtoMessage Counter where
 /-- The theorem can be applied to any bounded message, with no native certificate. -/
 example (fs : Fields) : decodeFields? (encodeFields fs) = .ok (fs, []) := decodeEncode fs
 
+/-- Every emitted model entry is a byte. -/
 example (fs : Fields) : ∀ b ∈ encodeFields fs, b < 256 := encodeFieldsBytes fs
 
 def run (r : Runner) : IO Unit := do
