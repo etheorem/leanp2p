@@ -18,8 +18,9 @@ libp2p `Muxer` value that assigns the `/yamux/1.0.0` id lives above, in
 | `Yamux/Header.lean` | the `Header` type with the `Codec` and `LawfulCodec` instances (§3.2); the 12-byte layout is stated once, here |
 | `Yamux/Sets.lean` | the closed sets of §3.4: `FrameType` and `GoAwayCode` with `toCode`/`ofCode?` and the round-trip theorem, and `Flags` as a `Bool` structure |
 | `Yamux/Core.lean` | `State`, `Event`, `Action`, `ProtocolError`, the total `step`, and the invariant theorems |
-| `Yamux/Loop.lean` | the loop task: the bounded `Chan Event`, the reader task, the action performance, and the tag-to-promise map |
-| `Yamux/Session.lean` | the session entry over `Connection`; it serves `Stream` values |
+| `Yamux/Sink.lean` | the effects one action asks for, as a seam: write a frame, deliver, accept, answer a tag, tear down |
+| `Yamux/Session.lean` | the shell: the loop task, the reader task, the tag table, the per-stream inboxes, and the entry over `Connection`. The loop is one function, so it lives beside the session that owns it |
+
 
 All declarations live in the `Yamux` namespace, and the root module
 re-exports the public submodules. The spike module `Conn/Yamux.lean`
