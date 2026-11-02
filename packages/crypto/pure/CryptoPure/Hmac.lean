@@ -58,15 +58,27 @@ theorem lengthNormKey {hash : List Nat → List Nat} {blockSize : Nat}
   · simp
     omega
 
+/-- A key longer than the block gives the same MAC as its hash.
+The hash output must fit in one block (RFC 2104 §2). -/
+theorem hmacLongKey {hash : List Nat → List Nat} {blockSize : Nat}
+    (hfit : ∀ m, (hash m).length ≤ blockSize) {key : List Nat}
+    (hlong : blockSize < key.length) (msg : List Nat) :
+    hmac hash blockSize key msg = hmac hash blockSize (hash key) msg := by
+  have hfk := hfit key
+  simp only [hmac, normKey, show key.length > blockSize from hlong,
+    show ¬ (hash key).length > blockSize by omega, ite_true, ite_false]
+
 /-- The MAC has the length of the hash output. -/
 theorem lengthHmac {hash : List Nat → List Nat} {n : Nat}
     (hlen : ∀ m, (hash m).length = n) (blockSize : Nat) (key msg : List Nat) :
     (hmac hash blockSize key msg).length = n :=
   hlen _
 
+/-- HMAC-SHA-256 gives 32 bytes. -/
 theorem lengthSha256 (key msg : List Nat) : (sha256 key msg).length = Sha256.digestSize :=
   lengthHmac Sha256.lengthDigest _ key msg
 
+/-- HMAC-SHA-512 gives 64 bytes. -/
 theorem lengthSha512 (key msg : List Nat) : (sha512 key msg).length = Sha512.digestSize :=
   lengthHmac Sha512.lengthDigest _ key msg
 
@@ -81,5 +93,10 @@ example (key msg : List Nat) :
 /-- A SHA-256 key always normalizes to one 64-byte block. -/
 example (key : List Nat) : (normKey Sha256.digest Sha256.blockSize key).length = 64 :=
   lengthNormKey (fun m => by rw [Sha256.lengthDigest]; decide) key
+
+/-- A long SHA-256 key can be hashed before calling HMAC. -/
+example {key : List Nat} (hlong : 64 < key.length) (msg : List Nat) :
+    sha256 key msg = sha256 (Sha256.digest key) msg :=
+  hmacLongKey (fun m => by rw [Sha256.lengthDigest]; decide) hlong msg
 
 end CryptoPure.Hmac

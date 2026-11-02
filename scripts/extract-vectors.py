@@ -764,9 +764,8 @@ def extract_peer_keys() -> None:
 
 
 # RFC-embedded vectors: the RFC texts are not vendored; the vectors below
-# are the well-known published ones, transcribed once here. The suites
-# cross-check every one of these primitives against OpenSSL at runtime, so
-# a transcription error cannot go unnoticed.
+# are the published ones, transcribed once here. W3.3 adds the runtime
+# cross-check against the production path.
 
 RFC_SHA512 = [
     {"name": "empty", "inputHex": "", "digestHex":
@@ -792,6 +791,49 @@ RFC_HMAC_SHA256 = [
     {"name": "RFC 4231 TC2", "keyHex": "4a656665",
      "dataHex": "7768617420646f2079612077616e7420666f72206e6f7468696e673f",
      "macHex": "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"},
+]
+
+# RFC 4231 sections 4.7 and 4.8. Each 131-byte key is longer than both
+# hash block sizes. TC7's message is longer than both blocks too.
+RFC_HMAC_LONG_KEYS = [
+    {"name": "RFC 4231 TC6", "keyHex": "aa" * 131,
+     "dataHex": "54657374205573696e67204c6172676572"
+                "205468616e20426c6f636b2d53697a6520"
+                "4b6579202d2048617368204b6579204669727374",
+     "sha256Hex": "60e431591ee0b67f0d8a26aacbf5b77f8"
+                  "e0bc6213728c5140546040f0ee37f54",
+     "sha512Hex": "80b24263c7c1a3ebb71493c1dd7be8b4"
+                  "9b46d1f41b4aeec1121b013783f8f352"
+                  "6b56d037e05f2598bd0fd2215d6a1e52"
+                  "95e64f73f63f0aec8b915a985d786598"},
+    {"name": "RFC 4231 TC7", "keyHex": "aa" * 131,
+     "dataHex": "54686973206973206120746573742075"
+                "73696e672061206c6172676572207468"
+                "616e20626c6f636b2d73697a65206b65"
+                "7920616e642061206c61726765722074"
+                "68616e20626c6f636b2d73697a652064"
+                "6174612e20546865206b6579206e6565"
+                "647320746f2062652068617368656420"
+                "6265666f7265206265696e6720757365"
+                "642062792074686520484d414320616c"
+                "676f726974686d2e",
+     "sha256Hex": "9b09ffa71b942fcb27635fbcd5b0e944"
+                  "bfdc63644f0713938a7f51535c3a35e2",
+     "sha512Hex": "e37b6a775dc87dbaa4dfa9f96e5e3ffd"
+                  "debd71f8867289865df5a32d20cdc944"
+                  "b6022cac3c4982b10d5eeb55c3e4de15"
+                  "134676fb6de0446065c97440fa8c6a58"},
+]
+
+RFC_HMAC_SHA256.extend(
+    {"name": e["name"], "keyHex": e["keyHex"], "dataHex": e["dataHex"],
+     "macHex": e["sha256Hex"]}
+    for e in RFC_HMAC_LONG_KEYS
+)
+RFC_HMAC_SHA512 = [
+    {"name": e["name"], "keyHex": e["keyHex"], "dataHex": e["dataHex"],
+     "macHex": e["sha512Hex"]}
+    for e in RFC_HMAC_LONG_KEYS
 ]
 
 RFC_HKDF_SHA256 = [
@@ -849,15 +891,17 @@ def extract_rfc_crypto() -> None:
         "_provenance": {
             "repo": "https://www.rfc-editor.org (RFC 4634/FIPS 180-4 vectors; "
                     "RFC 4231; RFC 5869)",
-            "path": "RFC 4231 (HMAC-SHA256 TC1/TC2), RFC 5869 (HKDF-SHA256 "
+            "path": "RFC 4231 (HMAC-SHA256 TC1/TC2/TC6/TC7; HMAC-SHA512 TC6/TC7), "
+                    "RFC 5869 (HKDF-SHA256 "
                     "TC1/TC3), FIPS 180-4 examples (SHA-512)",
             "upstreamTest": "published RFC test vectors",
             "extractedBy": "embedded in scripts/extract-vectors.py (RFC texts "
-                           "not vendored); every primitive is cross-checked "
-                           "against OpenSSL at runtime",
+                           "not vendored); production-path cross-checks "
+                           "follow in W3.3",
         },
         "sha512": RFC_SHA512,
         "hmacSha256": RFC_HMAC_SHA256,
+        "hmacSha512": RFC_HMAC_SHA512,
         "hkdfSha256": RFC_HKDF_SHA256,
     })
     write_json("keys-rfc8032.json", {

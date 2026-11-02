@@ -4,22 +4,25 @@ import CryptoPure
 /-!
 # Hash, HMAC, and HKDF suite
 
-Mirrors `hashes-rfc.json`: the FIPS 180-4 SHA-512 examples, RFC 4231
-HMAC-SHA-256 TC1 and TC2, and RFC 5869 HKDF-SHA-256 TC1 and TC3. Two
-more anchors sit beside it. The `sha1` and `sha2-256` cases of
-`multihash-examples.json` carry digest bytes after a two-byte multihash
-prefix, and the suite checks those bytes. The NIST SHA-256 examples
-stay inline, as in the spike, because NIST publishes them outside any
-vendored repository.
+Mirrors `hashes-rfc.json`: the FIPS 180-4 SHA-512 examples and the HMAC
+and HKDF vectors. RFC 4231 TC6 and TC7 check long keys with SHA-256 and
+SHA-512. The SHA-256 cases also include TC1 and TC2. HKDF-SHA-256 uses
+RFC 5869 TC1 and TC3. Two more anchors sit beside them.
+The `sha1` and `sha2-256` cases of `multihash-examples.json` carry
+digest bytes after a two-byte multihash prefix. The suite checks those
+bytes. The NIST SHA-256 examples and the SHA-1 `abc` example stay
+inline, outside the vendored corpus.
 
 The sweeps are this package's own tests. Each length checks the model
 pin of `digestB` and the digest size. The W3.3 cross-check runs the same
 lists through the production path, so the lists are named values.
 -/
 
-open CryptoPure
+set_option autoImplicit false
 
 namespace Tests
+
+open CryptoPure
 
 /-- A deterministic test buffer of `n` bytes: byte `i` is `i * mult mod 256`. -/
 def Hashes.pattern (n mult : Nat) : List Nat :=
@@ -54,9 +57,11 @@ private def pinHolds (digest : List Nat → List Nat) (digestB : ByteArray → B
   let viaModel := Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg))
   digestB msg == viaModel && (digestB msg).size == size
 
+/-- Runs the suite: the vector families of `hashes-rfc.json`, the HKDF
+cap, the NIST and multihash anchors, and the sweeps. -/
 def Hashes.run (r : Runner) : IO Unit := do
   r.section "hashes" "hashes-rfc.json (FIPS 180-4, RFC 4231, RFC 5869); \
-multihash-examples.json (sha1, sha2-256); NIST SHA-256 examples"
+multihash-examples.json (sha1, sha2-256); NIST SHA-256/SHA-1 examples"
 
   let file := "hashes-rfc.json"
   let j ← loadJson file
@@ -66,10 +71,13 @@ multihash-examples.json (sha1, sha2-256); NIST SHA-256 examples"
     r.check s!"sha512 {name}"
       (Sha512.digest (← hexField file e "inputHex") == (← hexField file e "digestHex"))
 
-  for e in (← jArr file j "hmacSha256") do
-    let name ← jStr file e "name"
-    let mac := Hmac.sha256 (← hexField file e "keyHex") (← hexField file e "dataHex")
-    r.check s!"hmac-sha256 {name}" (mac == (← hexField file e "macHex"))
+  let hmacFamilies : List (String × (List Nat → List Nat → List Nat)) :=
+    [("hmacSha256", Hmac.sha256), ("hmacSha512", Hmac.sha512)]
+  for (family, hmac) in hmacFamilies do
+    for e in (← jArr file j family) do
+      let name ← jStr file e "name"
+      let mac := hmac (← hexField file e "keyHex") (← hexField file e "dataHex")
+      r.check s!"{family} {name}" (mac == (← hexField file e "macHex"))
 
   for e in (← jArr file j "hkdfSha256") do
     let name ← jStr file e "name"
@@ -91,15 +99,18 @@ multihash-examples.json (sha1, sha2-256); NIST SHA-256 examples"
   r.check "hkdf-sha256 expand past the cap is none"
     (Hkdf.expandSha256 prk [] 8161 == none)
 
-  let nist : List (String × String) :=
-    [("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-     ("abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
-     ("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
-       "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")]
-  for (msg, want) in nist do
+  let nist : List (String × (List Nat → List Nat) × String × String) :=
+    [("sha256", Sha256.digest, "",
+       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+     ("sha256", Sha256.digest, "abc",
+       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+     ("sha256", Sha256.digest, "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+       "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"),
+     ("sha1", Sha1.digest, "abc", "a9993e364706816aba3e25717850c26c9cd0d89d")]
+  for (alg, digest, msg, want) in nist do
     let wantBytes := (Mock.Bytes.ofHex? want).map Mock.Bytes.toNatList
-    r.check s!"sha256 nist \"{msg}\""
-      (some (Sha256.digest (Mock.Bytes.toNatList (Mock.Bytes.ofString msg))) == wantBytes)
+    r.check s!"{alg} nist \"{msg}\""
+      (some (digest (Mock.Bytes.toNatList (Mock.Bytes.ofString msg))) == wantBytes)
 
   -- The multihash value is the code byte, the length byte, then the digest.
   let mhFile := "multihash-examples.json"

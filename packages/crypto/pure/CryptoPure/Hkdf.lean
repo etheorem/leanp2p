@@ -78,6 +78,7 @@ theorem blocksSucc (hash : List Nat → List Nat) (blockSize : Nat) (prk info pr
 section
 variable {hash : List Nat → List Nat} {hashLen : Nat}
 
+/-- `count` output blocks hold `count × HashLen` bytes. -/
 theorem lengthBlocks (hlen : ∀ m, (hash m).length = hashLen) (blockSize : Nat)
     (prk info prev : List Nat) (i count : Nat) :
     (blocks hash blockSize prk info prev i count).length = count * hashLen := by
@@ -100,15 +101,20 @@ theorem blocksPrefix (blockSize : Nat) (prk info prev : List Nat) (i count extra
     simp only [blocks]
     exact (List.prefix_append_right_inj _).mpr (ih _ _)
 
-/-- `l` bytes fit in `⌈l / n⌉` blocks of `n` bytes. -/
-private theorem leDivCeilMul {l n : Nat} (hpos : 0 < n) : l ≤ (l + n - 1) / n * n := by
-  have hdm := Nat.div_add_mod (l + n - 1) n
-  have hmod := Nat.mod_lt (l + n - 1) hpos
-  generalize (l + n - 1) / n = q at *
-  generalize (l + n - 1) % n = r at *
-  rw [Nat.mul_comm] at hdm
-  generalize q * n = p at *
-  omega
+/-- A request under the cap fits in its rounded-up block count.
+For a zero-length hash, the cap permits only an empty request. -/
+private theorem leDivCeilMul {l n : Nat} (hcap : l ≤ maxBlocks * n) :
+    l ≤ (l + n - 1) / n * n := by
+  rcases Nat.eq_zero_or_pos n with h0 | hpos
+  · subst n
+    simp_all
+  · have hdm := Nat.div_add_mod (l + n - 1) n
+    have hmod := Nat.mod_lt (l + n - 1) hpos
+    generalize (l + n - 1) / n = q at *
+    generalize (l + n - 1) % n = r at *
+    rw [Nat.mul_comm] at hdm
+    generalize q * n = p at *
+    omega
 
 /-- `expand` fails exactly past the cap of RFC 5869 §2.3. -/
 theorem expandEqNoneIff (blockSize : Nat) (prk info : List Nat) (l : Nat) :
@@ -125,12 +131,8 @@ theorem lengthExpand (hlen : ∀ m, (hash m).length = hashLen) (blockSize : Nat)
   · simp only [Option.some.injEq] at h
     subst h
     rw [List.length_take, lengthBlocks hlen]
-    rcases Nat.eq_zero_or_pos hashLen with h0 | hpos
-    · -- A zero-length hash leaves no room under the cap: `l` is 0.
-      subst h0
-      omega
-    · have := leDivCeilMul (l := l) hpos
-      omega
+    have := leDivCeilMul (l := l) (n := hashLen) (by assumption)
+    omega
   · simp at h
 
 /-- A shorter output is a prefix of a longer one: asking for fewer
@@ -152,10 +154,7 @@ theorem expandPrefix (hlen : ∀ m, (hash m).length = hashLen) (blockSize : Nat)
   rw [List.prefix_iff_eq_take] at hpre
   have hl₁ : l₁ ≤ (blocks hash blockSize prk info [] 1 ((l₁ + hashLen - 1) / hashLen)).length := by
     rw [lengthBlocks hlen]
-    rcases Nat.eq_zero_or_pos hashLen with h0 | hpos
-    · subst h0
-      omega
-    · exact leDivCeilMul hpos
+    exact leDivCeilMul (by assumption)
   generalize blocks hash blockSize prk info [] 1 ((l₁ + hashLen - 1) / hashLen) = A at hpre hl₁ ⊢
   generalize blocks hash blockSize prk info [] 1 ((l₁ + hashLen - 1) / hashLen + extra) = B
     at hpre ⊢

@@ -39,6 +39,14 @@ def be32 (bs : List Nat) : UInt32 :=
 def be64 (bs : List Nat) : UInt64 :=
   (ofBeBytes (bs.take 8)).toUInt64
 
+/-- The sixteen big-endian words of a SHA-1 or SHA-256 input block. -/
+def words32 (block : List Nat) : Array UInt32 :=
+  ((List.range 16).map fun t => be32 (block.drop (4 * t))).toArray
+
+/-- The sixteen big-endian words of a SHA-512 input block. -/
+def words64 (block : List Nat) : Array UInt64 :=
+  ((List.range 16).map fun t => be64 (block.drop (8 * t))).toArray
+
 /-- The four bytes of a 32-bit word, big-endian. -/
 def word32Bytes (w : UInt32) : List Nat :=
   beBytes 4 w.toNat
@@ -47,11 +55,13 @@ def word32Bytes (w : UInt32) : List Nat :=
 def word64Bytes (w : UInt64) : List Nat :=
   beBytes 8 w.toNat
 
+/-- `beBytes n x` has exactly `n` bytes. -/
 theorem lengthBeBytes (n x : Nat) : (beBytes n x).length = n := by
   induction n generalizing x with
   | zero => rfl
   | succ n ih => simp [beBytes, ih]
 
+/-- Every entry of `beBytes n x` is a byte, below 256. -/
 theorem ltOfMemBeBytes (n x : Nat) : ∀ b ∈ beBytes n x, b < 256 := by
   induction n generalizing x with
   | zero => simp [beBytes]
@@ -62,6 +72,7 @@ theorem ltOfMemBeBytes (n x : Nat) : ∀ b ∈ beBytes n x, b < 256 := by
     · exact ih (x / 256) b hb
     · omega
 
+/-- One more byte shifts the value up by a byte and adds the new byte. -/
 theorem ofBeBytesAppendSingleton (bs : List Nat) (b : Nat) :
     ofBeBytes (bs ++ [b]) = ofBeBytes bs * 256 + b := by
   simp [ofBeBytes, List.foldl_append]
@@ -75,9 +86,11 @@ theorem ofBeBytesBeBytes (n x : Nat) : ofBeBytes (beBytes n x) = x % 256 ^ n := 
     generalize x / 256 % 256 ^ n = y
     omega
 
+/-- A 32-bit word writes four bytes. -/
 theorem lengthWord32Bytes (w : UInt32) : (word32Bytes w).length = 4 :=
   lengthBeBytes 4 w.toNat
 
+/-- A 64-bit word writes eight bytes. -/
 theorem lengthWord64Bytes (w : UInt64) : (word64Bytes w).length = 8 :=
   lengthBeBytes 8 w.toNat
 
@@ -103,12 +116,15 @@ def pad (blockSize lengthBytes : Nat) (msg : List Nat) : List Nat :=
   msg ++ [0x80] ++ List.replicate (zeroCount blockSize lengthBytes msg.length) 0 ++
     beBytes lengthBytes (8 * msg.length)
 
+/-- The padded length: the message, the `0x80` byte, the zero run, and
+the length field. -/
 theorem lengthPad (blockSize lengthBytes : Nat) (msg : List Nat) :
     (pad blockSize lengthBytes msg).length =
       msg.length + 1 + zeroCount blockSize lengthBytes msg.length + lengthBytes := by
   simp [pad, lengthBeBytes]
   omega
 
+/-- The zero run is shorter than one block. -/
 theorem zeroCountLt {blockSize : Nat} (h : 0 < blockSize) (lengthBytes len : Nat) :
     zeroCount blockSize lengthBytes len < blockSize :=
   Nat.mod_lt _ h

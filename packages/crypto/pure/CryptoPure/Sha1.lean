@@ -35,7 +35,7 @@ def f (t : Nat) (x y z : UInt32) : UInt32 :=
 /-- The message schedule W₀ … W₇₉ of one block (FIPS 180-4 §6.1.2,
 step 1). Entry `t` reads only entries below `t`. -/
 def schedule (block : List Nat) : Array UInt32 :=
-  let w := ((List.range 16).map fun t => be32 (block.drop (4 * t))).toArray
+  let w := words32 block
   (List.range 64).foldl (fun w i =>
     let t := i + 16
     w.push (rotl (w.getD (t - 3) 0 ^^^ w.getD (t - 8) 0 ^^^
@@ -64,6 +64,8 @@ def digest (msg : List Nat) : List Nat :=
 def digestB (msg : ByteArray) : ByteArray :=
   Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg))
 
+/-- The `ByteArray` form is the model digest between the two
+conversions, by definition. -/
 theorem digestBEq (msg : ByteArray) :
     digestB msg = Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg)) :=
   rfl
@@ -72,14 +74,16 @@ theorem digestBEq (msg : ByteArray) :
 theorem lengthDigest (msg : List Nat) : (digest msg).length = digestSize := by
   simp [digest, List.length_flatMap, lengthWord32Bytes, List.map_const', digestSize]
 
-/-- Every block the compression reads is a full 64 bytes. -/
-theorem lengthOfMemBlocks (msg : List Nat) :
-    ∀ b ∈ blocks blockSize (pad blockSize lengthBytes msg), b.length = blockSize :=
-  lengthOfMemBlocksPad (by decide) lengthBytes msg
+/-- Every digest entry fits in a byte. -/
+theorem ltOfMemDigest (msg : List Nat) : ∀ b ∈ digest msg, b < 256 := by
+  intro b hb
+  simp only [digest, List.mem_flatMap] at hb
+  obtain ⟨w, _, hw⟩ := hb
+  exact ltOfMemBeBytes 4 w.toNat b hw
 
--- FIPS 180-4 example: SHA-1("abc"). The build evaluates this.
-#guard digest [0x61, 0x62, 0x63] ==
-  [0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e,
-   0x25, 0x71, 0x78, 0x50, 0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d]
+/-- Converting a digest entry to `UInt8` preserves its value. -/
+example (msg : List Nat) (b : Nat) (hb : b ∈ digest msg) :
+    (UInt8.ofNat b).toNat = b := by
+  simp [Nat.mod_eq_of_lt (ltOfMemDigest msg b hb)]
 
 end CryptoPure.Sha1

@@ -22,11 +22,11 @@ none does today. The constant-time code stays in the C shim of
 |---|---|
 | `CryptoPure.lean` | the root module; one import line per public submodule |
 | `CryptoPure/Constants.lean` | the block, length-field, and digest sizes, the round constants, and the initial states (the `K` and `H0` tables of FIPS 180-4), the HMAC pads, and the HKDF block cap; one canonical home per fact (§3.8; PRINCIPLES 1.5) |
-| `CryptoPure/Preprocess.lean` | the padding and the block split of FIPS 180-4 §5, stated once over the block size and the length-field width, and the big-endian word conversions of §3.1, with their theorems |
+| `CryptoPure/Preprocess.lean` | the padding and the block split of FIPS 180-4 §5, the word parsing and big-endian conversions of §3.1, and their theorems |
 | `CryptoPure/Sha256.lean` | the round functions, the message schedule, the compression, and the digest, over the model and over `ByteArray` |
 | `CryptoPure/Sha512.lean` | the same shape over `UInt64` words and 128-byte blocks |
 | `CryptoPure/Sha1.lean` | the 160-bit digest in the shape of SHA-256, for the multihash framing (see "Decisions") |
-| `CryptoPure/Hmac.lean` | key normalization and `hmac` over the hash and block size given as arguments, and the SHA-256 and SHA-512 instances, with the reduction and length theorems |
+| `CryptoPure/Hmac.lean` | key normalization and `hmac` over the hash and block size given as arguments, and the SHA-256 and SHA-512 instances, with reduction, long-key, and length theorems |
 | `CryptoPure/Hkdf.lean` | `extract` and `expand` over HMAC, and the SHA-256 instances, with the reduction, length, and prefix theorems |
 | `CryptoPure/Mock/Bytes.lean` | temporary: the four `base/bytes` conversions this package and its suite use, until W1.2 merges (see "Working ahead of W1.2") |
 
@@ -41,6 +41,10 @@ nothing of its own. The constants move into
 `CryptoPure/Constants.lean`, and the padding moves into
 `CryptoPure/Preprocess.lean`, so the padding rule and the three block
 sizes each have one home.
+
+The three hashes share `Preprocess.words32` and `words64` to read their
+input words. Each hash holds its state as a `Vector` of words, so the
+state size is part of the type.
 
 All declarations live in the `CryptoPure` namespace. The name avoids
 the collision with Lean's standard `Pure` typeclass, which a bare
@@ -74,10 +78,9 @@ The names are the root names (§7, row 6): digests, HMAC, HKDF.
   once, in its own package, and W3.3 maps the pure `none` to the error
   the backend reports for the same request.
 - `Hmac.sha256`, `Hmac.sha512`, `Hkdf.extractSha256`, and
-  `Hkdf.expandSha256` fix the hash for the callers that need one. The
-  current HMAC and HKDF vector families use SHA-256.
-- Each hash holds its state as a `Vector` of words, so the state size
-  is part of the type.
+  `Hkdf.expandSha256` fix the hash for the callers that need one.
+  The HMAC vectors cover SHA-256 and SHA-512. The HKDF vectors use
+  SHA-256.
 
 Callers do not import this package. They import the `Crypto` facade
 (§3.6), which names the production implementation of every primitive
@@ -100,9 +103,10 @@ comparison needs a total function on this side.
    `(Sha256.digest m).length = 32`, and the 64 and 20 cases for
    SHA-512 and SHA-1. With the reductions, all five primitives carry a
    theorem. The spike carried no Lean theorem over these pure
-   implementations; it validated them through the vector suites and the
-   OpenSSL cross-check. §4.6 demands theorems behind the code, and these are
-   the ones the constructions carry (§4 preamble; PRINCIPLES 5.1).
+   implementations. It validated them through the vector suites and
+   the OpenSSL cross-check. §4.6 demands theorems behind the code.
+   These are the ones the constructions carry (§4 preamble;
+   PRINCIPLES 5.1).
    The spike proved no streaming or chunking theorem either; its
    digests have one form, and the size sweep covers the padding
    boundaries as behavior, so that check stays a test.
@@ -110,10 +114,17 @@ comparison needs a total function on this side.
    padded length is a whole number of blocks, no shorter zero run
    reaches a block boundary, the message is a prefix, `0x80` follows
    it, and the last field reads back as the bit length modulo
-   `2 ^ (8 × width)`. Every block the compression reads is full. HMAC
-   has its key-block and output lengths. HKDF-Expand returns exactly
-   `L` bytes under the cap, `none` past it, and a prefix of every
-   longer output.
+   `2 ^ (8 × width)`. `Preprocess.lengthOfMemBlocksPad` proves that
+   every block of a padded message is full. Each hash also proves
+   that every digest entry is below 256. The conversion to bytes
+   therefore preserves each entry.
+   HMAC has its key-block and output lengths. `Hmac.hmacLongKey`
+   proves that a long key gives the same MAC as its hash, when the
+   hash output fits in a block. This is a structural property. RFC
+   4231 TC6 and TC7 separately check the expected MAC bytes.
+   HKDF-Expand returns exactly `L` bytes under the cap and `none`
+   past it. A successful shorter output is a prefix of a successful
+   longer output for the same inputs.
 2. **The model pin.** `digestB b` is `ofNatList (digest (toNatList
    b))` by construction, and the suite checks the agreement on every
    run, in the spike's shape (§4.2, §6).

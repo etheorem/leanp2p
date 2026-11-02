@@ -56,7 +56,7 @@ step 1). The first 16 words are the block itself, and each later word
 mixes four earlier ones. `getD` reads stay inside the array: entry `t`
 reads only entries below `t`. -/
 def schedule (block : List Nat) : Array UInt32 :=
-  let w := ((List.range 16).map fun t => be32 (block.drop (4 * t))).toArray
+  let w := words32 block
   (List.range 48).foldl (fun w i =>
     let t := i + 16
     w.push (ssig1 (w.getD (t - 2) 0) + w.getD (t - 7) 0 +
@@ -87,6 +87,8 @@ agree by construction (`digestBEq`). -/
 def digestB (msg : ByteArray) : ByteArray :=
   Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg))
 
+/-- The `ByteArray` form is the model digest between the two
+conversions, by definition. -/
 theorem digestBEq (msg : ByteArray) :
     digestB msg = Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg)) :=
   rfl
@@ -96,14 +98,16 @@ theorem lengthDigest (msg : List Nat) : (digest msg).length = digestSize := by
   simp [digest, List.length_flatMap, lengthWord32Bytes, List.map_const',
     digestSize]
 
-/-- Every block the compression reads is a full 64 bytes. -/
-theorem lengthOfMemBlocks (msg : List Nat) :
-    ∀ b ∈ blocks blockSize (pad blockSize lengthBytes msg), b.length = blockSize :=
-  lengthOfMemBlocksPad (by decide) lengthBytes msg
+/-- Every digest entry fits in a byte. -/
+theorem ltOfMemDigest (msg : List Nat) : ∀ b ∈ digest msg, b < 256 := by
+  intro b hb
+  simp only [digest, List.mem_flatMap] at hb
+  obtain ⟨w, _, hw⟩ := hb
+  exact ltOfMemBeBytes 4 w.toNat b hw
 
--- FIPS 180-4 example: SHA-256("abc"). The build evaluates this.
-#guard digest [0x61, 0x62, 0x63] ==
-  [0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
-   0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad]
+/-- Converting a digest entry to `UInt8` preserves its value. -/
+example (msg : List Nat) (b : Nat) (hb : b ∈ digest msg) :
+    (UInt8.ofNat b).toNat = b := by
+  simp [Nat.mod_eq_of_lt (ltOfMemDigest msg b hb)]
 
 end CryptoPure.Sha256
