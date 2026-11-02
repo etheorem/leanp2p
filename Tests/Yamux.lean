@@ -232,6 +232,17 @@ def run (r : Runner) : IO Unit := do
         | _ => false)
   | .error _ => r.check "yamux core ping is echoed" false
 
+  -- A stream the application half-closed retires when the peer's FIN
+  -- arrives, and its id is recorded.
+  let halfClosed : Stream := { Stream.fresh ⟨1, by decide⟩ true with sendClosed := true }
+  let sHalf : State := { client with streams := [halfClosed] }
+  let fin := dat ⟨1, by decide⟩ ⟨false, false, true, false⟩ []
+  match step sHalf (.bytes fin) with
+  | .ok (s1, _) =>
+      r.check "yamux core both-closed stream retires" (s1.streams.isEmpty)
+      r.check "yamux core retired id is recorded" (s1.retired.contains 1)
+  | .error _ => r.check "yamux core both-closed stream retires" false
+
   -- A GoAway ends the session.
   let bye := hdr .goAway Flags.empty ⟨0, by decide⟩ 0
   match step client (.bytes bye) with

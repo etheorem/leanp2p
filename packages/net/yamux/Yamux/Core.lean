@@ -190,6 +190,16 @@ theorem findStream?_mem {sid : StreamId} {l : List Stream} {st : Stream}
       · rename_i hx
         exact List.mem_cons_of_mem x (ih h)
 
+/-- A stream whose two directions are closed leaves the table, and a
+local id that leaves is never handed out again (ARCHITECTURE §4.8,
+contract 3). The function returns the state the loop reports. -/
+def settle (sid : StreamId) (st : Stream) (s : State) : State :=
+  if st.sendClosed && st.recvClosed then
+    let s1 := { s with streams := removeStream sid s.streams }
+    { s1 with retired := if st.ours then st.id.val :: s.retired else s.retired }
+  else
+    { s with streams := replaceStream sid st s.streams }
+
 /-! ## The invariants -/
 
 /-- No stream holds more buffered bytes than the window it granted. -/
@@ -288,7 +298,7 @@ def apply (s : State) (fr : Frame) : Except ProtocolError (State × List Action)
               if st.buffered + fr.header.length.val > initialWindow then .error .overlongData
               else
                 let st' := receiveData fr.header.length.val fr.header.flags.fin st
-                let s' := { s with streams := replaceStream fr.header.streamId st' s.streams }
+                let s' := settle fr.header.streamId st' s
                 .ok (s', [.deliver fr.header.streamId fr.payload])
 
 /-! ## Window preservation -/
@@ -301,6 +311,12 @@ theorem WindowOK_replace {sid : StreamId} {st : Stream} {s : State}
   rcases mem_replaceStream hx with rfl | hx
   · exact hst
   · exact hw x hx
+
+/-- Removing a stream keeps the window invariant. -/
+theorem WindowOK_remove {sid : StreamId} {s : State} (hw : WindowOK s) :
+    WindowOK { s with streams := removeStream sid s.streams } := by
+  intro x hx
+  exact hw x (List.mem_filter.mp hx).1
 
 /-- Appending an in-window stream keeps the invariant. -/
 theorem WindowOK_append {s : State} {st : Stream} (hw : WindowOK s)
@@ -317,6 +333,16 @@ theorem fresh_buffered (sid : StreamId) (ours : Bool) :
     (Stream.fresh sid ours).buffered ≤ initialWindow := by
   unfold Stream.fresh
   exact Nat.zero_le _
+
+/-- Settling keeps the window invariant: the surviving entries keep
+their buffered count, and the settling stream is inside the window. -/
+theorem WindowOK_settle {sid : StreamId} {st : Stream} {s : State}
+    (hw : WindowOK s) (hst : st.buffered ≤ initialWindow) :
+    WindowOK (settle sid st s) := by
+  unfold settle
+  split
+  · exact WindowOK_remove hw
+  · exact WindowOK_replace hw hst
 
 /-- A frame the core accepts leaves every stream inside the window
 (ARCHITECTURE §4.8, contract 1). -/
@@ -367,7 +393,7 @@ theorem apply_WindowOK {s : State} {fr : Frame} {s' : State} {acts : List Action
           · rename_i hcred
             simp only [Except.ok.injEq] at h
             obtain ⟨rfl, _⟩ := h
-            apply WindowOK_replace hw
+            apply WindowOK_settle hw
             show st.buffered + fr.header.length.val ≤ initialWindow
             have h1 := hcred
             unfold initialWindow at h1 ⊢
@@ -381,7 +407,8 @@ theorem IdsOK_replace {sid : StreamId} {st st' : Stream} {s : State}
     (hi : IdsOK s) (hid : st'.id = st.id) (hours : st'.ours = st.ours)
     (hfind : st ∈ s.streams) :
     IdsOK { s with streams := replaceStream sid st' s.streams } := by
-  refine ⟨hi.1, hi.2.1, ?_, hi.2.2.2⟩
+  obtain ⟨hpar, hbound, hlocal, hret⟩ := hi
+  refine ⟨hpar, hbound, ?_, hret⟩
   intro x hx hxours
   rcases mem_replaceStream hx with hxst | hx
   · rw [hxst] at hxours ⊢
@@ -389,18 +416,52 @@ theorem IdsOK_replace {sid : StreamId} {st st' : Stream} {s : State}
     have h' : st.ours = true := by
       rw [← hours]
       exact hxours
-    exact hi.2.2.1 st hfind h'
-  · exact hi.2.2.1 x hx hxours
+    exact hlocal st hfind h'
+  · exact hlocal x hx hxours
+
+/-- Settling keeps the id invariant. The settling stream carries the id
+and the ownership bit of an entry the table held, so a retirement
+records an id below the next one. -/
+theorem IdsOK_settle {sid : StreamId} {st src : Stream} {s : State}
+    (hi : IdsOK s) (hsrc : src ∈ s.streams)
+    (hid' : st.id = src.id) (hours : st.ours = src.ours) :
+    IdsOK (settle sid st s) := by
+  obtain ⟨hpar, hbound, hlocal, hret⟩ := hi
+  unfold settle
+  split
+  · split
+    · rename_i hoursT
+      refine ⟨hpar, hbound, ?_, ?_⟩
+      · intro x hx hxours
+        exact hlocal x (List.mem_filter.mp hx).1 hxours
+      · intro r hr
+        rcases List.mem_cons.mp hr with hr' | hr
+        · rw [hr', hid']
+          have hsrcours : src.ours = true := by rw [← hours]; exact hoursT
+          exact hlocal src hsrc hsrcours
+        · exact hret r hr
+    · refine ⟨hpar, hbound, ?_, hret⟩
+      · intro x hx hxours
+        exact hlocal x (List.mem_filter.mp hx).1 hxours
+  · refine ⟨hpar, hbound, ?_, hret⟩
+    intro x hx hxours
+    rcases mem_replaceStream hx with hxst | hx
+    · rw [hxst] at hxours ⊢
+      rw [hid'] at ⊢
+      have hsrcours : src.ours = true := by rw [← hours]; exact hxours
+      exact hlocal src hsrc hsrcours
+    · exact hlocal x hx hxours
 
 /-- Appending a peer-opened stream keeps the id invariant: its ownership
 bit is false, so the local-id bound does not apply to it. -/
 theorem IdsOK_append_remote {s : State} {st : Stream} (hi : IdsOK s)
     (hremote : st.ours = false) :
     IdsOK { s with streams := s.streams ++ [st] } := by
-  refine ⟨hi.1, hi.2.1, ?_, hi.2.2.2⟩
+  obtain ⟨hpar, hbound, hlocal, hret⟩ := hi
+  refine ⟨hpar, hbound, ?_, hret⟩
   intro x hx hxours
   rcases List.mem_append.mp hx with h | h
-  · exact hi.2.2.1 x h hxours
+  · exact hlocal x h hxours
   · rcases List.mem_singleton.mp h with rfl
     rw [hremote] at hxours
     exact absurd hxours (by decide)
@@ -450,7 +511,8 @@ theorem apply_IdsOK {s : State} {fr : Frame} {s' : State} {acts : List Action}
           · simp at h
           · simp only [Except.ok.injEq] at h
             obtain ⟨rfl, _⟩ := h
-            exact IdsOK_replace (st := st) hi rfl rfl (findStream?_mem hfind)
+            exact IdsOK_settle (st := receiveData fr.header.length.val fr.header.flags.fin st)
+              (src := st) hi (findStream?_mem hfind) rfl rfl
 
 /-! ## The drain loop -/
 
@@ -560,7 +622,7 @@ def step (s : State) (e : Event) : Except ProtocolError (State × List Action) :
       | none => .ok (s, [])
       | some st =>
           let st' := finishSend st
-          let s' := { s with streams := replaceStream sid st' s.streams }
+          let s' := settle sid st' s
           .ok (s', [.send (dataFrame sid ⟨false, false, true, false⟩ [] (by decide))])
   | .reset sid =>
       match findStream? sid s.streams with
@@ -572,11 +634,16 @@ def step (s : State) (e : Event) : Except ProtocolError (State × List Action) :
           .ok (s2, [.send (controlFrame .data ⟨false, false, false, true⟩ sid 0)])
   | .tick _ => .ok (s, [])
 
-/-- Removing a stream keeps the window invariant. -/
-theorem WindowOK_remove {sid : StreamId} {s : State} (hw : WindowOK s) :
-    WindowOK { s with streams := removeStream sid s.streams } := by
+/-- A stream that settled with both directions closed leaves the table.
+This is contract 3 of ARCHITECTURE §4.8 in its observable form. -/
+theorem settle_dead_removed {sid : StreamId} {st : Stream} {s : State}
+    (hs : st.sendClosed = true) (hr : st.recvClosed = true) :
+    ∀ x ∈ (settle sid st s).streams, x.id ≠ sid := by
   intro x hx
-  exact hw x (List.mem_filter.mp hx).1
+  unfold settle at hx
+  rw [hs, hr] at hx
+  simp only [Bool.and_self, ite_true] at hx
+  exact of_decide_eq_true (List.mem_filter.mp hx).2
 
 /-- The event entry point keeps every invariant. -/
 theorem step_Inv {s : State} {e : Event} {s' : State} {acts : List Action}
@@ -677,8 +744,8 @@ theorem step_Inv {s : State} {e : Event} {s' : State} {acts : List Action}
         obtain ⟨rfl, rfl⟩ := h
         have hmem := findStream?_mem hfind
         refine ⟨?_, ?_⟩
-        · exact WindowOK_replace hi.1 (by show st.buffered ≤ initialWindow; exact hi.1 st hmem)
-        · exact IdsOK_replace (st := st) hi.2 rfl rfl hmem
+        · exact WindowOK_settle hi.1 (by show st.buffered ≤ initialWindow; exact hi.1 st hmem)
+        · exact IdsOK_settle (st := finishSend st) (src := st) hi.2 hmem rfl rfl
   | reset sid =>
       unfold step at h
       dsimp only at h
