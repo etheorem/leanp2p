@@ -69,6 +69,7 @@ roots = ["Crypto"]
 name = "CryptoPure"
 srcDir = "packages/crypto/pure"
 roots = ["CryptoPure"]
+globs = ["CryptoPure.*"]
 
 [[lean_lib]]
 name = "Backend"
