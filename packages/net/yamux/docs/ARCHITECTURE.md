@@ -13,6 +13,8 @@ libp2p `Muxer` value that assigns the `/yamux/1.0.0` id lives above, in
 |---|---|
 | `Yamux.lean` | the root module; one import line per public submodule |
 | `Yamux/Constants.lean` | the 256 KiB initial receive window, the frame-length cap, the control-queue cap, the inbound-stream backlog cap, and the 12-byte header size; one home per fact (§3.8) |
+| `Yamux/Error.lean` | the package's `ProtocolError`, one arm per way the bytes break the specification, mapped once at the seam value (§3.5) |
+| `Yamux/Frame.lean` | the `Frame` type and the streaming `parse?`: `none` while the buffer cannot complete a frame, an error when the bytes already present violate the spec, and the two parser laws (§3.3) |
 | `Yamux/Header.lean` | the `Header` type with the `Codec` and `LawfulCodec` instances (§3.2); the 12-byte layout is stated once, here |
 | `Yamux/Sets.lean` | the closed sets of §3.4: `FrameType` and `GoAwayCode` with `toCode`/`ofCode?` and the round-trip theorem, and `Flags` as a `Bool` structure |
 | `Yamux/Core.lean` | `State`, `Event`, `Action`, `ProtocolError`, the total `step`, and the invariant theorems |
@@ -51,6 +53,12 @@ public functions (§7 row 9). The muxer entry itself moves to
 
 ## The core
 
+The frame layer sits between the connection and the core. `Frame.parse?`
+consumes one frame and leaves the rest untouched, so the loop never
+hands the core a partial frame; a data frame above the cap is a
+protocol error before any allocation, and a short buffer is `none`
+rather than an error (§3.5, §5.1).
+
 §3.3 fixes the shape, with the signature
 `step : State → Event → Except ProtocolError (State × List Action)`.
 `step` is total, and the loop that drives it is the one `partial def`
@@ -70,8 +78,12 @@ application, paired with the ACK frame the spec requires for an
 accepted stream; answer tag t, as `Action.done` or `Action.refused`;
 close the connection.
 
-The theorems cover the invariants of §3.3: the receive window never
-goes negative, and stream ids keep their parity (client odd, server
+The theorems cover the invariants of §3.3: `apply_WindowOK` and
+`apply_IdsOK` keep the two frame-level invariants, `drain_Inv` lifts
+them over the buffered loop, `step_Inv` lifts them over every event,
+and `open_parity` states the observable rule: the id a new stream gets
+carries this side's parity and was never retired. The receive window
+never overruns, and stream ids keep their parity (client odd, server
 even). The session-map theorem states the provable form: an entry
 exists only while one of its directions is open, a retired id is never
 reused, and unrequested streams stay within the backlog cap. Each
