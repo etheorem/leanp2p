@@ -374,7 +374,7 @@ A function fails in exactly one of three ways, and its type says which:
 |---|---|---|
 | protocol failure | `Except E α`, `E` an inductive the package owns | the peer, or our own input, broke the spec |
 | end of stream | `Option α` from a read, `none` | the peer finished; an orderly event |
-| fault | `IO.Error`, thrown | the system failed: a socket error, an allocation failure, an FFI fault |
+| fault | `IO.Error`, thrown | the system failed: a socket error, a recoverable allocation failure, an FFI fault |
 
 Rules:
 
@@ -426,6 +426,18 @@ type of each binding states what the C function does:
 - Every `ByteArray` argument is borrowed (`@&`). The Lean side checks
   sizes into proof-carrying newtypes (§3.7) before the call, so the
   shim validates nothing twice.
+
+**Runtime allocation exhaustion.** A recoverable allocation fault in an
+`IO` or `Async` operation remains an `IO.Error` (§3.5). A pure
+deterministic binding has no such channel. Exhaustion of the Lean
+runtime allocator is instead non-returning. A pure shim follows that
+policy: Lean-owned results use the runtime allocator, and a failed
+native scratch allocation calls `lean_internal_panic_out_of_memory`.
+This condition is neither a protocol or input failure nor an ordinary
+returned result; it must not be reported as success or through any
+package-owned error. On every ordinary return, the binding still keeps
+the purity promise above: same input, same output, no read of global
+state, and no observable side effect.
 
 **The facade.** Callers import `Crypto`, the root module of the group
 at `packages/crypto/Crypto.lean`. No caller imports `crypto/backend`,
