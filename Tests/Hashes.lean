@@ -11,7 +11,10 @@ and HKDF-SHA-256 uses RFC 5869 TC1 and TC3.
 
 The suite also checks the digest bytes in the `sha1` and `sha2-256`
 cases of `multihash-examples.json`, after their two-byte prefix. The
-NIST SHA-256 examples and the SHA-1 `abc` example are inline.
+NIST SHA-256 examples and the SHA-1 `abc` example are inline. Each
+digest vector runs through both forms of the pure copy, the model
+`digest` and its `ByteArray` form `digestB`, against the published
+bytes.
 
 The sweeps are this package's own tests. Each length checks the model
 pin of `digestB` and the digest size. Named length lists let the W3.3
@@ -57,6 +60,13 @@ private def pinHolds (digest : List Nat → List Nat) (digestB : ByteArray → B
   let viaModel := Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg))
   digestB msg == viaModel && (digestB msg).size == size
 
+/-- Checks a digest vector through both forms of the pure copy: the
+model `digest` and its `ByteArray` form `digestB`. -/
+private def bothForms (digest : List Nat → List Nat) (digestB : ByteArray → ByteArray)
+    (input expected : List Nat) : Bool :=
+  digest input == expected &&
+    digestB (Mock.Bytes.ofNatList input) == Mock.Bytes.ofNatList expected
+
 /-- Runs the RFC, NIST, and multihash vectors, the HKDF cap checks, and
 the length sweeps. -/
 def Hashes.run (r : Runner) : IO Unit := do
@@ -68,8 +78,9 @@ multihash-examples.json (sha1, sha2-256); NIST SHA-256/SHA-1 examples"
 
   for e in (← jArr file j "sha512") do
     let name ← jStr file e "name"
-    r.check s!"sha512 {name}"
-      (Sha512.digest (← hexField file e "inputHex") == (← hexField file e "digestHex"))
+    let input ← hexField file e "inputHex"
+    let expected ← hexField file e "digestHex"
+    r.check s!"sha512 {name}" (bothForms Sha512.digest Sha512.digestB input expected)
 
   let hmacFamilies : List (String × (List Nat → List Nat → List Nat)) :=
     [("hmacSha256", Hmac.sha256), ("hmacSha512", Hmac.sha512)]
@@ -99,18 +110,20 @@ multihash-examples.json (sha1, sha2-256); NIST SHA-256/SHA-1 examples"
   r.check "hkdf-sha256 expand past the cap is none"
     (Hkdf.expandSha256 prk [] 8161 == none)
 
-  let nist : List (String × (List Nat → List Nat) × String × String) :=
-    [("sha256", Sha256.digest, "",
+  let nist : List (String × (List Nat → List Nat) × (ByteArray → ByteArray) ×
+      String × String) :=
+    [("sha256", Sha256.digest, Sha256.digestB, "",
        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-     ("sha256", Sha256.digest, "abc",
+     ("sha256", Sha256.digest, Sha256.digestB, "abc",
        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
-     ("sha256", Sha256.digest, "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+     ("sha256", Sha256.digest, Sha256.digestB,
+       "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"),
-     ("sha1", Sha1.digest, "abc", "a9993e364706816aba3e25717850c26c9cd0d89d")]
-  for (alg, digest, msg, want) in nist do
+     ("sha1", Sha1.digest, Sha1.digestB, "abc", "a9993e364706816aba3e25717850c26c9cd0d89d")]
+  for (alg, digest, digestB, msg, want) in nist do
     let wantBytes := (Mock.Bytes.ofHex? want).map Mock.Bytes.toNatList
-    r.check s!"{alg} nist \"{msg}\""
-      (some (digest (Mock.Bytes.toNatList (Mock.Bytes.ofString msg))) == wantBytes)
+    let input := Mock.Bytes.toNatList (Mock.Bytes.ofString msg)
+    r.check s!"{alg} nist \"{msg}\"" (wantBytes.any (bothForms digest digestB input))
 
   -- The multihash value is the code byte, the length byte, then the digest.
   let mhFile := "multihash-examples.json"
@@ -122,8 +135,12 @@ multihash-examples.json (sha1, sha2-256); NIST SHA-256/SHA-1 examples"
       if (← jStr mhFile enc "kind") == "hex" then
         let digestBytes := (← hexField mhFile enc "value").drop 2
         match alg with
-        | "sha1" => r.check "multihash sha1 digest bytes" (Sha1.digest msg == digestBytes)
-        | "sha2-256" => r.check "multihash sha2-256 digest bytes" (Sha256.digest msg == digestBytes)
+        | "sha1" =>
+          r.check "multihash sha1 digest bytes"
+            (bothForms Sha1.digest Sha1.digestB msg digestBytes)
+        | "sha2-256" =>
+          r.check "multihash sha2-256 digest bytes"
+            (bothForms Sha256.digest Sha256.digestB msg digestBytes)
         | other => r.skip s!"multihash {other}" "no pure copy of this hash"
 
   let sweep (name : String) (lengths : List Nat) (mult : Nat) (digest : List Nat → List Nat)

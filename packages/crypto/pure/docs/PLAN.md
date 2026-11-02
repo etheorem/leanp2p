@@ -24,6 +24,14 @@ and `codec/multiformats` set the pattern.
 
 Unit 0 is done. Sub-units 1a and 1b close root W3.1 together.
 
+Sub-units 1a and 1b are implemented, and they run against a mock of
+W1.2. `CryptoPure/Mock/Bytes.lean` holds the four `base/bytes`
+conversions that the package and its suite use, and it states no
+axiom. Completion still requires W1.2 (#2): replace the mock with
+`import Bytes`, rename `Mock.Bytes.` to `Bytes.` at each use, and rerun
+all gates within twelve hours of its merge. The comparisons with the
+production path belong to W3.3, after W3.2 lands the backend bindings.
+
 ## Consumers
 
 W3.3 builds the `Crypto` facade and names the production

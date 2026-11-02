@@ -97,9 +97,9 @@ comparison needs a total function on this side.
    `(Sha256.digest m).length = 32`, and the 64 and 20 cases for
    SHA-512 and SHA-1. With the reductions, all five primitives carry a
    theorem. The spike carried no Lean theorem over these pure
-   implementations. It validated them through the vector suites and
-   the OpenSSL cross-check. These theorems meet the requirement of
-   §4.6 (§4 preamble; PRINCIPLES 5.1).
+   implementations; it validated them through the vector suites and the
+   OpenSSL cross-check. §4.6 demands theorems behind the code, and these are
+   the ones the constructions carry (§4 preamble; PRINCIPLES 5.1).
    The spike proved no streaming or chunking theorem either; its
    digests have one form, and the size sweep covers the padding
    boundaries as behavior, so that check stays a test.
