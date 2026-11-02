@@ -66,7 +66,7 @@ vendor verify included.
 
 | Unit | Pkg | P | deps | Deliverable |
 |---|---|---|---|---|
-| W1.1 | `base/conc` | P0 | W0 | `Chan` (every channel has a capacity) + `select` + task error surfacing, `Pipe`, `TaskSet`, `OnceRef`, `withinDeadline` over `select`, the `Clock` seam with a test value; wraps `Std.Sync`/`Std.Async` so that no other package imports them; contracts: never cancel, wake by close; owned tasks; atomic state |
+| W1.1 | `base/conc` | P0 | W0 | `Chan` (every channel has a capacity) + `select` + task error surfacing, `Pipe`, `TaskSet`, `OnceRef`, `withinDeadline` over `select`, the `Clock` seam with a test value, `Alarm`, `Outcome`; wraps `Std.Sync`/`Std.Async` so that no other package imports them; contracts: never cancel, wake by close; owned tasks; atomic state |
 | W1.2 | `base/bytes` | P0 | W0 | byte model ↔ `ByteArray`/`String`/hex; `Codec`/`LawfulCodec` classes and the shared `DecodeError` (ARCHITECTURE §3.2); the generic round-trip harness that all later codec units use |
 
 ## W2: codecs (parallel after W2.1)

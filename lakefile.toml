@@ -34,6 +34,7 @@ testDriver = "tests"
 name = "Conc"
 srcDir = "packages/base/conc"
 roots = ["Conc"]
+globs = ["Conc.*"]
 
 [[lean_lib]]
 name = "Bytes"
@@ -54,6 +55,7 @@ roots = ["Multiformats"]
 name = "Proto"
 srcDir = "packages/codec/proto"
 roots = ["Proto"]
+globs = ["Proto.*"]
 
 [[lean_lib]]
 name = "Snappy"

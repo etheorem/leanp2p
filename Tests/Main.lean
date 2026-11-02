@@ -1,5 +1,7 @@
 import Tests.Support
 import Tests.Vectors
+import Tests.Concurrency
+import Tests.Protobuf
 import Tests.Hashes
 
 /-!
@@ -16,5 +18,7 @@ pass under a single capability: `lake test -- +RTS -N1 -RTS`
 def main : IO UInt32 := do
   let r ← Tests.Runner.new
   Tests.Vectors.run r
+  Tests.Concurrency.run r
+  Tests.Protobuf.run r
   Tests.Hashes.run r
   r.summary
