@@ -82,6 +82,7 @@ roots = ["Backend"]
 name = "Streams"
 srcDir = "packages/net/streams"
 roots = ["Streams"]
+globs = ["Streams.*"]
 
 [[lean_lib]]
 name = "Yamux"

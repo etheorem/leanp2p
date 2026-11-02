@@ -13,8 +13,14 @@ under `+RTS -N1`, and the import lint is green.
 | Unit | Root deps | Deliverable | Done when |
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
-| 1 | W1.1, W1.2 | the streams core, root W4.1: `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` with `prependBytes` over the loop (§3.3), `Streams/Constants.lean`, and the sim transport as the second `Transport` value | the root W4.1 row holds, and the unit 1 milestones below pass |
-| 2 | W4.1, W1.1 | the TCP transport, root W4.2: `Streams/Tcp.lean` with the close-wakes discipline, failed-write teardown, and the deadline wiring for §5.4 | the root W4.2 row holds, and the unit 2 milestones below pass |
+| 1 | W1.1, W1.2, W2.1, W2.3 | the streams core, root W4.1: `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` with `prependBytes` over the loop (§3.3), `Streams/Constants.lean`, the sim transport as the test `Transport` value, and a stub TCP value (`Streams/Tcp.lean`: the mapping between a multiaddr and a socket address in both directions; `dial` and `listen` throw) | the root W4.1 row holds, and the unit 1 milestones below pass |
+| 2 | W4.1, W1.1 | the TCP transport, root W4.2: `Streams/Tcp.lean` replaces the stub, with the close-wakes discipline, failed-write teardown, and the deadline wiring for §5.4 | the root W4.2 row holds, and the unit 2 milestones below pass |
+
+Unit 1 needs W2.1 for the `uvarint` prefix of `Framing`, and W2.3 for
+the `Multiaddr` of `Connection`, `Listener`, and `Transport`
+(ARCHITECTURE, "What the package must not depend on"). Until those
+units merge, the package builds against mocks of them (ARCHITECTURE,
+"The mocks").
 
 Unit 0 is done.
 
@@ -48,6 +54,15 @@ Unit 0 is done.
   `Action.refused` through the loop, and `Stream.write` returns only
   after its tag resolves. `prependBytes` puts the handed-on bytes
   ahead of the bytes the loop delivers.
+- TCP stub: an `/ip4` and an `/ip6` TCP multiaddr map to their socket
+  addresses and back. Every other shape maps to `none`, and `handles`
+  refuses it. `dial` and `listen` throw.
+- The theorems of ARCHITECTURE, "Theorems", build with no `sorry`. Their
+  axioms are the three standard axioms of Lean and the two axioms of the
+  varint mock, no others.
+- The mocks: the varint mock reproduces the spec examples. The
+  multiaddr mock parses each of its four forms, and prints the same
+  text again.
 
 ## Test milestones (unit 2)
 

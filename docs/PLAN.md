@@ -35,7 +35,7 @@ This plan is the companion to `docs/ARCHITECTURE.md`, and both live in
 W0 scaffold
  ├── track A (codecs):      W1.2 → W2.1 → {W2.2, W2.3}
  ├── track B (crypto):      W1.2 → {W3.1, W3.2} → W3.3
- └── track C (net):         W1.1 (+W1.2) → W4.1 → {W4.2, W4.3}
+ └── track C (net):         W1.1 (+W1.2, W2.1, W2.3) → W4.1 → {W4.2, W4.3}
 W5 joins all three tracks (identity needs A+B, security needs B+C, mux/negotiate need C)
  └── W5.1 → W5.2 → {W5.3, W5.4} → W5.5 → W5.6 → W5.7 → W5.8 → W5.9
       (mplex, P2, can follow W5.4 at any time)
@@ -89,7 +89,7 @@ vendor verify included.
 
 | Unit | Pkg | P | deps | Deliverable |
 |---|---|---|---|---|
-| W4.1 | `net/streams` core | P0 | W1.1, W1.2 | `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` (+`prependBytes`) as the seam over a loop (ARCHITECTURE §3.3), the in-memory sim as the second `Transport` value |
+| W4.1 | `net/streams` core | P0 | W1.1, W1.2, W2.1, W2.3 | `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` (+`prependBytes`) as the seam over a loop (ARCHITECTURE §3.3), the in-memory sim as the second `Transport` value; W2.1 gives `Framing` its `uvarint` prefix, and W2.3 gives the seam its `Multiaddr` |
 | W4.2 | `net/streams` tcp | P0 | W4.1, W1.1 | libuv transport with the close-wakes discipline, failed-write teardown, deadline wiring for §5.4 |
 | W4.3 | `net/yamux` | P0 | W4.1 | header codec (a proved `LawfulCodec`), session as a pure `step` + one loop task (ARCHITECTURE §3.3), flow control, hostile-frame rules (caps, SYN-only + parity, stream retirement, wake hand-off, capped control queue) |
 
