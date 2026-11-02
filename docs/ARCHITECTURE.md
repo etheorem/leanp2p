@@ -88,11 +88,18 @@ forms (the SEC1/SPKI/PKCS#1 choices and the key-type protobuf) belong
 to `libp2p/identity`. `crypto/backend` exposes only the primitives
 (§4.6).
 
-The repository is one Lake package. Each leaf is one `lean_lib`, and
-the `Crypto` facade is one more, rooted at the group directory (§3.6).
-If external users appear, a later mechanical move can split the
-packages into separate repositories. Until then, version skew is a
-bigger risk than coupling.
+The repository is one primary Lake package. Each leaf is one `lean_lib`,
+and the `Crypto` facade is one more, rooted at the group directory
+(§3.6). A leaf may keep one small package-local build helper beside it
+only when `lakefile.toml` cannot express the leaf's native target
+(`docs/PRINCIPLES.md` §4.2). The root requires that helper by path. It
+builds only the native artifacts that the owning leaf needs, exposes no
+public Lean modules, and is versioned with this repository rather than
+forming an independent dependency or version boundary. The owning leaf
+keeps the public API, and the root `lakefile.toml` remains the root
+configuration. If external users appear, a later mechanical move can
+split the packages into separate repositories. Until then, version skew
+is a bigger risk than coupling.
 
 **What `cli/` is for.** `cli/` holds everything whose job ends at
 `main`: executable entry points, command-line and config parsing, and
