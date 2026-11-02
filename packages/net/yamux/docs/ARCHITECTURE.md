@@ -82,7 +82,9 @@ The theorems cover the invariants of §3.3: `apply_WindowOK` and
 `apply_IdsOK` keep the two frame-level invariants, `drain_Inv` lifts
 them over the buffered loop, `step_Inv` lifts them over every event,
 and `open_parity` states the observable rule: the id a new stream gets
-carries this side's parity and was never retired. The receive window
+carries this side's parity and was never retired. `settle_dead_removed`
+states the retirement rule, and `apply_syn_room` states that a peer's
+SYN creates a stream only while the backlog stays below the cap. The receive window
 never overruns, and stream ids keep their parity (client odd, server
 even). The session-map theorem states the provable form: an entry
 exists only while one of its directions is open, a retired id is never

@@ -90,6 +90,10 @@ structure State where
   closing : Bool
   deriving Repr, DecidableEq, BEq, Hashable
 
+/-- The number of streams the peer opened. -/
+def remoteCount (s : State) : Nat :=
+  (s.streams.filter (fun st => !st.ours)).length
+
 /-- Events into the core. -/
 inductive Event where
   /-- Bytes arrived off the connection, including plaintext the muxer
@@ -283,11 +287,12 @@ def apply (s : State) (fr : Frame) : Except ProtocolError (State × List Action)
         | none =>
             if fr.header.flags.syn then
               if fr.header.streamId.val % 2 = s.role.parity then .ok (s, [])
-              else
+              else if remoteCount s < maxInboundBacklog then
                 let s' := { s with streams :=
                   s.streams ++ [Stream.fresh fr.header.streamId false] }
                 .ok (s', [.send (controlFrame .windowUpdate ⟨false, true, false, false⟩
                   fr.header.streamId 0), .accept fr.header.streamId])
+              else .error .backlog
             else .ok (s, [])
     | .data =>
         if fr.header.streamId.val = 0 then .error .unknownStream
@@ -375,9 +380,11 @@ theorem apply_WindowOK {s : State} {fr : Frame} {s' : State} {acts : List Action
           · simp only [Except.ok.injEq] at h
             obtain ⟨rfl, _⟩ := h
             exact hw
-          · simp only [Except.ok.injEq] at h
-            obtain ⟨rfl, _⟩ := h
-            exact WindowOK_append hw (fresh_buffered _ _)
+          · split at h
+            · simp only [Except.ok.injEq] at h
+              obtain ⟨rfl, _⟩ := h
+              exact WindowOK_append hw (fresh_buffered _ _)
+            · simp at h
         · simp only [Except.ok.injEq] at h
           obtain ⟨rfl, _⟩ := h
           exact hw
@@ -494,9 +501,11 @@ theorem apply_IdsOK {s : State} {fr : Frame} {s' : State} {acts : List Action}
           · simp only [Except.ok.injEq] at h
             obtain ⟨rfl, _⟩ := h
             exact hi
-          · simp only [Except.ok.injEq] at h
-            obtain ⟨rfl, _⟩ := h
-            exact IdsOK_append_remote hi rfl
+          · split at h
+            · simp only [Except.ok.injEq] at h
+              obtain ⟨rfl, _⟩ := h
+              exact IdsOK_append_remote hi rfl
+            · simp at h
         · simp only [Except.ok.injEq] at h
           obtain ⟨rfl, _⟩ := h
           exact hi
@@ -513,6 +522,34 @@ theorem apply_IdsOK {s : State} {fr : Frame} {s' : State} {acts : List Action}
             obtain ⟨rfl, _⟩ := h
             exact IdsOK_settle (st := receiveData fr.header.length.val fr.header.flags.fin st)
               (src := st) hi (findStream?_mem hfind) rfl rfl
+
+/-- A peer SYN that creates a stream is admitted only while the backlog
+is below the cap. This is the creation path of ARCHITECTURE §4.8,
+contract 2, in observable form. -/
+theorem apply_syn_room {s : State} {fr : Frame} {s' : State} {acts : List Action}
+    (h : apply s fr = .ok (s', acts))
+    (hft : fr.header.frameType = .windowUpdate)
+    (hsyn : fr.header.flags.syn = true)
+    (hunk : findStream? fr.header.streamId s.streams = none)
+    (hne : fr.header.streamId.val % 2 ≠ s.role.parity) :
+    remoteCount s < maxInboundBacklog := by
+  have hcomp : apply s fr =
+      (if s.closing then .error .sessionClosed
+       else if remoteCount s < maxInboundBacklog then
+         .ok ({ s with streams := s.streams ++ [Stream.fresh fr.header.streamId false] },
+           [.send (controlFrame .windowUpdate ⟨false, true, false, false⟩
+              fr.header.streamId 0), .accept fr.header.streamId])
+       else .error .backlog) := by
+    simp [apply, hft, hsyn, hunk, hne]
+  rw [hcomp] at h
+  by_cases hc : s.closing = true
+  · rw [if_pos hc] at h
+    simp at h
+  · rw [if_neg hc] at h
+    by_cases hr : remoteCount s < maxInboundBacklog
+    · exact hr
+    · rw [if_neg hr] at h
+      simp at h
 
 /-! ## The drain loop -/
 

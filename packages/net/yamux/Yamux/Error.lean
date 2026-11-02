@@ -29,6 +29,8 @@ inductive ProtocolError where
   | unknownStream
   /-- This side has used every stream id of its parity. -/
   | exhausted
+  /-- The peer opened more streams than the backlog cap allows. -/
+  | backlog
   deriving Repr, DecidableEq, BEq, Hashable
 
 end Yamux

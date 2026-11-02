@@ -232,6 +232,15 @@ def run (r : Runner) : IO Unit := do
         | _ => false)
   | .error _ => r.check "yamux core ping is echoed" false
 
+  -- A peer SYN past the backlog cap is refused.
+  let many : List Stream := (List.range maxInboundBacklog).map fun i =>
+    Stream.fresh (Word32.ofNat (2 * i + 2)) false
+  let sFull : State := { client with streams := many }
+  let synNew := hdr .windowUpdate ⟨true, false, false, false⟩ ⟨1000, by decide⟩ 0
+  match step sFull (.bytes synNew) with
+  | .error e => r.check "yamux core backlog cap refuses" (e == .backlog)
+  | .ok _ => r.check "yamux core backlog cap refuses" false
+
   -- A stream the application half-closed retires when the peer's FIN
   -- arrives, and its id is recorded.
   let halfClosed : Stream := { Stream.fresh ⟨1, by decide⟩ true with sendClosed := true }
