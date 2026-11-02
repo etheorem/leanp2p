@@ -43,7 +43,7 @@ roots = ["Bytes"]
 [[lean_lib]]
 name = "Varint"
 srcDir = "packages/codec/varint"
-roots = ["Varint"]
+globs = ["Varint.*"]
 
 [[lean_lib]]
 name = "Multiformats"
