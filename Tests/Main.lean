@@ -22,4 +22,5 @@ def main : IO UInt32 := do
   Tests.Protobuf.run r
   Tests.Yamux.run r
   Tests.Yamux.CoreTests.run r
+  Tests.Yamux.CoreTests.runSink r
   r.summary

@@ -613,6 +613,25 @@ theorem drain_Inv : ∀ (n : Nat) (s : State), Inv s →
                         exact apply_IdsOK (s' := s1) hi.2 ha
                       exact ih (advance s1 rest) ⟨hw1, hid1⟩ _ _ hd
 
+/-- The state of a session this side just started: no streams, no
+retired ids, and the first id of this side's parity. -/
+def init (role : Role) : State :=
+  { role := role, streams := [], nextId := if role.parity = 1 then 1 else 2,
+    retired := [], pending := [], closing := false }
+
+/-- The initial state satisfies both invariants, so `step_Inv` applies
+from the first event: every reachable state keeps them. -/
+theorem init_Inv (role : Role) : Inv (init role) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · intro st hst
+    simp [init] at hst
+  · cases role <;> decide
+  · cases role <;> decide
+  · intro st hst
+    simp [init] at hst
+  · intro r hr
+    simp [init] at hr
+
 /-! ## The event entry point -/
 
 /-- One event in, one state and its actions out. -/

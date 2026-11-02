@@ -259,6 +259,50 @@ def run (r : Runner) : IO Unit := do
       r.check "yamux core goaway closes" (s1.closing && acts.contains .close)
   | .error _ => r.check "yamux core goaway closes" false
 
+/-- A sink that records what it ran, in order. -/
+private def push (log : IO.Ref (List String)) (entry : String) : IO Unit := do
+  let xs ← log.get
+  log.set (xs ++ [entry])
+
+private def recorder (log : IO.Ref (List String)) : Sink :=
+  { send := fun _ => push log "send"
+    deliver := fun _ _ => push log "deliver"
+    accept := fun _ => push log "accept"
+    opened := fun tag sid => push log s!"opened {tag} {sid.val}"
+    done := fun _ => push log "done"
+    refused := fun _ _ => push log "refused"
+    close := push log "close" }
+
+def runSink (r : Runner) : IO Unit := do
+  r.section "yamux sink"
+    "packages/net/yamux/docs/ARCHITECTURE.md: action performance"
+
+  -- Opening a stream runs the SYN write and the answer, in that order.
+  let log ← IO.mkRef ([] : List String)
+  match step client (.open 7) with
+  | .ok (_, acts) => Sink.performAll (recorder log) acts
+  | .error _ => pure ()
+  let entries ← log.get
+  r.check "yamux sink open order" (entries == ["send", "opened 7 1"])
+
+  -- A peer SYN runs the ACK write and the accept, in that order.
+  let log2 ← IO.mkRef ([] : List String)
+  let synPeer := hdr .windowUpdate ⟨true, false, false, false⟩ ⟨4, by decide⟩ 0
+  match step client (.bytes synPeer) with
+  | .ok (_, acts) => Sink.performAll (recorder log2) acts
+  | .error _ => pure ()
+  let entries2 ← log2.get
+  r.check "yamux sink peer syn order" (entries2 == ["send", "accept"])
+
+  -- GoAway runs the close effect.
+  let log3 ← IO.mkRef ([] : List String)
+  let bye := hdr .goAway Flags.empty ⟨0, by decide⟩ 0
+  match step client (.bytes bye) with
+  | .ok (_, acts) => Sink.performAll (recorder log3) acts
+  | .error _ => pure ()
+  let entries3 ← log3.get
+  r.check "yamux sink goaway closes" (entries3 == ["close"])
+
 end CoreTests
 
 end Tests.Yamux
