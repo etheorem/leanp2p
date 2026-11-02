@@ -86,6 +86,7 @@ roots = ["Streams"]
 name = "Yamux"
 srcDir = "packages/net/yamux"
 roots = ["Yamux"]
+globs = ["Yamux.*"]
 
 [[lean_lib]]
 name = "Libp2pIdentity"
