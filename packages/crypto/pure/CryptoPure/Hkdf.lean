@@ -5,16 +5,16 @@ import CryptoPure.Hmac
 # HKDF
 
 RFC 5869 over HMAC, on the `List Nat` model. `extract` turns input key
-material into a pseudorandom key (§2.2), and `expand` stretches that
-key into output keying material (§2.3). Like HMAC, both take the hash
-and its block size as arguments, and the theorems hold for any hash
-with a fixed output length. This is the audited copy, and the oracle
-of the W3.3 cross-check (ARCHITECTURE §4.6).
+material into a pseudorandom key (§2.2), and `expand` derives output
+keying material from it (§2.3). Both take the hash, its block size,
+and its output length as arguments. The length and prefix theorems
+assume that the hash has that output length for every input. This is
+the audited copy and the oracle for the W3.3 cross-check (ARCHITECTURE
+§4.6).
 
 RFC 5869 caps the output at `255 × HashLen` bytes, because the block
-counter is one byte. `expand` returns `none` past the cap and only
-then, so every counter it writes fits in one byte, as the RFC
-requires.
+counter is one byte. `expand` returns `none` exactly when the request
+exceeds that cap, so each counter used by `expand` fits in one byte.
 -/
 
 set_option autoImplicit false
@@ -27,10 +27,10 @@ def extract (hash : List Nat → List Nat) (blockSize hashLen : Nat)
     (salt ikm : List Nat) : List Nat :=
   Hmac.hmac hash blockSize (if salt = [] then List.replicate hashLen 0 else salt) ikm
 
-/-- The output blocks `T(i) ‖ T(i+1) ‖ …`, `count` of them (RFC 5869
+/-- Generates `count` output blocks, `T(i) ‖ T(i+1) ‖ …` (RFC 5869
 §2.3). `prev` is `T(i-1)`, empty before the first block, and `i` is the
-one-byte counter of the next block. The recursion runs on `count`, so
-Lean accepts it as total with no measure to state. -/
+next counter. `expand` keeps the counter within one byte. Recursion
+on `count` lets Lean check termination without a separate measure. -/
 def blocks (hash : List Nat → List Nat) (blockSize : Nat) (prk info : List Nat) :
     List Nat → Nat → Nat → List Nat
   | _, _, 0 => []
@@ -135,8 +135,8 @@ theorem lengthExpand (hlen : ∀ m, (hash m).length = hashLen) (blockSize : Nat)
     omega
   · simp at h
 
-/-- A shorter output is a prefix of a longer one: asking for fewer
-bytes never changes the bytes it returns. -/
+/-- For the same inputs, a successful shorter output is a prefix of
+a successful longer output. -/
 theorem expandPrefix (hlen : ∀ m, (hash m).length = hashLen) (blockSize : Nat)
     (prk info : List Nat) {l₁ l₂ : Nat} {okm₁ okm₂ : List Nat} (hle : l₁ ≤ l₂)
     (h₁ : expand hash blockSize hashLen prk info l₁ = some okm₁)
@@ -158,7 +158,7 @@ theorem expandPrefix (hlen : ∀ m, (hash m).length = hashLen) (blockSize : Nat)
   generalize blocks hash blockSize prk info [] 1 ((l₁ + hashLen - 1) / hashLen) = A at hpre hl₁ ⊢
   generalize blocks hash blockSize prk info [] 1 ((l₁ + hashLen - 1) / hashLen + extra) = B
     at hpre ⊢
-  -- `A` is the first `A.length` bytes of `B`, and `l₁ ≤ A.length`, so both cuts read `B`.
+  -- `A` is a prefix of `B` long enough for `l₁`, so both cuts can read `B`.
   rw [hpre, List.take_take, Nat.min_eq_left hl₁, ← Nat.min_eq_left hle, ← List.take_take]
   exact List.take_prefix _ _
 end
@@ -168,8 +168,8 @@ is empty. -/
 example (ikm : List Nat) : extractSha256 [] ikm = Hmac.sha256 (List.replicate 32 0) ikm :=
   rfl
 
-/-- 8161 bytes is one past `255 × 32`, so HKDF-Expand over SHA-256
-refuses it. -/
+/-- HKDF-Expand over SHA-256 rejects 8161 bytes, one above its cap of
+`255 × 32`. -/
 example (prk info : List Nat) : expandSha256 prk info 8161 = none :=
   (expandEqNoneIff _ _ _ _).mpr (by decide)
 

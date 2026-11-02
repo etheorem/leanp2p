@@ -4,18 +4,18 @@ import CryptoPure
 /-!
 # Hash, HMAC, and HKDF suite
 
-Mirrors `hashes-rfc.json`: the FIPS 180-4 SHA-512 examples and the HMAC
-and HKDF vectors. RFC 4231 TC6 and TC7 check long keys with SHA-256 and
-SHA-512. The SHA-256 cases also include TC1 and TC2. HKDF-SHA-256 uses
-RFC 5869 TC1 and TC3. Two more anchors sit beside them.
-The `sha1` and `sha2-256` cases of `multihash-examples.json` carry
-digest bytes after a two-byte multihash prefix. The suite checks those
-bytes. The NIST SHA-256 examples and the SHA-1 `abc` example stay
-inline, outside the vendored corpus.
+Mirrors `hashes-rfc.json`, which holds the FIPS 180-4 SHA-512 examples
+and the HMAC and HKDF vectors. RFC 4231 TC6 and TC7 check long keys
+with SHA-256 and SHA-512. The SHA-256 cases also include TC1 and TC2,
+and HKDF-SHA-256 uses RFC 5869 TC1 and TC3.
+
+The suite also checks the digest bytes in the `sha1` and `sha2-256`
+cases of `multihash-examples.json`, after their two-byte prefix. The
+NIST SHA-256 examples and the SHA-1 `abc` example are inline.
 
 The sweeps are this package's own tests. Each length checks the model
-pin of `digestB` and the digest size. The W3.3 cross-check runs the same
-lists through the production path, so the lists are named values.
+pin of `digestB` and the digest size. Named length lists let the W3.3
+cross-check run the same inputs through the production path.
 -/
 
 set_option autoImplicit false
@@ -28,37 +28,37 @@ open CryptoPure
 def Hashes.pattern (n mult : Nat) : List Nat :=
   (List.range n).map fun i => i * mult % 256
 
-/-- The SHA-256 and SHA-1 sweep: both sides of every 64-byte padding
-boundary, from the spike. -/
+/-- The spike's SHA-256 and SHA-1 lengths around padding and block
+boundaries. -/
 def Hashes.sha256Lengths : List Nat :=
   [0, 1, 55, 56, 63, 64, 65, 119, 120, 128, 1000]
 
-/-- The SHA-512 sweep: every length to 300 bytes, then both sides of
-512 and two large messages, from the spike. -/
+/-- The spike's SHA-512 lengths: 0 to 300, the lengths around 512, and
+two larger messages. -/
 def Hashes.sha512Lengths : List Nat :=
   List.range 301 ++ [511, 512, 513, 1000, 4096]
 
-/-- The HMAC key lengths: empty, short, both sides of the 64-byte block,
-and two keys that HMAC hashes first, from the spike. -/
+/-- The spike's HMAC-SHA-256 key lengths, including empty keys and keys
+below, at, and above the block size. -/
 def Hashes.hmacKeyLengths : List Nat :=
   [0, 1, 63, 64, 65, 128, 200]
 
-/-- A hex vector field as model bytes; a bad hex string is a corpus
-fault, so it throws. -/
+/-- Reads a hex vector field as model bytes. Invalid hex is a corpus
+error, so it throws. -/
 private def hexField (file : String) (j : Lean.Json) (k : String) : IO (List Nat) := do
   let h ← jStr file j k
   match Mock.Bytes.ofHex? h with
   | some b => pure (Mock.Bytes.toNatList b)
   | none => throw <| IO.userError s!"{file}: bad hex in {k}"
 
-/-- The model pin and the size of one `digestB` form at one input. -/
+/-- Checks that `digestB` agrees with the model and has the expected size. -/
 private def pinHolds (digest : List Nat → List Nat) (digestB : ByteArray → ByteArray)
     (size : Nat) (msg : ByteArray) : Bool :=
   let viaModel := Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg))
   digestB msg == viaModel && (digestB msg).size == size
 
-/-- Runs the suite: the vector families of `hashes-rfc.json`, the HKDF
-cap, the NIST and multihash anchors, and the sweeps. -/
+/-- Runs the RFC, NIST, and multihash vectors, the HKDF cap checks, and
+the length sweeps. -/
 def Hashes.run (r : Runner) : IO Unit := do
   r.section "hashes" "hashes-rfc.json (FIPS 180-4, RFC 4231, RFC 5869); \
 multihash-examples.json (sha1, sha2-256); NIST SHA-256/SHA-1 examples"

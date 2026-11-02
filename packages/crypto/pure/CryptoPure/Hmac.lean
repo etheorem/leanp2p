@@ -5,22 +5,22 @@ import CryptoPure.Sha512
 /-!
 # HMAC
 
-RFC 2104 over the `List Nat` model. The construction takes the hash
-and its block size as arguments, so HMAC over SHA-256 and HMAC over
-SHA-512 are one function at two arguments. The theorems hold for any
-hash whose output has a fixed length that fits in a block. This is the
-audited copy, and the oracle of the W3.3 cross-check (ARCHITECTURE
-§4.6); production HMAC is the backend binding behind the `Crypto`
-facade.
+RFC 2104 over the `List Nat` model. SHA-256 and SHA-512 use the same
+construction by passing their hash and block size as arguments. The
+theorems state the hash-length assumptions they need.
+
+This is the audited copy and the oracle for the W3.3 cross-check
+(ARCHITECTURE §4.6). Production HMAC uses the backend binding through
+the `Crypto` facade.
 -/
 
 set_option autoImplicit false
 
 namespace CryptoPure.Hmac
 
-/-- The key as one block (RFC 2104 §2): a key longer than the block is
-hashed first, and the result is padded with zero bytes to the block
-size. -/
+/-- Hashes a key longer than the block, then pads with zero bytes
+(RFC 2104 §2). The result fills one block when the hash output fits
+within it. -/
 def normKey (hash : List Nat → List Nat) (blockSize : Nat) (key : List Nat) : List Nat :=
   let k := if key.length > blockSize then hash key else key
   k ++ List.replicate (blockSize - k.length) 0
@@ -30,7 +30,7 @@ def hmac (hash : List Nat → List Nat) (blockSize : Nat) (key msg : List Nat) :
   let k := normKey hash blockSize key
   hash (k.map (· ^^^ opad) ++ hash (k.map (· ^^^ ipad) ++ msg))
 
-/-- HMAC-SHA-256, the instance the vectors pin and HKDF uses. -/
+/-- HMAC-SHA-256, also used by the HKDF-SHA-256 functions. -/
 def sha256 (key msg : List Nat) : List Nat :=
   hmac Sha256.digest Sha256.blockSize key msg
 
@@ -45,7 +45,7 @@ theorem hmacEq (hash : List Nat → List Nat) (blockSize : Nat) (key msg : List 
         hash ((normKey hash blockSize key).map (· ^^^ ipad) ++ msg)) :=
   rfl
 
-/-- The normalized key fills exactly one block, when the hash output
+/-- The normalized key fills exactly one block when the hash output
 fits in a block. -/
 theorem lengthNormKey {hash : List Nat → List Nat} {blockSize : Nat}
     (hfit : ∀ m, (hash m).length ≤ blockSize) (key : List Nat) :
@@ -90,11 +90,11 @@ example (key msg : List Nat) :
         Sha256.digest ((normKey Sha256.digest 64 key).map (· ^^^ 0x36) ++ msg)) :=
   rfl
 
-/-- A SHA-256 key always normalizes to one 64-byte block. -/
+/-- HMAC-SHA-256 normalizes any key to one 64-byte block. -/
 example (key : List Nat) : (normKey Sha256.digest Sha256.blockSize key).length = 64 :=
   lengthNormKey (fun m => by rw [Sha256.lengthDigest]; decide) key
 
-/-- A long SHA-256 key can be hashed before calling HMAC. -/
+/-- Hashing a long key first preserves its HMAC-SHA-256 value. -/
 example {key : List Nat} (hlong : 64 < key.length) (msg : List Nat) :
     sha256 key msg = sha256 (Sha256.digest key) msg :=
   hmacLongKey (fun m => by rw [Sha256.lengthDigest]; decide) hlong msg

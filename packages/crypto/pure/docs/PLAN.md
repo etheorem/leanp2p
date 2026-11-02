@@ -71,10 +71,11 @@ Milestones for 1a:
   300 plus 511, 512, 513, 1000, and 4096 for SHA-512. The pure side
   closes here, and the production side closes at W3.3.
 - SHA-1: the SHA-256 sweep lengths, with the pin and the digest size.
-- The padding and block theorems of `CryptoPure/Preprocess.lean`
-  build. The FIPS 180-4 §5.1.1 "abc" padding is an `example`.
-  The suite checks the `abc` digest of all three hashes. SHA-256 and
-  SHA-1 use the inline NIST cases; SHA-512 uses `hashes-rfc.json`.
+- The build checks the padding and block theorems in
+  `CryptoPure/Preprocess.lean`, including the FIPS 180-4 §5.1.1 `abc`
+  padding as an `example`. The suite checks the `abc` digest for all
+  three hashes. SHA-256 and SHA-1 use inline NIST cases, and SHA-512
+  uses `hashes-rfc.json`.
 - Each hash proves that every digest entry is below 256. An `example`
   checks that converting such an entry to `UInt8` preserves its value.
 
@@ -82,11 +83,11 @@ Milestones for 1b:
 
 - HMAC-SHA-256: RFC 4231 TC1, TC2, TC6, and TC7 from
   `hashes-rfc.json`. HMAC-SHA-512 uses TC6 and TC7 from the same file.
-  Both long-key cases use 131-byte keys, above both hash block sizes.
+  Both long-key cases use 131-byte keys, longer than either block size.
   TC7 also has a message longer than both blocks.
 - `Hmac.hmacLongKey` proves the long-key normalization property. The
-  published MAC values above provide an independent vector anchor.
-  The key-length sweep adds production comparisons at W3.3.
+  published MAC values check the expected bytes independently. W3.3
+  adds production comparisons over the key-length sweep.
 - HKDF-SHA-256: RFC 5869 TC1 and TC3 from the same file. `extract` and
   `expand` are checked apart and together, the spike's one-shot check,
   and TC3 exercises the empty salt and info.
@@ -97,9 +98,9 @@ Milestones for 1b:
   production side closes at W3.3.
 - HKDF-SHA-256 at the cap: a request for 8160 bytes returns 8160
   bytes, and a request for 8161 bytes returns `none` (RFC 5869 §2.3).
-- The length theorems of HMAC and HKDF and the HKDF prefix theorem
-  build. The HKDF length and prefix proofs share the argument that a
-  request fits in its rounded-up block count.
+- The build checks the HMAC and HKDF length theorems and the HKDF
+  prefix theorem. The HKDF proofs share a lemma that the rounded-up
+  block count holds enough bytes for the request.
 
 ## Vector stance
 
@@ -107,12 +108,11 @@ The captured crypto vectors sit in one file,
 `Tests/vectors/hashes-rfc.json`. It holds four families: `sha512`
 (four entries), `hmacSha256` (RFC 4231 TC1, TC2, TC6, TC7),
 `hmacSha512` (RFC 4231 TC6, TC7), and `hkdfSha256` (RFC 5869 TC1,
-TC3, with the `prk` and `okm` fields). The
-provenance field names the sources, RFC 4231, RFC 5869, and the FIPS
-180-4 examples. It records that W3.3 adds the production-path
-cross-check. SHA-256 and SHA-1 have no RFC
-file of their own in `Tests/vectors/`. SHA-256 is anchored through the
-inline NIST examples, the multihash spec vectors in
+TC3, with the `prk` and `okm` fields). The provenance field names
+RFC 4231, RFC 5869, and the FIPS 180-4 examples as sources. It also
+records that W3.3 adds the cross-check against the production path.
+SHA-256 and SHA-1 have no RFC file of their own in `Tests/vectors/`.
+SHA-256 is anchored through the inline NIST examples, the vectors in
 `multihash-examples.json`, and the W3.3 cross-check, whose production
 side routes to `LeanHazmatSha256`. SHA-1 is
 anchored through the multihash spec vectors, and the backend SHA-1

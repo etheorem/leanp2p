@@ -7,7 +7,7 @@ import CryptoPure.Mock.Bytes
 
 FIPS 180-4 §6.4 over the `List Nat` model, with a `ByteArray` form for
 the IO edge. The shape is SHA-256's, over 64-bit words, 128-byte
-blocks, and 80 rounds. This is the audited copy, and the oracle of the
+blocks, and 80 rounds. This is the audited copy and the oracle for the
 W3.3 cross-check (ARCHITECTURE §4.6). Production SHA-512 is the
 backend binding behind the `Crypto` facade. This copy makes no
 constant-time claim.
@@ -75,12 +75,13 @@ def digest (msg : List Nat) : List Nat :=
   let h := (blocks blockSize (pad blockSize lengthBytes msg)).foldl compress H0
   h.toList.flatMap word64Bytes
 
-/-- The digest over `ByteArray`, for the IO edge (`digestBEq`). -/
+/-- The digest over `ByteArray`, using the model digest and the byte
+conversions (`digestBEq`). -/
 def digestB (msg : ByteArray) : ByteArray :=
   Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg))
 
-/-- The `ByteArray` form is the model digest between the two
-conversions, by definition. -/
+/-- Converting to model bytes, hashing, and converting back gives
+`digestB`. -/
 theorem digestBEq (msg : ByteArray) :
     digestB msg = Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg)) :=
   rfl

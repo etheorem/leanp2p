@@ -1,14 +1,13 @@
 /-!
 # Constants
 
-Every table and size of the package has its home here (ARCHITECTURE
-§3.8; PRINCIPLES 1.5). The values come from FIPS 180-4 for the three
-hashes, RFC 2104 for the HMAC pads, and RFC 5869 §2.3 for the HKDF
-output cap.
+This module holds the hash tables and sizes, the HMAC pads, and the
+HKDF output cap (ARCHITECTURE §3.8; PRINCIPLES 1.5). The values come
+from FIPS 180-4, RFC 2104, and RFC 5869 §2.3, respectively.
 
 `#v[…]` builds a `Vector`, an array whose length is part of its type.
-Lean checks the length of each literal when it elaborates it, so an
-index `K[t]` with `t : Fin 64` needs no bounds check at runtime.
+Lean checks each literal's length, so `K[t]` is in bounds when
+`t : Fin 64`.
 -/
 
 set_option autoImplicit false

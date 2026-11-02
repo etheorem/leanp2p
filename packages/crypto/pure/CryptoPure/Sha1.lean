@@ -60,12 +60,13 @@ def digest (msg : List Nat) : List Nat :=
   let h := (blocks blockSize (pad blockSize lengthBytes msg)).foldl compress H0
   h.toList.flatMap word32Bytes
 
-/-- The digest over `ByteArray`, for the IO edge (`digestBEq`). -/
+/-- The digest over `ByteArray`, using the model digest and the byte
+conversions (`digestBEq`). -/
 def digestB (msg : ByteArray) : ByteArray :=
   Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg))
 
-/-- The `ByteArray` form is the model digest between the two
-conversions, by definition. -/
+/-- Converting to model bytes, hashing, and converting back gives
+`digestB`. -/
 theorem digestBEq (msg : ByteArray) :
     digestB msg = Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg)) :=
   rfl

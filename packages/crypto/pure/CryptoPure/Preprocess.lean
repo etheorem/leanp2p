@@ -4,12 +4,12 @@
 FIPS 180-4 §5 prepares a message for each hash in two steps. Padding
 (§5.1) appends a `1` bit, the fewest `0` bits that fit, and the
 message length in bits as a big-endian field. Parsing (§5.2) cuts the
-padded message into blocks. The three hashes differ in two sizes only:
-SHA-1 and SHA-256 use 64-byte blocks with an 8-byte length field, and
-SHA-512 uses 128-byte blocks with a 16-byte field. This module states
-both steps once, over those two sizes, and proves the properties §5.1
-demands. The big-endian conversions of §3.1 sit here too, because each
-hash reads its message words and writes its digest through them.
+padded message into blocks. SHA-1 and SHA-256 use 64-byte blocks with
+an 8-byte length field. SHA-512 uses 128-byte blocks with a 16-byte
+field. All three use this module's padding and block split, with
+proofs of the properties in §5.1. The big-endian conversions of §3.1
+also live here because each hash uses them to read message words and
+write its digest.
 
 The model is `List Nat`, one byte per entry (ARCHITECTURE §4.2). A
 message here is always whole bytes, so the `1` bit and the seven `0`
@@ -72,7 +72,8 @@ theorem ltOfMemBeBytes (n x : Nat) : ∀ b ∈ beBytes n x, b < 256 := by
     · exact ih (x / 256) b hb
     · omega
 
-/-- One more byte shifts the value up by a byte and adds the new byte. -/
+/-- Appending a byte multiplies the decoded value by 256 and adds the
+new byte. -/
 theorem ofBeBytesAppendSingleton (bs : List Nat) (b : Nat) :
     ofBeBytes (bs ++ [b]) = ofBeBytes bs * 256 + b := by
   simp [ofBeBytes, List.foldl_append]
@@ -200,10 +201,10 @@ theorem padLengthField (blockSize lengthBytes : Nat) (msg : List Nat) :
 
 /-! ## Parsing (FIPS 180-4 §5.2) -/
 
-/-- Cuts a byte string into blocks of `blockSize` bytes. The last block
-is shorter when the length is not a multiple of the block size; padding
-rules that case out (`lengthOfMemBlocks`). The recursion stops on the
-remaining length, so Lean accepts the definition as total. -/
+/-- Splits a byte string into blocks of `blockSize` bytes. The last
+block is shorter when the length isn't a multiple of the block size.
+Padding ensures full blocks (`lengthOfMemBlocksPad`). The remaining
+input length decreases at each step, which proves termination. -/
 def blocks (blockSize : Nat) (bs : List Nat) : List (List Nat) :=
   -- The guard is named with a leading `_`: only `decreasing_by` reads it,
   -- and the unused-variable linter does not see that use.
@@ -217,9 +218,9 @@ decreasing_by
   simp only [List.length_drop]
   omega
 
-/-- Cutting loses no byte. The proof inducts with `blocks.induct`, the
-induction principle Lean derives from the recursion of `blocks`: one
-case where the cut stops, and one where it takes a block and recurses. -/
+/-- Joining the blocks gives back the input. The proof uses
+`blocks.induct`, which Lean derives from the recursion of `blocks`.
+It has a case for stopping and a case for taking the next block. -/
 theorem flattenBlocks {blockSize : Nat} (h : 0 < blockSize) (bs : List Nat) :
     (blocks blockSize bs).flatten = bs := by
   induction bs using blocks.induct blockSize with

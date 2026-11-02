@@ -1,13 +1,13 @@
 /-!
 # Temporary byte interface
 
-W1.2 (`base/bytes`) is not merged. This module holds the part of its
-documented surface that this package and its suite use, under
-`CryptoPure.Mock.Bytes`. It imports nothing from the real package
-(RULES.md, "Working ahead of the tree"). Each `opaque` declaration
-carries an executable body, so the suite runs, and the kernel cannot
-unfold it, so no proof leans on the mock's definition. Replace this
-module with `import Bytes` when W1.2 lands.
+Until W1.2 (`base/bytes`) merges, this module supplies the byte
+conversions that this package and its suite need. They live under
+`CryptoPure.Mock.Bytes` and import nothing from the real package
+(RULES.md, "Working ahead of the tree"). Each `opaque` declaration has
+an executable body for the suite. The kernel can't unfold it, so
+proofs don't depend on its definition. Replace this module with
+`import Bytes` when W1.2 lands.
 -/
 
 set_option autoImplicit false
@@ -18,7 +18,7 @@ namespace CryptoPure.Mock.Bytes
 opaque ofNatList (bs : List Nat) : ByteArray :=
   (bs.map UInt8.ofNat).toByteArray
 
-/-- The model view of a byte array; every entry is below 256 (W1.2,
+/-- The model view of a byte array, with every entry below 256 (W1.2,
 `Bytes.toNatList`). -/
 opaque toNatList (bs : ByteArray) : List Nat :=
   bs.toList.map UInt8.toNat
@@ -34,7 +34,8 @@ private def hexDigit? (c : Char) : Option Nat :=
   else if 'A' ≤ c && c ≤ 'F' then some (c.toNat - 'A'.toNat + 10)
   else none
 
-/-- Two hex digits per byte; `none` for an odd count or a non-hex digit. -/
+/-- Reads two hex digits per byte. Returns `none` for an odd count or
+a non-hex digit. -/
 private def hexPairs? : List Char → Option (List Nat)
   | [] => some []
   | [_] => none
