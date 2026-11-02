@@ -169,6 +169,13 @@ statement is about `step`, and `simp` and `omega` close it (§6).
   error. Each carries `toCode`/`ofCode?` and the round-trip theorem.
   `Flags` is the `Bool` structure `{ syn, ack, fin, rst : Bool }`, and
   the bit arithmetic happens once, in its `Codec` instance.
+- **The loop performs control actions inline.** The core answers a
+  ping or an accepted stream with a `send` action, and the loop writes
+  it before it reads the next event. There is no control queue, so a
+  ping flood cannot grow one: the flood is bounded by the connection's
+  own write back-pressure, and a peer that outruns it stalls the loop
+  rather than the heap. The cap of `Yamux/Constants.lean` stays as the
+  bound a queued design would use, and `maxControlQueue` is named once.
 - **The inbound-stream backlog is capped** (the yamux spec,
   "Implementation considerations"). The spec's rule is a SHOULD: at
   most 256 streams a peer has opened and we have not acknowledged. The
