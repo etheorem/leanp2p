@@ -40,6 +40,10 @@ namespace Word32
 /-- The zero word. -/
 def zero : Word32 := ⟨0, by decide⟩
 
+/-- A word from any number: the low 32 bits. A wire value is always a
+word, so a frame builder never needs a side condition. -/
+def ofNat (n : Nat) : Word32 := ⟨n % 4294967296, Nat.mod_lt _ (by decide)⟩
+
 /-- Two words are equal when their values are. The proof field is
 irrelevant, and the kernel knows it (ARCHITECTURE §3.7). -/
 @[ext]
@@ -163,6 +167,11 @@ structure Header where
 
 namespace Header
 
+/-- A header from its parts. The codec is the only place that writes the
+layout, so the constructor stays trivial. -/
+def ofParts (t : FrameType) (fl : Flags) (sid : StreamId) (len : Word32) : Header :=
+  { frameType := t, flags := fl, streamId := sid, length := len }
+
 /-- The bytes of a header: version, type, the two flag bytes, then the
 stream id and the length, both big-endian. -/
 def encode (h : Header) : List Nat :=
@@ -249,9 +258,11 @@ theorem encode_lt (h : Header) : AllBytes (encode h) := by
   · exact Nat.lt_of_lt_of_le (FrameType.toCode_lt_four h.frameType) (by decide)
   all_goals exact Nat.mod_lt _ (by decide)
 
-/-- Decoding an encoded header returns it and consumes exactly its
-twelve bytes (the first law of `LawfulCodec`, ARCHITECTURE §6). -/
-theorem decode?_encode (h : Header) : decode? (encode h) = .ok (h, []) := by
+/-- Decoding an encoded header returns it, consumes exactly its twelve
+bytes, and leaves the bytes after it untouched. The suffix is what a
+streaming reader needs: the next frame starts where this one ends. -/
+theorem decode?_encode_append (h : Header) (rest : List Nat) :
+    decode? (encode h ++ rest) = .ok (h, rest) := by
   have hmem : AllBytes
       [wireVersion, h.frameType.toCode,
        Flags.toCode h.flags / 256 % 256, Flags.toCode h.flags % 256,
@@ -283,12 +294,18 @@ theorem decode?_encode (h : Header) : decode? (encode h) = .ok (h, []) := by
     apply Word32.ext
     exact ofBe4_be4 h.length.isLt
   rw [encode_eq]
-  simp only [decode?]
+  simp only [List.cons_append, List.nil_append, decode?]
   rw [dite_eq_left hmem']
   rw [dite_eq_left trivial]
   simp only [hft, Flags.encode] at hfl ⊢
   rw [hfl]
   rw [hs, hl]
+
+/-- The first codec law: decoding an encoded header returns it and eats
+every byte (ARCHITECTURE §6). -/
+theorem decode?_encode (h : Header) : decode? (encode h) = .ok (h, []) := by
+  have := decode?_encode_append h []
+  simpa using this
 
 /-- Every accepted input re-encodes to itself: the decoder accepts only
 the canonical spelling, so the encoder reproduces the input byte for

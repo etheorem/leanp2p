@@ -1,6 +1,9 @@
 import Yamux.Constants
 import Yamux.Sets
 import Yamux.Header
+import Yamux.Error
+import Yamux.Frame
+import Yamux.Core
 
 /-!
 # Yamux
