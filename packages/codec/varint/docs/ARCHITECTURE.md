@@ -85,10 +85,13 @@ every framing layer above inherits the bound and never re-derives it
 
 ## Decisions
 
-- **Minimal forms only, against the go decoder.** Go accepts the
-  non-minimal `0x81 0x00` and returns 1. The multiformats spec
-  requires minimal encodings, and the spec wins (PRINCIPLES 2.1). The
-  spike enforced the same rule.
+- **Minimal forms only.** The multiformats spec requires minimal
+  encodings, so `0x81 0x00` is `malformed`. go-varint v0.1.0, the
+  decoder of go-libp2p v0.50.0, rejects it with `ErrNotMinimal`
+  ([`varint.go`, line 73](https://github.com/multiformats/go-varint/blob/23576a8fddd196d6bc3b82014ae91d198e47d734/varint.go#L73)),
+  and js-multiformats v14.0.5 rejects it too
+  ([`src/varint.ts`, lines 9 and 10](https://github.com/multiformats/js-multiformats/blob/0dcd129adb06743d5005245c0e39631f13b86251/src/varint.ts#L9-L10)).
+  The spike enforced the same rule.
 - **`decode?` returns `Except DecodeError`.** The spike decoder
   returns `Option`. An `Option` cannot tell `truncated` from
   `malformed` (ARCHITECTURE §3.5), and §7 ports every `Option` result

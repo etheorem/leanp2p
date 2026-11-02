@@ -83,8 +83,7 @@ def Varint.run (r : Runner) : IO Unit := do
     r.check s!"{file} n={n}: decode? reads the value"
       (succeedsWith (v, []) (decode? (toNatList wire)))
 
-  -- The recorded counterexample of the minimal rule: go accepts it,
-  -- the spec does not.
+  -- The recorded counterexample of the minimal rule.
   for rule in ← jArr file j "rules" do
     if let some hex ← jStr? file rule "counterExampleHex" then
       let some wire := ofHex? hex | r.check s!"{file} counterexample hex" false; continue
