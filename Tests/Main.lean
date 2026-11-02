@@ -2,6 +2,7 @@ import Tests.Support
 import Tests.Vectors
 import Tests.Concurrency
 import Tests.Protobuf
+import Tests.Yamux
 
 /-!
 # Test entry point
@@ -19,4 +20,6 @@ def main : IO UInt32 := do
   Tests.Vectors.run r
   Tests.Concurrency.run r
   Tests.Protobuf.run r
+  Tests.Yamux.run r
+  Tests.Yamux.CoreTests.run r
   r.summary
