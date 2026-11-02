@@ -16,7 +16,7 @@ namespace Bytes
 /-- Every lawful codec consumes exactly the bytes it writes. -/
 theorem codecRoundTrip {α : Type} [Codec α] [LawfulCodec α] (a : α) :
     Codec.decode? (Codec.encode a) = .ok (a, []) :=
-  LawfulCodec.decode_encode a
+  LawfulCodec.decodeEncode a
 
 /-- Check generated values with executable equality. The proof instance
 keeps each caller tied to the same two codec laws. -/

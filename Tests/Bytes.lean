@@ -37,13 +37,13 @@ instance : Codec TestValue where
   decode? := decodeTest
 
 instance : LawfulCodec TestValue where
-  decode_encode a := by
+  decodeEncode a := by
     obtain ⟨v⟩ := a
     have hv : v.toNat < 256 := by
       have h := UInt8.toNat_lt v
       omega
     simp [Codec.decode?, Codec.encode, decodeTest, hv, UInt8.ofNat_toNat]
-  encode_decode bs a rest h := by
+  encodeDecode bs a rest h := by
     cases bs with
     | nil => simp [Codec.decode?, decodeTest] at h
     | cons tag tail =>

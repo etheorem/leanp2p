@@ -27,6 +27,6 @@ inductive DecodeError where
   | truncated
   /-- The input violated the specification. This is a protocol error. -/
   | malformed
-  deriving Repr, DecidableEq, Hashable
+  deriving Repr, DecidableEq, BEq, Hashable
 
 end Bytes

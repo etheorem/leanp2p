@@ -32,9 +32,9 @@ input that decodes, so a decoder never accepts a spelling that the
 encoder would not produce. -/
 class LawfulCodec (α : Type) [Codec α] : Prop where
   /-- Decoding an encoded value returns that value and no leftover. -/
-  decode_encode : ∀ (a : α), Codec.decode? (Codec.encode a) = .ok (a, [])
+  decodeEncode : ∀ (a : α), Codec.decode? (Codec.encode a) = .ok (a, [])
   /-- Every accepted input is the encoding of the decoded value. -/
-  encode_decode : ∀ (bs : List Nat) (a : α) (rest : List Nat),
+  encodeDecode : ∀ (bs : List Nat) (a : α) (rest : List Nat),
     Codec.decode? bs = .ok (a, rest) → Codec.encode a ++ rest = bs
 
 end Bytes
