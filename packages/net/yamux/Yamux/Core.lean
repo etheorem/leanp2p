@@ -542,14 +542,11 @@ theorem apply_syn_room {s : State} {fr : Frame} {s' : State} {acts : List Action
        else .error .backlog) := by
     simp [apply, hft, hsyn, hunk, hne]
   rw [hcomp] at h
-  by_cases hc : s.closing = true
-  · rw [if_pos hc] at h
-    simp at h
-  · rw [if_neg hc] at h
-    by_cases hr : remoteCount s < maxInboundBacklog
-    · exact hr
-    · rw [if_neg hr] at h
-      simp at h
+  split at h
+  · simp at h
+  · split at h
+    · assumption
+    · simp at h
 
 /-! ## The drain loop -/
 
