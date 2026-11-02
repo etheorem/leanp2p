@@ -55,6 +55,7 @@ roots = ["Multiformats"]
 name = "Proto"
 srcDir = "packages/codec/proto"
 roots = ["Proto"]
+globs = ["Proto.*"]
 
 [[lean_lib]]
 name = "Snappy"
