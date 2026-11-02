@@ -39,7 +39,7 @@ shape and `Conn/Upgrade.lean` for `MuxHandle` and `MuxChoice` (§10
 row 12). The spike shapes change here: the `name : String` fields
 become `id : ProtocolId` (§3.4), the `BufReader` arguments become a
 `Connection` plus a leftover `ByteArray` (§4.7, §4.9), and the
-`Option` results become `ExceptT Core.Error IO` (§3.5). The spike's
+`Option` results become `ExceptT Core.Error Async` (§3.5). The spike's
 handshake implementation, `Conn/Noise.lean`, maps to
 `libp2p/security` (§10 row 13). Two spike fields drop out of the
 surface. The spike's `SecureConn.remoteMuxers` carried the muxer list
@@ -68,7 +68,7 @@ The shapes are §4.9's, refined where this section says so.
   only if a code table appears.
 - `SecurityProtocol` carries `id : ProtocolId` and the handshake of
   §4.9: `handshake : Role → Connection → ByteArray → ExceptT
-  Core.Error IO SecureConn`. The `ByteArray` argument holds what the
+  Core.Error Async SecureConn`. The `ByteArray` argument holds what the
   negotiation over-read, and the handshake consumes it before it
   reads the connection (§4.7).
 - `SecureConn` is the post-handshake connection: the secure read,
@@ -85,19 +85,19 @@ The shapes are §4.9's, refined where this section says so.
   session. The spike split the directions into `MuxChoice.client` and
   `MuxChoice.server`; this package follows the `SecurityProtocol`
   shape and carries one field, `open : Role → Connection → ByteArray
-  → ExceptT Core.Error IO MuxSession`. The direction matters to every
+  → ExceptT Core.Error Async MuxSession`. The direction matters to every
   muxer: yamux assigns stream ids by the parity of the direction
   (§4.8).
 - `MuxSession` is the uniform session view: `openStream`, which
-  returns a fresh `Stream` through `ExceptT Core.Error IO`;
-  `accept : IO (Option Stream)`, which returns `none` when the
+  returns a fresh `Stream` through `ExceptT Core.Error Async`;
+  `accept : Async (Option Stream)`, which returns `none` when the
   session closes, so a parked accept wakes and ends, as
   `Listener.accept` in `net/streams` does; `close : IO Unit`; and the
   completion of the session loop, which the owner joins (§3.1, §4.1).
   Whether `openStream` carries the protocol hint mplex needs in its
   NewStream frame is a refinement `libp2p/mux` records.
 - `StreamHandler` carries `id : ProtocolId` and `handle : Stream →
-  ExceptT Core.Error IO Unit`. The host keys its registry by the id
+  ExceptT Core.Error Async Unit`. The host keys its registry by the id
   (§3.10), and a served stream reaches the callback. Whether a
   handler failure closes the connection is the host's call, so the
   exact return form is the seam's to refine with the host pair.
@@ -194,12 +194,12 @@ this package's plan check.
   a cipher by name (§4.9). The key-material types belong to
   `libp2p/identity`, and core reaches them only through `PeerId`.
 - From below, `net/streams` for `Connection` and `Stream` (§4.9).
-  §4.9 says core depends on `identity` and `net/streams` and on
-  nothing else, so the package writes no direct import of a codec or
-  a base module; `base/conc` and `base/bytes` arrive through
-  `net/streams`. Core names no base or codec name of its own. If a
-  refinement needs one, the direct import is recorded here as part of
-  that refinement.
+  §4.9 says core depends on `identity`, `net/streams`, and `base/conc`
+  and on nothing else. The direct `base/conc` import gives the seams
+  `Async`, the one base name that core names. The package writes no
+  direct import of a codec or of `base/bytes`, and `base/bytes` arrives
+  through `net/streams`. If a refinement needs another name, the direct
+  import is recorded here as part of that refinement.
 - No protocol knowledge of any kind: no Noise message, no yamux
   header, no multistream reply. The package is the seam, and the
   implementations own the bytes.

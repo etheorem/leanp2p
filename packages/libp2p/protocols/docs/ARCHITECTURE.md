@@ -148,10 +148,10 @@ and the echo demo handler.
 - Inside libp2p, the §2 chain gives it the host and everything below:
   the registry of §3.10 to register into, the peerstore to update on
   push, `ProtocolId` and the seam types from `core`.
-- `base/conc` for the machinery the units need: `Chan` with a capacity
-  and `select` for the gossipsub queues (root PLAN W6.4 names W1.1),
-  `withinDeadline` for the req/resp deadlines, and `TaskSet` for the
-  loop tasks.
+- `base/conc` for the machinery the units need: `Async` for every
+  signature that can park, `Chan` with a capacity and `select` for
+  the gossipsub queues (root PLAN W6.4 names W1.1), `withinDeadline`
+  for the req/resp deadlines, and `TaskSet` for the loop tasks.
 - No SSZ anywhere. The package frames opaque bytes (§8).
 - No snappy by name. The compression call goes through the
   `codec/snappy` binding interface, so a native Lean

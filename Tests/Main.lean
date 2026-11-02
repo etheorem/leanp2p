@@ -1,5 +1,6 @@
 import Tests.Support
 import Tests.Vectors
+import Tests.Concurrency
 
 /-!
 # Test entry point
@@ -15,4 +16,5 @@ pass under a single capability: `lake test -- +RTS -N1 -RTS`
 def main : IO UInt32 := do
   let r ← Tests.Runner.new
   Tests.Vectors.run r
+  Tests.Concurrency.run r
   r.summary
