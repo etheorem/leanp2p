@@ -168,9 +168,8 @@ statement is about `step`, and `simp` and `omega` close it (§6).
   `Stream` seam.
 - From `base`, what the loop needs: `Async`, `Chan`, `TaskSet`, and
   `OnceRef` from `base/conc`, and the `Clock` if a shell schedules
-  ticks. From
-  `base/bytes`: the byte model, the shared `DecodeError`, and the
-  `Codec` and `LawfulCodec` classes.
+  ticks. From `base/bytes`: the byte model, the shared `DecodeError`,
+  and the `Codec` and `LawfulCodec` classes.
 - Nothing from the `codec` group, and nothing from `crypto`. Every
   header field is fixed width, so the package needs no varint.
 - No libp2p knowledge: no `ProtocolId`, no `Muxer` type, no

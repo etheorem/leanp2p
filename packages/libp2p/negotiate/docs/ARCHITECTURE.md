@@ -170,9 +170,8 @@ connection-level selection.
   message is uvarint-length prefixed, so the varint appears, and the
   `Msg` codec imports the encoder and decoder of `codec/varint`.
 - From `base`, `Async` and `withinDeadline` from `base/conc`, and the
-  byte model,
-  `DecodeError`, and the `Codec`/`LawfulCodec` classes from
-  `base/bytes`.
+  byte model, `DecodeError`, and the `Codec`/`LawfulCodec` classes
+  from `base/bytes`.
 - No crypto. The security negotiation runs before the handshake. The
   muxer negotiation runs after it, over the `SecureConn`. No field
   names a key, a hash, or a cipher. No `codec/proto`: the multistream

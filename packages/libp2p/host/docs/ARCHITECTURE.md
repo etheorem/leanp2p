@@ -175,9 +175,9 @@ module re-exports the public submodules.
   behind the `Muxer` value of `libp2p/mux`, and no host module names
   it.
 - From base, `base/conc` for `Async`, `OnceRef`, `TaskSet`,
-  `withinDeadline`, and `Clock` (§4.1). `base/bytes` and the codecs arrive through
-  `negotiate` and `identity`, and the host names none of them
-  directly.
+  `withinDeadline`, and `Clock` (§4.1). `base/bytes` and the codecs
+  arrive through `negotiate` and `identity`, and the host names none
+  of them directly.
 - No crypto by name. Key material reaches the host only through the
   types of its dependencies: the private key and `PeerId` come from
   `libp2p/identity` (§2). If a refinement needs a direct import, this

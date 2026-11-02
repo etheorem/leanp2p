@@ -140,8 +140,8 @@ The names are §7 row 8's. The types follow §3.1.
   package uses `codec/multiformats` for `Multiaddr` (dial, listen,
   and the connection addresses), and `base`: `Async`, `Chan`,
   `select`, `TaskSet`, `OnceRef`, `withinDeadline`, and the `Clock`
-  from `base/conc`, and the byte model and `DecodeError` from `base/bytes`.
-  It uses nothing from `crypto`.
+  from `base/conc`, and the byte model and `DecodeError` from
+  `base/bytes`. It uses nothing from `crypto`.
 - No protocol knowledge: no multistream message, no Noise frame, no
   yamux header. `Framing` knows the length-prefix shape alone, and the
   protocol layers own their message forms.
