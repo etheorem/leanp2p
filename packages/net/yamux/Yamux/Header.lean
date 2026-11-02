@@ -1,4 +1,4 @@
-import Bytes
+import Yamux.Mock.Bytes
 import Yamux.Constants
 import Yamux.Sets
 
@@ -6,7 +6,7 @@ import Yamux.Sets
 # Yamux frame header
 
 The 12-byte header of the hashicorp yamux specification, as a
-`Bytes.Codec` with a proved round trip (ARCHITECTURE §3.2, §4.8).
+`Yamux.Mock.Bytes.Codec` with a proved round trip (ARCHITECTURE §3.2, §4.8).
 
 The layout is fixed and big-endian:
 
@@ -194,7 +194,7 @@ theorem encode_eq (h : Header) :
 /-- The header carried by twelve accepted bytes, if the bytes name one.
 The version must be the one this implementation speaks, and every byte
 must be below 256, because the model is wider than the wire. -/
-def decode? : List Nat → Except Bytes.DecodeError (Header × List Nat)
+def decode? : List Nat → Except Yamux.Mock.Bytes.DecodeError (Header × List Nat)
   | v :: t :: f0 :: f1 :: s0 :: s1 :: s2 :: s3 :: l0 :: l1 :: l2 :: l3 :: rest =>
       if hb : ∀ b ∈ [v, t, f0, f1, s0, s1, s2, s3, l0, l1, l2, l3], b < 256 then
         if hv : v = wireVersion then
@@ -328,7 +328,7 @@ theorem encode_decode? : ∀ {bs : List Nat} {h : Header} {rest : List Nat},
               subst hrest
               have ht : t = FrameType.toCode ft := FrameType.eq_toCode_of_ofCode?_eq_some hft
               have hfe : [Flags.toCode fl / 256 % 256, Flags.toCode fl % 256] = [f0, f1] :=
-                Bytes.LawfulCodec.encodeDecode (α := Flags) [f0, f1] fl [] hfl
+                Yamux.Mock.Bytes.LawfulCodec.encodeDecode (α := Flags) [f0, f1] fl [] hfl
               have hf0 : Flags.toCode fl / 256 % 256 = f0 := by
                 cases hfe
                 rfl
@@ -365,13 +365,13 @@ theorem encode_decode? : ∀ {bs : List Nat} {h : Header} {rest : List Nat},
   | [_, _, _, _, _, _, _, _, _, _, _], _, _, hh => by simp [decode?] at hh
 
 /-- The header is a wire codec (ARCHITECTURE §3.2). -/
-instance : Bytes.Codec Header where
+instance : Yamux.Mock.Bytes.Codec Header where
   encode := encode
   decode? := decode?
 
 /-- The header codec is lawful: both round-trip laws hold
 (ARCHITECTURE §6, layer 1). -/
-instance : Bytes.LawfulCodec Header where
+instance : Yamux.Mock.Bytes.LawfulCodec Header where
   decodeEncode := decode?_encode
   encodeDecode := fun _ _ _ h => encode_decode? h
 

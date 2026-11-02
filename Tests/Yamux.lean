@@ -39,7 +39,7 @@ private def decodesTo (bs : List Nat) (h : Header) : Bool :=
   | .error _ => false
 
 /-- The decoder rejects an input with the given error. -/
-private def rejects (bs : List Nat) (e : Bytes.DecodeError) : Bool :=
+private def rejects (bs : List Nat) (e : Yamux.Mock.Bytes.DecodeError) : Bool :=
   match Header.decode? bs with
   | .error got => got == e
   | .ok _ => false
@@ -91,7 +91,7 @@ def run (r : Runner) : IO Unit := do
 
   -- The generic codec harness runs once over the sample set.
   r.check "yamux header lawful codec harness"
-    (Bytes.checkRoundTrips samples)
+    (Yamux.Mock.Bytes.checkRoundTrips samples)
 
   -- A header is consumed off the front of a longer buffer.
   r.check "yamux header suffix kept"

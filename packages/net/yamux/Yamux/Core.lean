@@ -1,4 +1,4 @@
-import Bytes
+import Yamux.Mock.Bytes
 import Yamux.Constants
 import Yamux.Error
 import Yamux.Frame

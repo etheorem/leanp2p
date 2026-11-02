@@ -1,4 +1,4 @@
-import Bytes
+import Yamux.Mock.Bytes
 import Yamux.Constants
 
 /-!
@@ -15,7 +15,7 @@ finite.
 
 Flags are a structure of four `Bool`s, not an inductive, because the
 four bits are independent: a single frame carries any combination. The
-bit arithmetic happens once, in the `Bytes.Codec` instance below, and
+bit arithmetic happens once, in the `Yamux.Mock.Bytes.Codec` instance below, and
 every other module reads the `Bool` fields.
 -/
 
@@ -210,7 +210,7 @@ theorem encode_lt (f : Flags) : ∀ b ∈ encode f, b < 256 := by
 /-- The model decoding of a flag word. A short input is `truncated`; a
 high byte that is not zero, or a low byte above the four defined bits,
 is `malformed` (ARCHITECTURE §3.2, §5.2). -/
-def decode? : List Nat → Except Bytes.DecodeError (Flags × List Nat)
+def decode? : List Nat → Except Yamux.Mock.Bytes.DecodeError (Flags × List Nat)
   | hi :: lo :: rest =>
       if hi = 0 then
         match ofCode? lo with
@@ -251,14 +251,14 @@ theorem encode_decode? : ∀ {bs : List Nat} {f : Flags} {rest : List Nat},
         · simp at h
       · simp at h
 
-/-- The `Bytes.Codec` instance for the flag word (ARCHITECTURE §3.2). -/
-instance : Bytes.Codec Flags where
+/-- The `Yamux.Mock.Bytes.Codec` instance for the flag word (ARCHITECTURE §3.2). -/
+instance : Yamux.Mock.Bytes.Codec Flags where
   encode := encode
   decode? := decode?
 
 /-- The flag codec is lawful: decode after encode returns the value and
 consumes exactly its bytes (ARCHITECTURE §6, layer 1). -/
-instance : Bytes.LawfulCodec Flags where
+instance : Yamux.Mock.Bytes.LawfulCodec Flags where
   decodeEncode := decode?_encode
   encodeDecode := fun _ _ _ h => encode_decode? h
 
