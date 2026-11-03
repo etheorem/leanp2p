@@ -88,18 +88,16 @@ forms (the SEC1/SPKI/PKCS#1 choices and the key-type protobuf) belong
 to `libp2p/identity`. `crypto/backend` exposes only the primitives
 (§4.6).
 
-The repository is one primary Lake package. Each leaf is one `lean_lib`,
-and the `Crypto` facade is one more, rooted at the group directory
-(§3.6). A leaf may keep one small package-local build helper beside it
-only when `lakefile.toml` cannot express the leaf's native target
-(`docs/PRINCIPLES.md` §4.2). The root requires that helper by path. It
-builds only the native artifacts that the owning leaf needs, exposes no
-public Lean modules, and is versioned with this repository rather than
-forming an independent dependency or version boundary. The owning leaf
-keeps the public API, and the root `lakefile.toml` remains the root
-configuration. If external users appear, a later mechanical move can
-split the packages into separate repositories. Until then, version skew
-is a bigger risk than coupling.
+The repository has one primary Lake package. Each leaf is one `lean_lib`,
+with `Crypto` as another library rooted at the group directory (§3.6).
+When `lakefile.toml` cannot express a native target
+(`docs/PRINCIPLES.md` §4.2), a leaf may keep one small package-local Lake
+helper. The root requires it by path. The helper builds only that leaf's
+native artifacts, exposes no public Lean API, and shares the repository's
+version boundary. The leaf retains the public API, and the root
+`lakefile.toml` remains authoritative. If external users appear, a later
+mechanical move can split the packages into separate repositories. Until
+then, version skew is a bigger risk than coupling.
 
 **What `cli/` is for.** `cli/` holds everything whose job ends at
 `main`: executable entry points, command-line and config parsing, and
@@ -427,17 +425,15 @@ type of each binding states what the C function does:
   sizes into proof-carrying newtypes (§3.7) before the call, so the
   shim validates nothing twice.
 
-**Runtime allocation exhaustion.** A recoverable allocation fault in an
-`IO` or `Async` operation remains an `IO.Error` (§3.5). A pure
-deterministic binding has no such channel. Exhaustion of the Lean
-runtime allocator is instead non-returning. A pure shim follows that
-policy: Lean-owned results use the runtime allocator, and a failed
-native scratch allocation calls `lean_internal_panic_out_of_memory`.
-This condition is neither a protocol or input failure nor an ordinary
-returned result; it must not be reported as success or through any
-package-owned error. On every ordinary return, the binding still keeps
-the purity promise above: same input, same output, no read of global
-state, and no observable side effect.
+**Runtime allocation exhaustion.** Recoverable allocation failures in
+`IO` or `Async` remain `IO.Error` (§3.5). A pure deterministic binding
+has no such channel. If the Lean runtime allocator is exhausted or a
+native scratch allocation fails, the shim follows Lean's non-returning
+out-of-memory behavior. A failed scratch allocation calls
+`lean_internal_panic_out_of_memory`.
+Exhaustion is neither a protocol failure nor an input failure, and the
+shim must not encode it as success or as a package-owned error. Every
+ordinary return still satisfies the purity contract above.
 
 **The facade.** Callers import `Crypto`, the root module of the group
 at `packages/crypto/Crypto.lean`. No caller imports `crypto/backend`,
