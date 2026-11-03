@@ -83,7 +83,8 @@ Four families have etheorem hazmat packages: secp256k1
 (`LeanHazmatSecp256k1`, libsecp256k1), ECDSA P-256 (`LeanHazmatP256`,
 OpenSSL), SHA-256 (`LeanHazmatSha256`, OpenSSL and ISA-L), and
 keccak-256 (`LeanHazmatKeccak`, keccak-tiny). The facade (§3.6, W3.3)
-routes P-256 verification and keccak-256 there. Two families stay on
+routes P-256 verification, keccak-256, and secp256k1 key recovery
+there. Two families stay on
 this package's bindings, and the plan's "Pin outcomes" records both
 (§4.6):
 - The `LeanHazmatSha256` archive breaks the executables that link it,

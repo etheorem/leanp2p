@@ -40,6 +40,7 @@ example := (p256PublicKey, p256Sec1, p256Sign)
 example := (secp256k1PublicKey, secp256k1PointValid, secp256k1Sign, secp256k1SignDigest,
   secp256k1Verify)
 example : ByteArray → ByteArray → ByteArray → Bool := p256Verify
+example : ByteArray → ByteArray → ByteArray → UInt32 → ByteArray := secp256k1Recover
 example := (inspect, selfSigned)
 example := (Rng.system, Rng.seeded)
 
