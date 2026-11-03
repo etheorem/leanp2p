@@ -517,7 +517,6 @@ the connection once at the boundary (root §3.5), and the race's
 `deadlineExpired` maps to the `timeout` arm through `settleUpgrade`.
 The clock is a seam, so the deadline test can advance it. -/
 
-
 def upgradeWith (clock : Conc.Clock) (role : Mock.Core.Role)
     (conn : Mock.Streams.Connection) (leftover : ByteArray)
     (expected : Option Mock.Identity.PeerId)
