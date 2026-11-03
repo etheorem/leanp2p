@@ -22,9 +22,9 @@ these fails:
 
 The X.509 rules live in `Tests.BackendX509`.
 
-**Determinism.** Ed25519 signing, RSA signing, and a ChaCha20-Poly1305
-seal give the same bytes twice. The two ECDSA signers give different
-signatures on two draws, and both verify.
+**Determinism.** Ed25519 signing, RSA signing, secp256k1 signing, and
+a ChaCha20-Poly1305 seal give the same bytes twice. The P-256 signer
+gives different signatures on two draws, and both verify.
 
 **Key generation.** A fresh key of each type derives its public key and
 passes a sign and verify round trip. Two fresh X25519 keys agree on the
@@ -108,7 +108,7 @@ private def strictness (r : Runner) : IO Unit := do
   let some scalar ← okOr r "strictness: secp256k1 generate" secp256k1Generate | return
   let some point := (secp256k1PublicKey scalar).toOption
     | r.check "strictness: secp256k1 derive" false
-  let some low ← okOr r "strictness: secp256k1 sign" (secp256k1Sign scalar msg) | return
+  let .ok low := secp256k1Sign scalar msg | r.check "strictness: secp256k1 sign" false
   let (sr, ss) ← Ecdsa.derSig "secp256k1Sign" low
   let high := Ecdsa.derSigOf sr (Ecdsa.secp256k1Order - ss)
   r.check "strictness: the low-S control verifies" (secp256k1Verify point msg low)
@@ -131,19 +131,19 @@ private def determinism (r : Runner) : IO Unit := do
   r.check "determinism: a ChaCha20-Poly1305 seal gives the same bytes twice"
     (match chachaSeal key nonce .empty msg, chachaSeal key nonce .empty msg with
      | .ok a, .ok b => a == b | _, _ => false)
-  -- The randomized signers: two draws differ, and both verify.
+  -- secp256k1 signs by RFC 6979: the same bytes twice, and they verify.
+  let some k1 ← okOr r "determinism: secp256k1 generate" secp256k1Generate | return
+  let some k1Pub := (secp256k1PublicKey k1).toOption | r.check "determinism: secp256k1 derive" false
+  r.check "determinism: secp256k1 signs the same bytes twice, and they verify"
+    (match secp256k1Sign k1 msg, secp256k1Sign k1 msg with
+     | .ok c, .ok d => c == d && secp256k1Verify k1Pub msg c | _, _ => false)
+  -- The randomized signer: two draws differ, and both verify.
   let some p256Priv ← okOr r "determinism: p256 generate" p256Generate | return
   let some p256Pub := (p256PublicKey p256Priv).toOption | r.check "determinism: p256 derive" false
   let some a ← okOr r "determinism: p256 sign" (p256Sign p256Priv msg) | return
   let some b ← okOr r "determinism: p256 sign" (p256Sign p256Priv msg) | return
   r.check "determinism: two P-256 signatures differ, and both verify"
     (a != b && p256Verify p256Pub msg a && p256Verify p256Pub msg b)
-  let some k1 ← okOr r "determinism: secp256k1 generate" secp256k1Generate | return
-  let some k1Pub := (secp256k1PublicKey k1).toOption | r.check "determinism: secp256k1 derive" false
-  let some c ← okOr r "determinism: secp256k1 sign" (secp256k1Sign k1 msg) | return
-  let some d ← okOr r "determinism: secp256k1 sign" (secp256k1Sign k1 msg) | return
-  r.check "determinism: two secp256k1 signatures differ, and both verify"
-    (c != d && secp256k1Verify k1Pub msg c && secp256k1Verify k1Pub msg d)
 
 private def keyGeneration (r : Runner) : IO Unit := do
   let msg := ofString "key generation"
@@ -165,11 +165,10 @@ private def keyGeneration (r : Runner) : IO Unit := do
        | _, _ => false)
   -- secp256k1.
   if let some k ← okOr r "keygen: secp256k1" secp256k1Generate then
-    if let some sig ← okOr r "keygen: secp256k1 sign" (secp256k1Sign k msg) then
-      r.check "keygen: a fresh secp256k1 key derives, signs, and verifies"
-        (match secp256k1PublicKey k with
-         | .ok pub => pub.size == 33 && secp256k1Verify pub msg sig
-         | .error _ => false)
+    r.check "keygen: a fresh secp256k1 key derives, signs, and verifies"
+      (match secp256k1PublicKey k, secp256k1Sign k msg with
+       | .ok pub, .ok sig => pub.size == 33 && secp256k1Verify pub msg sig
+       | _, _ => false)
   -- ECDSA P-256.
   if let some k ← okOr r "keygen: P-256" p256Generate then
     if let some sig ← okOr r "keygen: P-256 sign" (p256Sign k msg) then

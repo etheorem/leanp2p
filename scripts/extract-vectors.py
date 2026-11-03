@@ -1031,10 +1031,9 @@ def extract_go_libp2p_fixtures() -> None:
         "messageHex": msg.hex(),
         "note": "sigDeterministic mirrors the upstream fixture test: for "
                 "deterministic schemes a re-sign must be byte-identical. We "
-                "check that for RSA; secp256k1 is a documented divergence "
-                "(OpenSSL randomizes the nonce, go's btcec uses RFC 6979 - "
-                "recorded as an open item), ECDSA is randomized on both "
-                "sides; verification is the contract for both.",
+                "check that for RSA and secp256k1 (RFC 6979 on both sides). "
+                "ECDSA is randomized on both sides; verification is its "
+                "contract.",
         "cases": cases,
     })
 

@@ -482,7 +482,11 @@ LEAN_EXPORT uint8_t leanp2p_p256_verify(b_lean_obj_arg spki, b_lean_obj_arg msg,
 /* The private key crosses as the raw 32-byte scalar. The shim wraps it
    in a fixed SEC1 ECPrivateKey (RFC 5915) with the secp256k1 OID
    1.3.132.0.10 and no public key. OpenSSL computes the public point
-   when it loads the key. */
+   when it loads the key.
+
+   OpenSSL loads a scalar of zero, or one not below the group order n,
+   and signs with it. SEC 1 §3.2.1 takes a private key from [1, n - 1],
+   so the loader checks the range itself and returns NULL outside it. */
 static const uint8_t SEC1_K1_HEAD[7] = {0x30, 0x2e, 0x02, 0x01, 0x01, 0x04, 0x20};
 static const uint8_t SEC1_K1_TAIL[9] = {0xa0, 0x07, 0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x0a};
 
@@ -494,6 +498,17 @@ static EVP_PKEY *k1_private(b_lean_obj_arg scalar) {
     const unsigned char *p = der;
     EVP_PKEY *k = d2i_PrivateKey(EVP_PKEY_EC, NULL, &p, (long)sizeof der);
     OPENSSL_cleanse(der, sizeof der);
+    BIGNUM *d = NULL, *order = NULL;
+    int in_range = k != NULL
+        && EVP_PKEY_get_bn_param(k, OSSL_PKEY_PARAM_PRIV_KEY, &d) == 1
+        && EVP_PKEY_get_bn_param(k, OSSL_PKEY_PARAM_EC_ORDER, &order) == 1
+        && !BN_is_zero(d) && BN_cmp(d, order) < 0;
+    BN_clear_free(d);
+    BN_free(order);
+    if (!in_range) {
+        EVP_PKEY_free(k);
+        return NULL;
+    }
     return k;
 }
 
@@ -542,6 +557,31 @@ static int ec_half_order(EVP_PKEY *k, BIGNUM **order, BIGNUM **half) {
         && BN_rshift1(*half, *order) == 1;
 }
 
+/* Normalize S in `s` to its low form: S > n/2 becomes n - S, where n
+   is the group order of `k`. Both secp256k1 signers call it, so the
+   signatures pass the low-S rule of the verifier below. 0 on a library
+   fault. */
+static int k1_low_s(EVP_PKEY *k, ECDSA_SIG *s) {
+    BIGNUM *order = NULL, *half = NULL, *low = NULL;
+    const BIGNUM *sr = NULL, *ss = NULL;
+    ECDSA_SIG_get0(s, &sr, &ss);
+    int ok = ec_half_order(k, &order, &half);
+    if (ok && BN_cmp(ss, half) > 0) {
+        BIGNUM *r2 = BN_dup(sr);
+        low = BN_new();
+        ok = r2 != NULL && low != NULL && BN_sub(low, order, ss) == 1
+             && ECDSA_SIG_set0(s, r2, low) == 1;
+        if (ok)
+            low = NULL; /* `s` owns `r2` and `low` now */
+        else
+            BN_free(r2);
+    }
+    BN_free(low);
+    BN_free(half);
+    BN_free(order);
+    return ok;
+}
+
 /* The compressed SEC1 point (SEC 1 §2.3.3): 0x02 or 0x03 by the parity
    of y, then x. For a key loaded from DER, OpenSSL gives the
    uncompressed form and ignores a conversion-format request. So the
@@ -571,44 +611,78 @@ LEAN_EXPORT uint8_t leanp2p_secp256k1_check(b_lean_obj_arg point) {
     return k != NULL;
 }
 
-/* Sign, then normalize S to its low form (S > n/2 becomes n - S), so the
-   signature passes the low-S rule of the verifier below. */
-LEAN_EXPORT lean_obj_res leanp2p_secp256k1_sign(b_lean_obj_arg scalar, b_lean_obj_arg msg,
-                                                lean_obj_arg w) {
-    (void)w;
+/* The DER of a secp256k1 ECDSA-Sig-Value is at most 72 bytes: two
+   INTEGERs of up to 33 bytes, each with a 2-byte head, in a 2-byte
+   SEQUENCE head. */
+#define K1_DER_SIG_MAX 72
+
+/* The one secp256k1 signer: ECDSA over a 32-byte digest with the
+   RFC 6979 nonce, then S in its low form. NULL on a bad scalar or a
+   library fault. Both entry points below call it.
+
+   OpenSSL 3.2 added the deterministic nonce (`nonce-type` 1). The
+   nonce's HMAC-DRBG runs on the `digest` parameter, SHA-256, whatever
+   hash made the digest. libsecp256k1 and decred also run RFC 6979 on
+   HMAC-SHA-256, so the three give the same signature for one key and
+   one digest. The signer draws no randomness, so both bindings are
+   pure. */
+static ECDSA_SIG *k1_sign(b_lean_obj_arg scalar, const uint8_t digest[32]) {
     EVP_PKEY *k = k1_private(scalar);
-    lean_object *raw = k != NULL ? sign_sha256(k, msg) : none();
-    BIGNUM *order = NULL, *half = NULL, *low = NULL;
+    EVP_PKEY_CTX *c = k != NULL ? EVP_PKEY_CTX_new_from_pkey(NULL, k, NULL) : NULL;
+    unsigned int rfc6979 = 1;
+    OSSL_PARAM params[] = {
+        OSSL_PARAM_construct_utf8_string(OSSL_SIGNATURE_PARAM_DIGEST, "SHA256", 0),
+        OSSL_PARAM_construct_uint(OSSL_SIGNATURE_PARAM_NONCE_TYPE, &rfc6979),
+        OSSL_PARAM_construct_end(),
+    };
+    uint8_t der[K1_DER_SIG_MAX];
+    size_t n = sizeof der;
     ECDSA_SIG *s = NULL;
-    lean_object *r = none();
-    if (!lean_is_scalar(raw) && ec_half_order(k, &order, &half)) {
-        lean_object *der = lean_ctor_get(raw, 0);
-        s = parse_sig_strict(bptr(der), blen(der));
-        const BIGNUM *sr = NULL, *ss = NULL;
-        if (s != NULL) ECDSA_SIG_get0(s, &sr, &ss);
-        if (s != NULL && BN_cmp(ss, half) <= 0) {
-            lean_inc(der);
-            r = some(der);
-        } else if (s != NULL && (low = BN_new()) != NULL && BN_sub(low, order, ss) == 1) {
-            BIGNUM *r2 = BN_dup(sr);
-            if (r2 != NULL && ECDSA_SIG_set0(s, r2, low) == 1) {
-                low = NULL; /* owned by `s` now */
-                unsigned char *re = NULL;
-                int n = i2d_ECDSA_SIG(s, &re);
-                if (n > 0) r = some(mk_bytes(re, (size_t)n));
-                OPENSSL_free(re);
-            } else {
-                BN_free(r2);
-            }
-        }
+    int ok = c != NULL && EVP_PKEY_sign_init_ex(c, params) == 1
+        && EVP_PKEY_sign(c, der, &n, digest, 32) == 1
+        && (s = parse_sig_strict(der, n)) != NULL && k1_low_s(k, s);
+    if (!ok) {
+        ECDSA_SIG_free(s);
+        s = NULL;
     }
-    BN_free(low);
-    BN_free(half);
-    BN_free(order);
-    ECDSA_SIG_free(s);
-    lean_dec(raw);
+    EVP_PKEY_CTX_free(c);
     EVP_PKEY_free(k);
-    return lean_io_result_mk_ok(r);
+    return s;
+}
+
+/* The peer-ids spec form: sign SHA-256(msg), and give the DER
+   ECDSA-Sig-Value that the verifier below takes. */
+LEAN_EXPORT lean_obj_res leanp2p_secp256k1_sign(b_lean_obj_arg scalar, b_lean_obj_arg msg) {
+    uint8_t h[32];
+    ECDSA_SIG *s = EVP_Digest(bptr(msg), blen(msg), h, NULL, EVP_sha256(), NULL) == 1
+                       ? k1_sign(scalar, h)
+                       : NULL;
+    lean_object *r = none();
+    unsigned char *der = NULL;
+    int n = s != NULL ? i2d_ECDSA_SIG(s, &der) : -1;
+    if (n > 0) r = some(mk_bytes(der, (size_t)n));
+    OPENSSL_free(der);
+    ECDSA_SIG_free(s);
+    return r;
+}
+
+/* The compact form of the ENR `v4` scheme (EIP-778): sign the caller's
+   32-byte digest, and give `r ‖ s`, each half big-endian and
+   left-padded to 32 bytes. */
+LEAN_EXPORT lean_obj_res leanp2p_secp256k1_sign_digest(b_lean_obj_arg scalar,
+                                                       b_lean_obj_arg digest) {
+    ECDSA_SIG *s = k1_sign(scalar, bptr(digest));
+    lean_object *r = none();
+    if (s != NULL) {
+        const BIGNUM *sr = NULL, *ss = NULL;
+        ECDSA_SIG_get0(s, &sr, &ss);
+        lean_object *out = alloc_bytes(64);
+        uint8_t *o = lean_sarray_cptr(out);
+        r = some_or_free(BN_bn2binpad(sr, o, 32) == 32 && BN_bn2binpad(ss, o + 32, 32) == 32,
+                         out);
+    }
+    ECDSA_SIG_free(s);
+    return r;
 }
 
 /* Verify a strict-DER, low-S signature over SHA-256(msg). A high S, a

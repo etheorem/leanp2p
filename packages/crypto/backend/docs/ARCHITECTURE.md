@@ -24,9 +24,9 @@ the constraints of that split.
 |---|---|
 | `c/p2pcrypto.c` | the shim, one C file over the OpenSSL 3 EVP surface. The spike's is about 770 lines, and it stays auditable in one sitting (PRINCIPLES 4.1). |
 | `Backend/Error.lean` | `CryptoError`, the one error inductive of the package (§3.5), and `liftShim`, the one lift of a shim `Option` into it |
-| `Backend/Sized.lean` | `Key32` and `Nonce12`, the proof-carrying newtypes (§3.7) that cross the FFI edge. `Sym` and `Sign` both take them, so they sit below both. |
+| `Backend/Sized.lean` | `Key32`, `Digest32`, and `Nonce12`, the proof-carrying newtypes (§3.7) that cross the FFI edge. `Sym` and `Sign` both take them, so they sit below both. |
 | `Backend/Sym.lean` | random bytes, the SHA-1 and SHA-512 digest bindings, the interim SHA-256 binding, HMAC, HKDF, and ChaCha20-Poly1305 seal and open |
-| `Backend/Sign.lean` | X25519 derivation and DH. Derive, sign, and verify for Ed25519, RSA, secp256k1, and ECDSA P-256 (P-256 verification is the interim fallback until the facade routes it). The DER re-encode of an RSA or P-256 private key (`rsaPkcs1`, `p256Sec1`). Key generation for all five types. |
+| `Backend/Sign.lean` | X25519 derivation and DH. Derive, sign, and verify for Ed25519, RSA, secp256k1, and ECDSA P-256 (P-256 verification is the interim fallback until the facade routes it). The secp256k1 compact signer over a caller's digest. The DER re-encode of an RSA or P-256 private key (`rsaPkcs1`, `p256Sec1`). Key generation for all five types. |
 | `Backend/X509.lean` | the certificate helpers of the tls.md shape. `inspect` reads the SPKI, the value of one extension the caller names by OID, and the validity times. `selfSigned` checks the signature. The helpers know no protocol, so the caller passes the libp2p OID. |
 | `Backend.lean` | the package root, one import line per submodule. Production callers import `Crypto` instead (§3.6). |
 
@@ -71,7 +71,7 @@ once, in this package.
 | X25519 public-key derivation and DH | pure | deterministic (§3.6) |
 | RSA derive, re-encode, sign, verify | all pure | RSASSA-PKCS1-v1_5 signs deterministically, and the PKCS#1 re-encode depends on the key alone (§3.6) |
 | secp256k1 derive and verify | pure | deterministic (§3.6) |
-| secp256k1 sign | `IO` | ECDSA draws a random nonce (§3.6) |
+| secp256k1 sign, DER over SHA-256 of a message and compact over a digest | pure | RFC 6979 derives the nonce from the key and the digest (§3.6) |
 | ECDSA P-256 derive, re-encode, and verify | pure | deterministic (§3.6). Verification is the interim fallback until the facade routes it. |
 | ECDSA P-256 sign | `IO` | ECDSA draws a random nonce (§3.6) |
 | SHA-1, SHA-512, the interim SHA-256, HMAC, HKDF | pure | deterministic (§3.6) |
@@ -207,6 +207,10 @@ digest.
    checked, and the shim validates nothing twice. The DER-content
    strictness of the verifiers is a different check. It reads the
    parsed key, so it stays in the C verifier (§4.6, PRINCIPLES 2.4).
+   The range of a secp256k1 scalar, `[1, n - 1]` (SEC 1 §3.2.1), is
+   a check of the same kind. The group order is a curve fact that the
+   loader reads, and OpenSSL signs with a scalar outside the range. So
+   the shim's loader checks it, once, for every secp256k1 binding.
 3. **The shim stays auditable in one sitting.** It is one C file of our
    own, with the spike's conventions at the top. Every entry point
    carries the `leanp2p_` prefix. Any further C file needs a reason in
@@ -260,11 +264,22 @@ This pair's plan carries the unit.
   `b_lean_obj_arg` discipline.
 - **Deterministic signing stays pure.** §3.6 fixes the split, and it
   matches the schemes. Ed25519 (RFC 8032) and RSASSA-PKCS1-v1_5 derive
-  the signature from the key and the message alone. secp256k1 and ECDSA
-  P-256 draw a nonce, so their sign bindings take the world. go-libp2p
-  signs secp256k1 by RFC 6979, and OpenSSL draws a random nonce. So the
-  note in `keys-go-libp2p.json` records that verification is the
-  contract for those two types.
+  the signature from the key and the message alone. The ECDSA P-256
+  signer draws a nonce, so its binding takes the world.
+- **secp256k1 has one signing core, RFC 6979, behind two entry
+  points.** The core signs a 32-byte digest with the RFC 6979 nonce
+  (OpenSSL 3.2 and later) and sets S low, so both bindings are pure.
+  The entry points differ only in what the protocol fixes:
+  - `secp256k1Sign` hashes the message with SHA-256 and gives DER,
+    the peer-ids form that `secp256k1Verify` takes.
+  - `secp256k1SignDigest` takes the caller's digest and gives the
+    compact `r ‖ s`. The `v4` ENR identity scheme signs a keccak-256
+    digest in that form (EIP-778).
+
+  go-libp2p signs secp256k1 by RFC 6979 over SHA-256 (decred), and
+  geth signs by RFC 6979 through libsecp256k1. The shared nonce rule
+  makes the three agree byte for byte. So the go fixture pins the
+  re-sign, as it pins RSA.
 - **The spike's binding types refine into the §3.6 split.** The spike
   declared every binding in `IO`, because it predates §3.6. The
   implementation keeps the spike's primitives and shim, and moves the

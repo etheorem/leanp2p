@@ -13,7 +13,8 @@ ARCHITECTURE).
 - the X25519 private and public keys,
 - the raw secp256k1 scalar.
 
-`Nonce12` is the RFC 8439 nonce.
+`Digest32` is a 32-byte message digest that a signer takes as it is,
+with no hash of its own. `Nonce12` is the RFC 8439 nonce.
 Lean erases the proof field at runtime, so a newtype costs nothing.
 -/
 
@@ -23,6 +24,11 @@ namespace Backend
 
 /-- Exactly 32 bytes. -/
 structure Key32 where
+  bytes : ByteArray
+  sizeEq : bytes.size = 32
+
+/-- Exactly 32 bytes: a SHA-256 or keccak-256 digest. -/
+structure Digest32 where
   bytes : ByteArray
   sizeEq : bytes.size = 32
 
@@ -38,11 +44,16 @@ def Key32.ofByteArray? (b : ByteArray) : Option Key32 :=
   -- branch holds the proof the structure field asks for.
   if h : b.size = 32 then some ⟨b, h⟩ else none
 
+/-- The bytes as a `Digest32`, or `none` when the size is not 32. -/
+def Digest32.ofByteArray? (b : ByteArray) : Option Digest32 :=
+  if h : b.size = 32 then some ⟨b, h⟩ else none
+
 /-- The bytes as a `Nonce12`, or `none` when the size is not 12. -/
 def Nonce12.ofByteArray? (b : ByteArray) : Option Nonce12 :=
   if h : b.size = 12 then some ⟨b, h⟩ else none
 
 instance : BEq Key32 := ⟨fun a b => a.bytes == b.bytes⟩
+instance : BEq Digest32 := ⟨fun a b => a.bytes == b.bytes⟩
 instance : BEq Nonce12 := ⟨fun a b => a.bytes == b.bytes⟩
 
 example : (Key32.ofByteArray? (ByteArray.mk (Array.replicate 32 0))).isSome := by decide

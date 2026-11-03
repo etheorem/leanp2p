@@ -44,7 +44,9 @@ SHA-256, HMAC, and HKDF through the facade, all through one import of
 `Crypto`; it draws its ephemerals through the `Rng` seam.
 W5.6 (`libp2p/host`) signs and verifies through the facade. W6.1
 (`libp2p/identity` ENR) consumes the keccak-256 digest through the
-facade; the digest routes to `LeanHazmatKeccak` (§4.6). The `Rng`
+facade; the digest routes to `LeanHazmatKeccak` (§4.6). It signs a
+record through the secp256k1 compact digest signer, and it recovers a key
+through `LeanHazmatSecp256k1`. The `Rng`
 seam is the test-seam home: a seeded value replays a
 fixed sequence, so every suite above this package pins its randomness
 (§3.1).
@@ -80,9 +82,12 @@ Milestones for 1a:
 - The three key types of `keys-go-libp2p.json` (raw key material, see
   "Vector stance"): derive, sign, and verify over the fixed message of
   the file. The RSA signature is byte-identical on re-sign
-  (`sigDeterministic`). For secp256k1 and ECDSA the verification is the
-  contract, because OpenSSL randomizes the nonce; the file's note
-  records the go divergence.
+  (`sigDeterministic`), and so is the secp256k1 re-sign, because both
+  sides use the RFC 6979 nonce. The compact digest signer gives the
+  fixture's `(r, s)`. Sixteen more messages check that the two forms
+  agree, are low-S, and verify. ECDSA P-256 draws a random nonce, so
+  verification is its contract. A scalar of zero and a scalar equal to
+  the group order are `invalidKey` under every secp256k1 binding.
 - Random bytes: the requested length comes back, two draws differ, and
   the shim's 1 MiB cap rejects more.
 - The SHA-1, SHA-512, HMAC, HKDF, and interim SHA-256 bindings get one
@@ -175,10 +180,10 @@ Milestones for 1b:
   must not know the `SignedKey` and its prefix. So the suite composes
   the backend helpers and verifiers the way the TLS handshake will.
   Certificates 1 to 3 pass, and certificate 4 fails.
-- Pure-binding determinism: Ed25519 sign, RSA sign, and a
-  ChaCha20-Poly1305 seal give the same output twice on the same input.
-  A randomized sign gives two different outputs across two draws, and
-  verification accepts both.
+- Pure-binding determinism: Ed25519 sign, RSA sign, secp256k1 sign,
+  and a ChaCha20-Poly1305 seal give the same output twice on the same
+  input. The P-256 sign gives two different outputs across two draws,
+  and verification accepts both.
 - Key generation: a fresh key of each type, Ed25519, X25519, secp256k1,
   ECDSA P-256, and RSA, derives its public key, signs, and verifies.
 - The borrowed-argument regression: a soak test drives 200,000 calls
@@ -247,9 +252,10 @@ family with no captured vector closes through such a transcript, through
 the W3.3 cross-check, or through a generated fixture whose provenance
 the file records. The expired-certificate and critical-extension
 fixtures are generated that way, since the tls.md set holds none. The
-randomized signatures have no RFC 6979 anchor; the fixture suites and
-the verifier regressions close them, and a captured hostile-signature
-suite would close them harder.
+randomized P-256 signature has no known answer; the fixture suites and
+the verifier regressions close it, and a captured hostile-signature
+suite would close it harder. Both secp256k1 signers have one: the go
+fixture, which go-libp2p signs by RFC 6979.
 
 Keccak-256 has no RFC vector file on the spike branch, and the spike
 bound none. The production path is `LeanHazmatKeccak` (§4.6); that

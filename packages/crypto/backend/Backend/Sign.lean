@@ -25,10 +25,11 @@ no marshaling of its own (package ARCHITECTURE, "Decisions").
 
 **Binding types (§3.6).** Ed25519 and RSASSA-PKCS1-v1_5 sign
 deterministically, and every derivation and verifier is deterministic,
-so those bindings are pure. The shim keeps that promise. The same input
-gives the same output, and the call reads no global state and has no
-side effect. ECDSA draws a random nonce, so the P-256 and secp256k1
-signers take the world. The key generators take it too.
+so those bindings are pure. Both secp256k1 signers derive the nonce
+by RFC 6979, so they are pure too. The shim keeps that promise. The
+same input gives the same output, and the call reads no global state
+and has no side effect. The P-256 signer draws a random nonce, so it
+takes the world. The key generators take it too.
 
 **The ownership rule.** The shim borrows every `ByteArray` argument of
 an `@[extern]` declaration below. The declaration marks it `@&`, and
@@ -55,8 +56,10 @@ not list an `opaque` constant, so this docstring is the record of the
 assumption. The library is the toolchain's bundled static OpenSSL 3,
 which `lean-toolchain` pins, as in `Backend.Sym`. `Tests/Backend.lean`
 pins the bindings by the RFC 8032 and RFC 7748 vectors and the captured
-go key fixtures. `Tests/BackendStrict.lean` pins the verifier
-strictness, the determinism, and key generation. The raw declarations
+go key fixtures. The go signer uses the RFC 6979 nonce too, so the go
+secp256k1 fixture pins both secp256k1 signers byte for byte.
+`Tests/BackendStrict.lean` pins the verifier strictness, the
+determinism, and key generation. The raw declarations
 are `private`, because the shim trusts the sizes the wrappers check.
 This docstring is their trust note.
 -/
@@ -246,8 +249,11 @@ this shim (root ARCHITECTURE §4.6). -/
 private opaque secp256k1PublicRaw (scalar : @& ByteArray) : Option ByteArray
 
 @[extern "leanp2p_secp256k1_sign"]
-private opaque secp256k1SignRaw (scalar : @& ByteArray) (msg : @& ByteArray) :
-    IO (Option ByteArray)
+private opaque secp256k1SignRaw (scalar : @& ByteArray) (msg : @& ByteArray) : Option ByteArray
+
+@[extern "leanp2p_secp256k1_sign_digest"]
+private opaque secp256k1SignDigestRaw (scalar : @& ByteArray) (digest : @& ByteArray) :
+    Option ByteArray
 
 @[extern "leanp2p_secp256k1_verify"]
 private opaque secp256k1VerifyRaw (point : @& ByteArray) (msg : @& ByteArray)
@@ -265,12 +271,27 @@ scalar of zero, or one not below the group order, is `invalidKey`. -/
 def secp256k1PublicKey (scalar : Key32) : Except CryptoError ByteArray :=
   liftShim .invalidKey (secp256k1PublicRaw scalar.bytes)
 
-/-- The DER ECDSA signature of SHA-256(`msg`), with S in its low form,
-so the signature passes the low-S rule of `secp256k1Verify`. OpenSSL
-draws a random nonce, so the signature bytes are not reproducible. Some
-implementations derive the nonce by RFC 6979 instead. -/
-def secp256k1Sign (scalar : Key32) (msg : ByteArray) : ExceptT CryptoError IO ByteArray := do
-  ExceptT.mk (liftShim .invalidKey <$> secp256k1SignRaw scalar.bytes msg)
+/-- The DER ECDSA signature of SHA-256(`msg`), the form of the peer-ids
+spec, with S in its low form, so the signature passes the low-S rule
+of `secp256k1Verify`. The shim signs through the same RFC 6979 core as
+`secp256k1SignDigest`, so the binding is pure, and it reproduces the
+go fixture signature byte for byte. A scalar of zero, or one not below
+the group order, is `invalidKey`. -/
+def secp256k1Sign (scalar : Key32) (msg : ByteArray) : Except CryptoError ByteArray :=
+  liftShim .invalidKey (secp256k1SignRaw scalar.bytes msg)
+
+/-- The 64-byte compact ECDSA signature `r ‖ s` of a 32-byte digest,
+with S in its low form. The signer does not hash: the caller passes
+the digest its protocol fixes, such as keccak-256 for the `v4` ENR
+identity scheme (EIP-778). Each half is big-endian and left-padded to
+32 bytes.
+
+The nonce comes from RFC 6979 with HMAC-SHA-256, as in libsecp256k1
+and decred, so one key and one digest give one signature, and the
+binding is pure. The scalar rule of `secp256k1Sign` applies. The
+compact form carries no recovery id. -/
+def secp256k1SignDigest (scalar : Key32) (digest : Digest32) : Except CryptoError ByteArray :=
+  liftShim .invalidKey (secp256k1SignDigestRaw scalar.bytes digest.bytes)
 
 /-- Verify a DER ECDSA signature over SHA-256(`msg`) under a SEC1 point,
 compressed or uncompressed. A high S, a non-canonical DER encoding, a

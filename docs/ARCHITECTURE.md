@@ -405,16 +405,17 @@ type of each binding states what the C function does:
 
 - **Deterministic primitives are pure.** This covers SHA-256 and
   SHA-512, HMAC, HKDF, ChaCha20-Poly1305 seal and open, X25519, Ed25519
-  sign and verify, every verifier, and every public-key derivation.
+  sign and verify, secp256k1 sign (its nonce comes from RFC 6979),
+  every verifier, and every public-key derivation.
   Their bindings are `opaque f (… : @& ByteArray) : Option ByteArray`
   or `: Bool`, with no `IO`. The Lean interface lifts `Option` to
   `Except CryptoError`. A pure binding is a promise that the shim must
   keep: same input, same output, no read of global state, no side
   effect. The docstring of each binding records that promise.
-- **Randomness is `IO`.** `randomBytes`, key generation, and the
-  signatures that draw a random nonce (ECDSA P-256, secp256k1) return
-  `IO (…)`. Ed25519 and RSASSA-PKCS1-v1_5 sign deterministically, so
-  their bindings stay pure.
+- **Randomness is `IO`.** `randomBytes`, key generation, and the ECDSA
+  P-256 signature, which draws a random nonce, return `IO (…)`.
+  Ed25519, RSASSA-PKCS1-v1_5, and secp256k1 with the RFC 6979 nonce
+  sign deterministically, so their bindings stay pure.
 - Every `ByteArray` argument is borrowed (`@&`). The Lean side checks
   sizes into proof-carrying newtypes (§3.7) before the call, so the
   shim validates nothing twice.
