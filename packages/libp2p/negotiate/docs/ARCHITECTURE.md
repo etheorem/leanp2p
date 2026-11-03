@@ -39,10 +39,11 @@ imports it and wires it; it keeps no copy.
   input buffer, and the phase. `Event.bytes` carries raw bytes, and the
   core decodes them, so the malformed-versus-incomplete call stays in
   the core (§3.1). `Event.propose` posts the id the initiator dials.
-  `Action.write` emits framed bytes, `Action.select` ends the
-  negotiation with the chosen `ProtocolId` and the leftover, and
-  `Action.error` reports `Negotiate.Error`. There is no tick: the
-  upgrader owns the deadline (§5.4).
+  `Action.write` emits framed bytes, and `Action.select` ends the
+  negotiation with the chosen `ProtocolId` and the leftover. A failure
+  leaves `step` through its `Except` channel, as §3.3 states, so
+  `Action` carries no error constructor. There is no tick: the upgrader
+  owns the deadline (§5.4).
 - `Reply` is the closed set of §3.4 with `na` and `ls`. Its wire form
   is the message text the codec carries, and no spec gives the replies
   a numeric code table, so it has no `toCode`/`ofCode?` pair, by the
@@ -127,6 +128,12 @@ connection-level selection.
   The target folds it into data in and data out, so a captured trace
   replays with no network and no clock (§6), and the `-N1` run holds by
   construction.
+- **`Action` carries no error constructor.** An earlier draft of this
+  document listed `Action.error`. Root §3.3 fixes the core shape as
+  `step : State → Event → Except ProtocolError (State × List Action)`,
+  so a failure leaves through the `Except` channel and never as an
+  action. The spike wrote `na` and then failed on a bad first header;
+  this core returns the error and writes nothing.
 - **Wire-based muxer selection, against the spike's extension
   selection.** The section above records it.
 - **The identity check sits between the handshake and the muxer stage,
