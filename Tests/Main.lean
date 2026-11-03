@@ -17,6 +17,7 @@ import Tests.Hashes
 import Tests.Facade
 import Tests.CryptoCross
 import Tests.Negotiate
+import Tests.Upgrade
 
 /-!
 # Test entry point
@@ -49,4 +50,5 @@ def main : IO UInt32 := do
   Tests.Facade.run r
   Tests.CryptoCross.run r
   Tests.Negotiate.run r
+  Tests.Upgrade.run r
   r.summary
