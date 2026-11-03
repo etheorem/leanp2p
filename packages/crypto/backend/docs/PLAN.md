@@ -32,8 +32,8 @@ record the outcome for each primitive.
 
 Unit 0 is done. Unit 2 writes no code in this package beyond what the
 facade re-exports; its new work is the facade library, the seam, and
-the backend side of the cross-check, whose suite lives in the pure
-pair (the test split below).
+the backend side of the cross-check. The facade pair
+(`packages/crypto/docs/`) records the suites (the test split below).
 
 ## Consumers
 
@@ -56,8 +56,9 @@ fixed sequence, so every suite above this package pins its randomness
 Behavior tests close the units. The suite follows the root test-runner
 layout of W0.2, and the `-N1` pass is required. Every case is concrete.
 The byte-level known-answer tests for the FFI bindings live in this
-package's suites. The FFI-versus-pure comparisons live in the pure
-package's cross-check (W3.3), the one place that imports both stories.
+package's suites. The FFI-versus-pure comparisons live in the W3.3
+cross-check, `Tests/CryptoCross.lean`, the one module that imports both
+implementations (facade PLAN).
 
 Milestones for 1a:
 
@@ -223,8 +224,8 @@ Milestones for unit 2:
   unit 1a.
 - The `Rng` seam: the seeded test value replays its sequence exactly,
   and the production value draws through `randomBytes`.
-- The facade check: one import of `Crypto` resolves every name this
-  document lists, and no caller module imports `Backend`.
+- The facade check: one import of `Crypto` resolves every public
+  binding of this package, and no caller module imports `Backend`.
 
 ## Vector stance
 

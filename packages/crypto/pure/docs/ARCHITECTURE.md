@@ -80,10 +80,10 @@ The names are the root names (§7, row 6): digests, HMAC, HKDF.
 Callers do not import this package. They import the `Crypto` facade
 (§3.6), which names the production implementation of every primitive
 in the surface. This package is where a reader audits the code. The
-facade gets no documentation pair of its own.
-Its story is split across the two crypto packages, and this pair
-owns the pure side: the pure copies as the oracles of the W3.3
-cross-check, and the properties the facade must preserve. Purity is
+facade pair (`packages/crypto/docs/`) records the routes and the W3.3
+cross-check. This pair owns the pure side: the pure copies as the
+oracles of the cross-check, and the properties the comparison needs.
+Purity is
 the first property: the named functions keep the §3.6 promise of
 same input, same output, and no side effect. Totality is the second:
 the cross-check compares two implementations at the IO edge, and the
@@ -130,16 +130,15 @@ comparison needs a total function on this side.
 4. **The cross-check contract.** The cross-check compares the pure
    copies with the production path, property-wise at the IO edge
    (§4.6, PLAN W3.3). The production path is the backend bindings and
-   the etheorem packages for the routed primitives. The cross-check runs in this
-   package's suites, the one place that imports both stories through
-   the facade, following
-   the test-split rule of the backend pair. This package's side
-   is to stay pure and total, so the comparison is well-defined.
-   `Preprocess.blocks` terminates on the remaining input length,
-   replacing the spike's `partial` block loops (§3.3). Each hash folds
-   its compression over the resulting blocks. HKDF recurses on the
-   block count. HMAC has a fixed sequence of hash calls.
-
+   the etheorem packages for the routed primitives. The cross-check
+   suite, `Tests/CryptoCross.lean`, is the one module that imports both
+   implementations, and the facade pair records it. This package's side
+   is to stay pure and total, so the comparison is well-defined. Every
+   loop names its measure. The two SHA-2 block loops terminate on the
+   remaining input length, where the spike marked `partial` (§3.3).
+   The HKDF expand loop terminates on the remaining output length.
+   HMAC is the fixed two-call form over the hash, and its termination
+   follows from that structure.
 ## Decisions
 
 - **Pure Lean digests exist although production routes elsewhere.** They
