@@ -40,7 +40,7 @@ Unit 0 is done.
 ## Test milestones (unit 1)
 
 - Sim: dial and listen over the in-memory pair, and an echo exchange
-  across the splice. A dial to an address with no listener returns
+  across the two pipes. A dial to an address with no listener returns
   `none`. A read may split or coalesce writes, so no suite may rely on
   write boundaries; the byte-splitting hostile mode delivers every
   write one byte at a time (the spike's `Connection.byteSplitting`).

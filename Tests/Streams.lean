@@ -120,7 +120,7 @@ private def mockChecks (r : Runner) : IO Unit := do
 
 /-- Sim: dial, listen, echo, and the hostile mode. -/
 private def simChecks (r : Runner) : Async Unit := do
-  -- An echo exchange across the splice, with the write boundaries kept
+  -- An echo exchange across the two pipes, with the write boundaries kept
   -- and with every write split into single bytes.
   for split in [false, true] do
     let net ← Sim.Net.new split
