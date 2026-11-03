@@ -13,6 +13,7 @@ the vector with the printed reason.
 Usage: scripts/extract-vectors.py   (run from the repository root)
 """
 
+import base64
 import csv
 import json
 import re
@@ -1172,6 +1173,101 @@ def extract_mss_ls() -> None:
     })
 
 
+# ---------------------------------------------------------------------------
+# W6.1: RLP (ethereum/tests RLPTests) and ENR (EIP-778)
+# ---------------------------------------------------------------------------
+
+def _rlp_scalar(n: int) -> str:
+    """The minimal big-endian bytes of an integer, as hex: zero is empty."""
+    return n.to_bytes((n.bit_length() + 7) // 8, "big").hex()
+
+
+def _rlp_tree(v) -> dict:
+    """An RLPTests "in" value as an item tree. A string starting with
+    `#` is a big integer, other strings are UTF-8 bytes, and integers are
+    minimal big-endian scalars (RLPTests README conventions)."""
+    if isinstance(v, list):
+        return {"list": [_rlp_tree(x) for x in v]}
+    if isinstance(v, int):
+        return {"bytes": _rlp_scalar(v)}
+    if v.startswith("#"):
+        return {"bytes": _rlp_scalar(int(v[1:]))}
+    return {"bytes": v.encode("utf-8").hex()}
+
+
+def _hex(s: str) -> str:
+    return s[2:].lower() if s.lower().startswith("0x") else s.lower()
+
+
+def extract_rlp() -> None:
+    d = "vendor/ethereum-tests"
+    valid = json.loads(read(d, "RLPTests/rlptest.json"))
+    write_json("rlp-valid.json", {
+        "_provenance": prov(d, "RLPTests/rlptest.json", "RLPTests rlptest"),
+        "cases": [{"name": k, "item": _rlp_tree(v["in"]), "outHex": _hex(v["out"])}
+                  for k, v in valid.items()],
+    })
+    invalid = json.loads(read(d, "RLPTests/invalidRLPTest.json"))
+    write_json("rlp-invalid.json", {
+        "_provenance": prov(d, "RLPTests/invalidRLPTest.json", "RLPTests invalidRLPTest"),
+        "cases": [{"name": k, "inHex": _hex(v["out"])} for k, v in invalid.items()],
+    })
+
+
+def extract_enr() -> None:
+    d = "vendor/eips"
+    src = read(d, "EIPS/eip-778.md")
+    text = re.search(r"^(enr:[A-Za-z0-9_-]+)$", src, re.M).group(1)
+    b64 = text[len("enr:"):]
+    record = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+    node_id = re.search(r"The node ID is `([0-9a-f]{64})`", src).group(1)
+    seq = int(re.search(r"sequence number `(\d+)`", src).group(1))
+    priv = re.search(r"private key:\n\n```text\n([0-9a-f]{64})\n```", src).group(1)
+    block = re.search(r"The RLP structure of the record is:\n\n```text\n\[\n(.*?)\]\n```",
+                      src, re.S).group(1)
+    elems = [e.strip().rstrip(",") for e in block.splitlines() if e.strip()]
+    as_hex = [e[1:-1].encode().hex() if e.startswith('"') else e for e in elems]
+    sig, seq_hex, kvs = as_hex[0], as_hex[1], as_hex[2:]
+    write_json("enr-eip778.json", {
+        "_provenance": prov(d, "EIPS/eip-778.md", "Test Vectors"),
+        "recordText": text,
+        "recordHex": record.hex(),
+        "nodeIdHex": node_id,
+        "seq": seq,
+        "seqHex": seq_hex,
+        "privateKeyHex": priv,
+        "signatureHex": sig,
+        "pairs": [{"keyHex": kvs[i], "valueHex": kvs[i + 1]} for i in range(0, len(kvs), 2)],
+    })
+
+
+def extract_enr_text() -> None:
+    """The enr: text forms sigp/enr refuses: its test
+    test_read_enr_base64url_decoding_enforce_no_pad_no_extra_trailingbits.
+    Each case is the EIP-778 example with one change to the base64url body.
+    go-ethereum's enode.Parse (base64.RawURLEncoding, not Strict) refuses
+    the padded case and accepts the trailing-bits case; the identity pair
+    records the decision (contract 7)."""
+    d = "vendor/sigp-enr"
+    test = "test_read_enr_base64url_decoding_enforce_no_pad_no_extra_trailingbits"
+    src = read(d, "src/lib.rs")
+    start = src.index("fn " + test)
+    body = src[start:src.index("for (test_name, err, text) in test_data", start)]
+    tuples = re.findall(r'\(\s*"([^"]*)",\s*"((?:[^"\\]|\\.)*)",\s*"(enr:[^"]*)",\s*\)', body)
+    assert len(tuples) == 2, f"expected 2 text-form cases, got {len(tuples)}"
+    # Measured with the base64 step of enode.Parse (node.go, lines 149 to
+    # 152) under go1.27.3; the PR test plan records the program.
+    go = {"padded": "refuses: illegal base64 data at input byte 179",
+          "extra trailing bits": "accepts, and decodes to the bytes of the EIP-778 example"}
+    write_json("enr-text-sigp.json", {
+        "_provenance": prov(d, "src/lib.rs", test),
+        "note": "every case is a rejection; goEthereum records what enode.Parse "
+                "at vendor/go-ethereum/p2p/enode/node.go answers",
+        "cases": [{"name": n, "sigpError": e, "text": t, "goEthereum": go[n]}
+                  for n, e, t in tuples],
+    })
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     extract_go_multiaddr()
@@ -1188,6 +1284,9 @@ def main() -> None:
     extract_noise()
     extract_tls_vectors()
     extract_mss_ls()
+    extract_rlp()
+    extract_enr()
+    extract_enr_text()
     print("done", file=sys.stderr)
 
 
