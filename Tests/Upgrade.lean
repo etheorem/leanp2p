@@ -2,6 +2,8 @@ import Tests.Support
 import Libp2p.Negotiate
 import Conc
 import Bytes
+import Streams
+import Streams.Mock.Multiaddr
 
 /-!
 # The upgrade suite (unit 1b)
@@ -652,6 +654,168 @@ private def checkResponderFirst (r : Runner) : Async Unit := do
         (ws == [encodeMsg header] && s.phase = .negotiating)
   | .error _ => r.check "negotiate responder sends its header first" false
 
+/-! ## The byte-split two-party runs over the sim -/
+
+/-- The mock-shaped view of a sim connection. A sim write throws
+`IO.Error`; the mock seam reports the same failure through its `Except`
+channel, which is the one the upgrader matches. -/
+private def simConn (c : Streams.Connection) : Mock.Streams.Connection where
+  read := c.read
+  write := fun b => do
+    let wrote ← try
+      c.write b
+      pure true
+    catch _ => pure false
+    if wrote then return .ok () else return .error .closed
+  close := discard c.close.toBaseIO
+
+/-- Record the size of every chunk that a connection's reader answers.
+The split checks read this to show that the sim delivered one byte at a
+time. -/
+private def recordReadSizes (conn : Mock.Streams.Connection) (sizes : Conc.OnceRef (List Nat)) :
+    Mock.Streams.Connection where
+  read := do
+    match ← conn.read with
+    | none => return none
+    | some chunk => do
+        sizes.update fun l => chunk.size :: l
+        return (some chunk)
+  write := conn.write
+  close := conn.close
+
+/-- A multiaddr from its text form. -/
+private def simAddr (text : String) : Async Streams.Mock.Multiformats.Multiaddr := do
+  match Streams.Mock.Multiformats.Multiaddr.parse? text with
+  | .ok a => return a
+  | .error _ => throw <| IO.userError s!"test address {text} does not parse"
+
+/-- A connected pair over a fresh sim net. `split` makes every write of
+the net arrive one byte at a time. -/
+private def simPair (split : Bool) : Async (Mock.Streams.Connection × Mock.Streams.Connection) := do
+  let net ← Streams.Sim.Net.new split
+  let l ← net.transport.listen (← simAddr "/ip4/127.0.0.1/tcp/4101")
+  let some dialer ← net.transport.dial l.addr | throw <| IO.userError "dial failed"
+  let some listener ← l.accept | throw <| IO.userError "accept failed"
+  l.close
+  return (simConn dialer, simConn listener)
+
+/-- Read exactly `n` bytes, from the seed first and then from the
+connection. A peer that closes early answers `none`. Under the split
+sim the marker arrives one byte per chunk, so the split handshake reads
+it here. -/
+private def readExactly (conn : Mock.Streams.Connection) (seed : ByteArray) (n : Nat) :
+    Async (Option (List Nat)) := do
+  let mut acc := Bytes.toNatList seed
+  for _ in [0:n] do
+    if acc.length < n then
+      match ← conn.read with
+      | none => return none
+      | some chunk => acc := acc ++ Bytes.toNatList chunk
+  return some acc
+
+/-- The fixed-key test handshake, chunk-agnostic: it reads its marker with
+`readExactly`, so a split write arrives in whatever chunks the transport
+chose. It replaces the Noise milestone (#16, unmerged) as `secValue`
+does, and it exists so the pipeline can run over the splitting sim. -/
+private def secValueExact (seedRef : Conc.OnceRef (Option ByteArray)) :
+    Mock.Core.SecurityProtocol where
+  id := ⟨"/test/plain/1.0.0"⟩
+  handshake := fun role conn seed => do
+    seedRef.set (some seed)
+    let myMark := if role = .initiator then markerI else markerR
+    match ← conn.write myMark with
+    | .error _ => throw (.closed "test handshake write failed")
+    | .ok () => pure ()
+    match ← readExactly conn seed 4 with
+    | none => throw (.closed "test handshake read ended before the marker")
+    | some four =>
+      return { conn := conn,
+               localPeer := if role = .initiator then dialerId else listenerId,
+               remotePeer := if role = .initiator then listenerId else dialerId,
+               leftover := Bytes.ofNatList (four.drop 4),
+               close := conn.close }
+
+/-- The multistream exchange of both roles over a splitting sim, for a
+supported id and for the `na` retry. Each run also asserts that the
+responder's reader saw one byte per chunk, which shows the sim split the
+writes. -/
+private def checkSplitNegotiate (r : Runner) : Async Unit := do
+  let kadId : Mock.Core.ProtocolId := ⟨"/ipfs/kad/1.0.0"⟩
+  let idId : Mock.Core.ProtocolId := ⟨"/ipfs/id/1.0.0"⟩
+  let runOne (name : String) (iIds rIds : List Mock.Core.ProtocolId)
+      (expect : Mock.Core.ProtocolId) : Async Unit := do
+    let (ic, rc) ← simPair true
+    let sizes : Conc.OnceRef (List Nat) ← Conc.OnceRef.new []
+    let split := recordReadSizes rc sizes
+    let iReader := Mock.Streams.BufReader.ofConn ic
+    let rReader := Mock.Streams.BufReader.ofConn split
+    let iAnswer : Conc.OnceRef (Option (Except Mock.Core.Error StageResult)) ←
+      Conc.OnceRef.new none
+    let rAnswer : Conc.OnceRef (Option (Except Mock.Core.Error StageResult)) ←
+      Conc.OnceRef.new none
+    let tasks ← Conc.TaskSet.new
+    tasks.spawn do
+      iAnswer.set (some (← negotiate .initiator iReader ic ByteArray.empty iIds))
+    tasks.spawn do
+      rAnswer.set (some (← negotiate .responder rReader split ByteArray.empty rIds))
+    tasks.joinAll
+    let iAns ← iAnswer.get
+    let rAns ← rAnswer.get
+    let both := match iAns, rAns with
+      | some (.ok i), some (.ok rr) => i.proto == expect && rr.proto == expect
+      | _, _ => false
+    let seen ← sizes.get
+    r.check name both
+    r.check s!"{name}, one byte per chunk"
+      (!seen.isEmpty && seen.all (fun n => decide (n ≤ 1)))
+    ic.close
+    rc.close
+  runOne "split sim negotiation selects the id in both roles" [kadId] [kadId] kadId
+  runOne "split sim negotiation walks the na retry" [kadId, idId] [idId] idId
+
+/-- The whole pipeline over a splitting sim, both directions: the
+negotiation, the handshake, the identity check, the muxer negotiation,
+and the open. This is the done-when run of the issue, over the sim.
+-/
+private def checkSplitPipeline (r : Runner) : Async Unit := do
+  let (ic, rc) ← simPair true
+  let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
+  let dSeed : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
+  let lSeed : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
+  let dRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
+  let lRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
+  let dLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
+  let lLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
+  let dOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
+  let lOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
+  let dAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
+  let lAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
+  let tasks ← Conc.TaskSet.new
+  tasks.spawn do
+    dAnswer.set (some (← upgrade .initiator ic ByteArray.empty (some listenerId)
+      [secValueExact dSeed] [muxValue muxId dRan dLeft dOpen]))
+  tasks.spawn do
+    lAnswer.set (some (← upgrade .responder rc ByteArray.empty none
+      [secValueExact lSeed] [muxValue muxId lRan lLeft lOpen]))
+  tasks.joinAll
+  let d ← dAnswer.get
+  let l ← lAnswer.get
+  match d, l with
+  | some (.ok (ds, dp)), some (.ok (ls, lp)) => do
+      ds.close
+      ls.close
+      ds.join
+      ls.join
+      r.check "split sim upgrade pipeline, dial and listen"
+        (dp == listenerId && lp == dialerId)
+      r.check "split sim upgrade selects the muxer on the wire"
+        ((← dOpen.get) == some muxId && (← lOpen.get) == some muxId)
+  | _, _ => do
+      r.check "split sim upgrade pipeline, dial and listen" false
+      r.check "split sim upgrade selects the muxer on the wire" false
+  ic.close
+  rc.close
+
 /-! ## The suite -/
 
 /-- The suite. -/
@@ -674,6 +838,8 @@ def run (r : Runner) : IO Unit := do
     checkSendCap r
     checkResponderFirst r
     checkGoTraces r
+    checkSplitNegotiate r
+    checkSplitPipeline r
   Conc.Async.run all
   r.skip "upgrade noise yamux matrix over tcp"
     "needs the TCP transport, the Noise value, and the yamux value; none are merged on this base (the W5.9 live gate)"
