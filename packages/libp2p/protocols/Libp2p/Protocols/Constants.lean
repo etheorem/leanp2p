@@ -27,4 +27,7 @@ def identifyCap : Nat := 65536
 /-- The ping payload size of the spec: 32 bytes. -/
 def pingSize : Nat := 32
 
+/-- The protocol version the responder writes, the spike's constant. -/
+def identifyProtocolVersion : String := "/ipfs/1.0.0"
+
 end Libp2p.Protocols.Constants

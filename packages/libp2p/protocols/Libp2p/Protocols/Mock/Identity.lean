@@ -45,4 +45,12 @@ opaque unmarshalPubKey? (bs : List Nat) : Option PubKey :=
 opaque peerIdOfPubKey (k : PubKey) : PeerId :=
   ⟨k.data, ""⟩
 
+/-- Executable stand-in: the raw key data. The mock `unmarshalPubKey?`
+parses any nonempty buffer as `⟨.ed25519, buffer⟩`, and `peerIdOfPubKey`
+reads only the buffer, so the round trip holds for a nonempty ed25519
+stand-in. The real identity package writes the serialized PublicKey
+protobuf (peer-ids spec); that body replaces this one at integration. -/
+opaque marshalPubKey (k : PubKey) : List Nat :=
+  k.data
+
 end Libp2p.Protocols.Mock.Identity

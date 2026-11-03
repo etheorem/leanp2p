@@ -1,7 +1,10 @@
 import Proto
 import Bytes
+import Conc
+import Streams
 import Libp2p.Protocols.Mock.Identity
 import Libp2p.Protocols.Mock.Multiaddr
+import Libp2p.Protocols.Mock.Host
 import Libp2p.Protocols.Constants
 
 /-!
@@ -9,8 +12,8 @@ import Libp2p.Protocols.Constants
 
 The pure half of `/ipfs/id/1.0.0` (sub-unit 1a): the `Identify`
 message with its `ProtoMessage` instance, the strict field table, the
-validate, and the table theorems. The client and the handler values
-are sub-unit 1b.
+validate, and the table theorems. Sub-unit 1b adds the IO half: the
+responder, the client, the push handler, and the theorems C1 to C3.
 
 The wire shape comes from go-libp2p v0.50.0 `identify.pb.go`: fields
 1, 2, 3, 4, 5, 6, and 8. Field 8 is the signed peer record. The emit
@@ -25,6 +28,12 @@ UTF-8 entries are dropped, as the Proto accessors already do.
 The strings read back through the real `Bytes.toString?`, never
 through `Pb.getStr?`. The latter runs the opaque mock of
 `Pb.Mock.Bytes`, which no theorem can relate to `Bytes.ofString`.
+
+The private read loop `readFrameFrom` is a `partial def`: a silent
+peer never ends the loop, and the deadline of `client` or `push` is
+what ends it. The unit reads one frame per stream and drops leftover
+bytes after it; go merges chunked identify messages, a recorded delta.
+The read rejects a zero-length frame, the spike's rule.
 -/
 
 set_option autoImplicit false
@@ -176,9 +185,10 @@ theorem roundTripRepeated (m : Identify) (h : ∀ e ∈ m.entries, e.Valid) :
 The checks run in this order: cap, decode, key presence, key parse,
 expected id, addresses. The cap check runs before any decode. -/
 
-/-- The validate failures. The zero-length rule of the read path is
-sub-unit 1b, so the pure validate sees an empty payload as an empty
-message, which then fails with `missingKey`. -/
+/-- The validate failures of 1a, plus the read-path arms of 1b. The
+zero-length rule lives on the read path, so the pure validate sees an
+empty payload as an empty message, which then fails with
+`missingKey`. -/
 inductive Error where
   | overCap
   | badMessage (e : Pb.Error)
@@ -186,6 +196,12 @@ inductive Error where
   | badKey
   | keyMismatch
   | badAddress
+  /-- A zero-length frame on the read path, the spike's rule. -/
+  | emptyFrame
+  /-- The read deadline expired. -/
+  | timeout
+  /-- The stream answered a fault. -/
+  | stream (e : Streams.Error)
   deriving DecidableEq, BEq, Repr
 
 /-- The address checks: every listening address and the observed
@@ -349,6 +365,241 @@ theorem validateSound (payload : List Nat) (expected : Option Mock.Identity.Peer
                       exact hkey
                     · rw [ite_eq_right hkey] at h
                       cases h
+
+/-! ## The responder (sub-unit 1b)
+
+The responder builds one message from the host data, writes one
+length-delimited frame, and half-closes. `respond?` fails closed when
+the entries do not fit the wire model: such a message would encode to
+an empty one and write a zero-length frame. -/
+
+/-- Build one identify response from the host data. -/
+def respond (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+    (protocols : List String) (observed : Option (List Nat)) (agent : String)
+    (spr : Option (List Nat) := none) : Identify :=
+  { protocolVersion := some Constants.identifyProtocolVersion,
+    agentVersion := some agent,
+    publicKey := some (marshalPubKey key),
+    listenAddrs := addrs,
+    observedAddr := observed,
+    protocols := protocols,
+    signedPeerRecord := spr }
+
+/-- Build the response, and fail closed when its entries do not fit the
+wire model. -/
+def respond? (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+    (protocols : List String) (observed : Option (List Nat)) (agent : String)
+    (spr : Option (List Nat) := none) : Except Error Identify :=
+  let m := respond key addrs protocols observed agent spr
+  if ∀ e ∈ m.entries, e.Valid then .ok m else .error .badAddress
+
+/-! ## The client and the push handler (sub-unit 1b)
+
+One pure frame step serves both the model core and the IO reader, so
+the theorems C1 to C3 pin exactly the decoder that the IO path runs. -/
+
+/-- The pure frame step over the accumulated bytes.
+
+* `.ok (some (payload, rest))`: one whole frame with a nonempty
+  payload; `rest` holds the bytes after it.
+* `.ok none`: the buffer ends inside a frame; more bytes can complete
+  it.
+* `.error .emptyFrame`: a zero-length frame, the spike's zero rule.
+* `.error (.badMessage (.framing .malformed))`: a bad prefix, a length
+  over `Constants.identifyCap`, or a payload byte that is not a byte.
+  `Frame.decode?` checks the cap before it takes the body.
+
+The function is total and non-recursive. `clientCore` and `readFrame`
+both call it, so the model theorems and the IO path share every wire
+decision. -/
+private def decodeFrame? (bytes : List Nat) :
+    Except Error (Option (List Nat × List Nat)) :=
+  match Streams.Framing.Frame.decode? .uvarint Constants.identifyCap bytes with
+  | .error .malformed => .error (.badMessage (.framing .malformed))
+  | .error .truncated => .ok none
+  | .ok (frame, rest) =>
+      if frame.payload.isEmpty then .error .emptyFrame
+      else .ok (some (frame.payload, rest))
+
+/-- The client's pure core: decode one frame under the cap, reject the
+empty frame, and validate exactly the payload bytes that the frame
+names. A call of the pure core supplies all its bytes, so a buffer
+that ends inside a frame is the `.truncated` framing error, not
+`.ok none`. -/
+def clientCore (bytes : List Nat) (expected : Option Mock.Identity.PeerId) :
+    Except Error (Option (Identify × Mock.Identity.PeerId)) :=
+  match decodeFrame? bytes with
+  | .error e => .error e
+  | .ok none => .error (.badMessage (.framing .truncated))
+  | .ok (some (payload, _)) => some <$> validate payload expected
+
+/-- One length-delimited frame from the stream. The `partial` reason is
+in the module doc: a silent peer never ends the loop, and `client` or
+`push` ends it through the deadline. -/
+private partial def readFrameFrom (s : Streams.Stream) (buf : List Nat) :
+    Conc.Async (Except Error (Option (List Nat))) := do
+  match decodeFrame? buf with
+  | .error e => return .error e
+  | .ok (some (payload, _)) => return .ok (some payload)
+  | .ok none =>
+      match ← s.read with
+      | .error e => return .error (.stream e)
+      | .ok none =>
+          if buf.isEmpty then return .ok none
+          else return .error (.badMessage (.framing .truncated))
+      | .ok (some chunk) => readFrameFrom s (buf ++ Bytes.toNatList chunk)
+
+/-- One frame from the stream, over the private loop. -/
+private def readFrame (s : Streams.Stream) :
+    Conc.Async (Except Error (Option (List Nat))) :=
+  readFrameFrom s []
+
+/-- `withinDeadline` needs a `BaseIO` expiry. The stream's `close` is
+the write half-close, so it does not wake a parked `read`. `reset`
+stops both directions, so it reaches the park. This spelling runs the
+reset as a task, the one `Async` to `BaseIO` route the Wrap module
+offers. -/
+private def resetQuietly (s : Streams.Stream) : BaseIO Unit :=
+  discard (s.reset.asTask.toBaseIO)
+
+/-- Read one response under the cap and the deadline, then validate
+it. `.ok none` is the clean end between frames. -/
+def client (s : Streams.Stream) (clock : Conc.Clock) (timeoutMs : Nat)
+    (expected : Option Mock.Identity.PeerId) :
+    Conc.Async (Except Error (Option (Identify × Mock.Identity.PeerId))) := do
+  match ← Conc.withinDeadline clock timeoutMs (resetQuietly s) (readFrame s) with
+  | .error .deadlineExpired => return .error .timeout
+  | .error .closed => return .error (.stream .closed)
+  | .ok (.error e) => return .error e
+  | .ok (.ok none) => return .ok none
+  | .ok (.ok (some payload)) => return (some <$> validate payload expected)
+
+/-- One map from this protocol's error into the coarse core error,
+used once, at the seam value. -/
+def mapIdentifyError : Error → Mock.Core.Error
+  | .stream e => Mock.Core.mapStreamError e
+  | .timeout => .timeout "identify: the deadline expired"
+  | .emptyFrame => .protocol "identify: a zero-length frame"
+  | e => .protocol (toString (repr e))
+
+/-- Handle one pushed message: validate it, then update the peerstore.
+An empty read is a no-op, as in go. -/
+def push (store : Mock.Host.Peerstore) (expected : Mock.Identity.PeerId)
+    (clock : Conc.Clock) (timeoutMs : Nat) (s : Streams.Stream) :
+    Conc.Async (Except Error Unit) := do
+  match ← Conc.withinDeadline clock timeoutMs (resetQuietly s) (readFrame s) with
+  | .error .deadlineExpired => return .error .timeout
+  | .error .closed => return .error (.stream .closed)
+  | .ok (.error e) => return .error e
+  | .ok (.ok none) => return .ok ()
+  | .ok (.ok (some payload)) =>
+      match validate payload (some expected) with
+      | .error e => return .error e
+      | .ok (m, pid) =>
+          store.addAddrs pid m.listenAddrs
+          return .ok ()
+
+/-- The push handler value. -/
+def pushHandler (store : Mock.Host.Peerstore) (expected : Mock.Identity.PeerId)
+    (clock : Conc.Clock) (timeoutMs : Nat) : Mock.Core.StreamHandler :=
+  { id := pushId,
+    handle := fun s => ExceptT.mk ((Except.mapError mapIdentifyError) <$>
+      push store expected clock timeoutMs s) }
+
+/-- The responder body. Write one length-delimited message and
+half-close. -/
+def respondTo (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+    (protocols : List String) (observed : Option (List Nat)) (agent : String)
+    (spr : Option (List Nat) := none) (s : Streams.Stream) :
+    Conc.Async (Except Mock.Core.Error Unit) := do
+  match respond? key addrs protocols observed agent spr with
+  | .error e => return .error (mapIdentifyError e)
+  | .ok msg =>
+      match Streams.Framing.encodeB? .uvarint Constants.identifyCap
+          (Pb.encodeMessageB msg) with
+      | none => return .error (.protocol "the identify response exceeds the cap")
+      | some frame =>
+          match ← s.write frame with
+          | .error e => return .error (Mock.Core.mapStreamError e)
+          | .ok () =>
+              discard s.close
+              return .ok ()
+
+/-- The responder handler value. -/
+def respondHandler (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+    (protocols : List String) (observed : Option (List Nat)) (agent : String)
+    (spr : Option (List Nat) := none) : Mock.Core.StreamHandler :=
+  { id := protocolId,
+    handle := fun s => respondTo key addrs protocols observed agent spr s }
+
+/-! ## The client-core theorems (sub-unit 1b)
+
+C1 pins the frame that the core validates. C2 pins the cap check
+before the body. C3 pins the zero-length rule. Each consumes a proved
+law of `Streams.Framing`; none touches a mock result. -/
+
+/-- The frame step reads a whole frame back from its encoding, with
+any rest after it. -/
+private theorem decodeFrame?Encode
+    (f : Streams.Framing.Frame .uvarint Constants.identifyCap)
+    (rest : List Nat) (h : 0 < f.payload.length) :
+    decodeFrame? (Streams.Framing.Frame.encode f ++ rest) =
+      .ok (some (f.payload, rest)) := by
+  unfold decodeFrame?
+  rw [Streams.Framing.Frame.decode?EncodeAppend f rest]
+  have hne : f.payload ≠ [] := by intro hnil; rw [hnil] at h; simp at h
+  simp [List.isEmpty_iff, hne]
+
+/-- C1: the client validates exactly the payload bytes that the frame
+it read names. The brief theorem 3, first half. -/
+theorem clientCoreFrame (f : Streams.Framing.Frame .uvarint Constants.identifyCap)
+    (rest : List Nat) (expected : Option Mock.Identity.PeerId)
+    (h : 0 < f.payload.length) :
+    clientCore (Streams.Framing.Frame.encode f ++ rest) expected =
+      some <$> validate f.payload expected := by
+  unfold clientCore
+  rw [decodeFrame?Encode f rest h]
+
+/-- The frame step rejects a length over the cap before it reads the
+body. -/
+private theorem decodeFrame?OverCap (len : Nat) (rest : List Nat)
+    (hlen : len ≤ Streams.Framing.Prefix.maxLen .uvarint)
+    (hcap : Constants.identifyCap < len) :
+    decodeFrame? (Streams.Framing.encodeLength .uvarint len ++ rest) =
+      .error (.badMessage (.framing .malformed)) := by
+  unfold decodeFrame?
+  rw [Streams.Framing.Frame.decode?OverCap (p := .uvarint)
+      (cap := Constants.identifyCap)
+      (l := Streams.Framing.encodeLength .uvarint len ++ rest)
+      (rest := rest) (len := len)
+      (Streams.Framing.decodeLength?EncodeLength .uvarint len rest hlen) hcap]
+
+/-- C2: a length over the cap is rejected before the body is read.
+The statement has no premise about the bytes after the prefix. -/
+theorem clientCoreOverCap (len : Nat) (rest : List Nat)
+    (expected : Option Mock.Identity.PeerId)
+    (hlen : len ≤ Streams.Framing.Prefix.maxLen .uvarint)
+    (hcap : Constants.identifyCap < len) :
+    clientCore (Streams.Framing.encodeLength .uvarint len ++ rest) expected =
+      .error (.badMessage (.framing .malformed)) := by
+  unfold clientCore
+  rw [decodeFrame?OverCap len rest hlen hcap]
+
+/-- The zero-length rule on the frame step. -/
+private theorem decodeFrame?EncodeLengthZero :
+    decodeFrame? (Streams.Framing.encodeLength .uvarint 0) = .error .emptyFrame := by
+  unfold decodeFrame? Streams.Framing.Frame.decode?
+  have hd := Streams.Framing.decodeLength?EncodeLength .uvarint 0 [] (by simp)
+  simp only [List.append_nil] at hd
+  rw [hd]
+  simp [Bytes.take?]
+
+/-- C3: the zero-length rule on the model, the spike's rule. -/
+theorem clientCoreEmptyFrame (expected : Option Mock.Identity.PeerId) :
+    clientCore (Streams.Framing.encodeLength .uvarint 0) expected =
+      .error .emptyFrame := by
+  unfold clientCore
+  rw [decodeFrame?EncodeLengthZero]
 
 end Identify
 
