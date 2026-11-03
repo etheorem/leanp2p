@@ -44,7 +44,7 @@ module.
 
 | Module | Responsibility |
 |---|---|
-| `Snappy.lean` | Public `Snappy.Error`, `compress`, and `decompress`. Private raw extern declarations, the cap conversion, and the native-status map. |
+| `Snappy.lean` | Public `Snappy.Error` and `compress`. The private compression extern, the internal-panic extern, and the compression status map. `decompress` arrives in Phase 3B. |
 
 The public surface and the private adapter are small, so both stay in
 the root module. The root `lean_lib` keeps its one-module glob until a
@@ -81,6 +81,7 @@ def decompress :
 end Snappy
 ```
 
+Phase 3A implements `compress`. Phase 3B implements `decompress`.
 `decompress` takes the bytes first and the cap second.
 
 The functions are pure because the block operation is deterministic
@@ -99,8 +100,8 @@ limit failure (ARCHITECTURE §3.5). A failure of that kind is an
 `Except` value. It is never an `IO.userError`.
 
 **`inputTooLarge`.** The compression input is at least `2^32` bytes
-long, or the native maximum-output calculation does not fit a safe
-size. The Lean wrapper rejects the length before calling native code.
+long, or the shim cannot calculate a safe native output allocation.
+The Lean wrapper rejects the length before calling native code.
 The shim checks it again before narrowing the length, calculating the
 maximum compressed size, or allocating the compressed output.
 
@@ -145,8 +146,8 @@ Lean 4.34 may require a small change to that spelling. The public
 signatures stay as written above. The symbols keep the `leanp2p_`
 prefix.
 
-The native status is the first field of the pair. The wrapper maps the
-four known codes:
+The native status is the first field of the pair. The four numeric
+codes are the shared private ABI vocabulary:
 
 | Code | Meaning |
 |---|---|
@@ -155,17 +156,28 @@ four known codes:
 | `2` | invalid compressed data |
 | `3` | output too large |
 
-The public `Error` hides the numbers. The wrapper maps only these four
-codes. Any other code breaks the ABI, and the wrapper panics.
+The public `Error` hides the numbers. Compression accepts ordinary
+codes `0` and `1` only. Code `0` is a nonempty raw block. Code `1` is
+`.inputTooLarge`. Codes `2` and `3` are decompression outcomes.
 
-Compression returns status `0` or `1` on an ordinary input. Empty input
-compresses to the one-byte block `0x00`, so a successful compression
-result is never empty. A success paired with a zero-length array, or a
-reported compressed length beyond the allocated compression bound, is
-an impossible native result. The shim panics on that result.
+Compression treats codes `2` and `3`, an empty success, a reported
+length past the allocated capacity, and every unknown code as internal
+invariant failures. The call is `leanp2p_snappy_internal_panic`. It
+calls `lean_internal_panic` and ends the process. The reason argument
+uses a separate category:
+
+| Category | Meaning |
+|---|---|
+| `0` | successful compression produced an empty output |
+| `1` | compression returned an unexpected status |
+| `2` | the reported compressed length exceeded the allocated capacity |
+
+Statuses `2`, `3`, and every unknown compression status select
+category `1`. The wrapper returns the helper call from each impossible
+branch. Empty input compresses to the one-byte block `0x00`.
 
 Every ordinary return from the shim is a valid Lean object. The wrapper
-does not read an error payload as a successful output.
+reads a successful output only from status `0` with a nonempty array.
 
 ## Ownership
 
@@ -233,7 +245,8 @@ packages/codec/snappy/
     ├── lakefile.lean
     ├── check/
     │   ├── core.cpp
-    │   └── abort.cpp
+    │   ├── abort.cpp
+    │   └── internal-panic.cpp
     ├── include/
     │   ├── config.h
     │   └── snappy-stubs-public.h
@@ -380,18 +393,27 @@ processes call the four fallback bodies and the eight class-specific
 show that a later shim avoids the calls.
 
 `lake build snappyNative/snappyAudit` reads `snappy.block.o`,
-`snappy-sinksource.block.o`, and `libsnappy.a`. It rejects an unresolved
-`std::` facility, a global `operator new`, a global `operator delete`,
-`__cxa_*`, and `__gxx_personality*`. It checks the guarded symbols and
-the two archive members. It compares the defined global symbols of the
-pristine build and the define-disabled build. The local run is macOS
-ARM64. Linux x86-64, ASan, LSan, and a Snappy-free dynamic library
-remain Phase 4C.
+`snappy-sinksource.block.o`, `shim.o`, and `libsnappy.a`. It rejects an
+unresolved `std::` facility, a global `operator new`, a global
+`operator delete`, `__cxa_*`, and `__gxx_personality*`. Lean runtime
+symbols stay on a separate exact allowlist and are reported as
+`lean-runtime`. It checks the guarded symbols and the three production
+archive members. The pristine archive and the define-disabled archive
+stay the two upstream objects. It compares the defined global symbols
+of the pristine build and the define-disabled build. The local run is
+macOS ARM64. Linux x86-64, ASan, LSan, and a Snappy-free dynamic
+library remain Phase 4C.
+
+`lake build snappyNative/snappyInternalPanic` compiles
+`native/check/internal-panic.cpp` and links that object to `libsnappy.a`
+once. The child sets `LEAN_ABORT_ON_PANIC` and calls
+`leanp2p_snappy_internal_panic`. The parent accepts the SIGABRT
+sentinel. Ordinary tests do not set that variable.
 
 `lake build snappyNative/snappyValidation` runs the boundary check, the
-abort check, and the audit. Those targets share the production object
-jobs. The command does not compile a second `snappy.cc` or
-`snappy-sinksource.cc`.
+abort check, the internal-panic check, and the audit. Those targets
+share the production object jobs. The command does not compile a second
+`snappy.cc` or `snappy-sinksource.cc`.
 
 ## Trust and validation
 

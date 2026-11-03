@@ -15,10 +15,11 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 
-POLICY = "phase-2c-c/1"
+POLICY = "phase-3a/1"
 
 # Undefined C and platform symbols observed in the production objects.
-# A symbol outside this set, and outside the Snappy classes, is a failure.
+# A symbol outside this set, and outside the Snappy classes and the Lean
+# runtime set, is a failure.
 C_RUNTIME = frozenset(
     {
         "abort",
@@ -34,13 +35,42 @@ C_RUNTIME = frozenset(
     }
 )
 
+# Exact Lean runtime symbols referenced by the compiled compression shim.
+# `lean_alloc_object` allocates the output scalar array.
+# `lean_inc_heartbeat` is the small-object heartbeat for the result pair.
+# `lean_internal_panic` ends an internal invariant failure.
+# `lean_internal_panic_out_of_memory` ends a failed scratch allocation
+# and a failed checked size calculation in the Lean headers.
+# `lean_notify_assert` is the header assertion path used by those helpers.
+# `mi_malloc_small` allocates the result pair under the toolchain mimalloc.
+LEAN_RUNTIME = frozenset(
+    {
+        "lean_alloc_object",
+        "lean_inc_heartbeat",
+        "lean_internal_panic",
+        "lean_internal_panic_out_of_memory",
+        "lean_notify_assert",
+        "mi_malloc_small",
+    }
+)
+
 NM_KINDS = frozenset("ABCDGINRSTUVWabcdginrstuvw")
 MEMBER_HEADER = re.compile(r"^[A-Za-z0-9._+-]+\.o:$")
 STD_NAME = re.compile(r"(^|[^A-Za-z0-9_])std::")
 SNAPPY_NAME = re.compile(r"(^|[^A-Za-z0-9_])snappy::")
 GLOBAL_ALLOC_DEMANGLED = re.compile(r"^operator (new|delete)(\[\])?\(")
 GLOBAL_ALLOC_MANGLED = re.compile(r"^_Z(nw|na|dl|da)")
-PRODUCTION_MEMBERS = ("snappy.block.o", "snappy-sinksource.block.o")
+PRODUCTION_MEMBERS = (
+    "snappy.block.o",
+    "snappy-sinksource.block.o",
+    "shim.o",
+)
+PRISTINE_MEMBERS = ("snappy.pristine.o", "snappy-sinksource.pristine.o")
+PATCHED_MEMBERS = ("snappy.patched.o", "snappy-sinksource.patched.o")
+SHIM_EXPORTS = (
+    "leanp2p_snappy_compress",
+    "leanp2p_snappy_internal_panic",
+)
 
 REQUIRED_DEMANGLED = (
     "snappy::Sink::Append(char const*, unsigned long)",
@@ -149,13 +179,19 @@ def forbidden_reason(raw: str, demangled: str) -> str | None:
     return None
 
 
+def stripped_name(raw: str) -> str:
+    return raw[1:] if raw.startswith("_") else raw
+
+
 def classify(raw: str, demangled: str) -> str:
     reason = forbidden_reason(raw, demangled)
     if reason:
         return reason
+    stripped = stripped_name(raw)
+    if raw in LEAN_RUNTIME or stripped in LEAN_RUNTIME:
+        return "lean-runtime"
     if SNAPPY_NAME.search(demangled):
         return "snappy-cross"
-    stripped = raw[1:] if raw.startswith("_") else raw
     if raw in C_RUNTIME or stripped in C_RUNTIME:
         return "c-runtime"
     return "unfamiliar"
@@ -213,23 +249,64 @@ def require_guarded(
     return lines, failures
 
 
-def archive_members(path: str, ar: str) -> tuple[list[str], list[str]]:
+def archive_members(
+    label: str, path: str, ar: str, expected: tuple[str, ...]
+) -> tuple[list[str], list[str]]:
     text = run_text([ar, "t", path])
     members = [line.strip() for line in text.splitlines() if line.strip()]
-    lines = ["production archive members", *[f"  {member}" for member in members]]
-    counts = Counter(members)
+    lines = [f"{label} archive members", *[f"  {member}" for member in members]]
     failures: list[str] = []
-    expected = Counter(PRODUCTION_MEMBERS)
-    if counts != expected:
-        missing = sorted((expected - counts).elements())
-        extra = sorted((counts - expected).elements())
-        duplicate = sorted(name for name, count in counts.items() if count > 1)
+    if members != list(expected):
         failures.append(
-            "production archive members differ: "
-            f"missing {missing or 'none'}; "
-            f"unexpected {extra or 'none'}; "
-            f"duplicate {duplicate or 'none'}"
+            f"{label} archive members differ: "
+            f"found {members or ['none']}; expected {list(expected)}"
         )
+    return lines, failures
+
+
+def shim_defined_exports(symbols: list[Symbol]) -> tuple[list[str], list[str]]:
+    defined = [symbol for symbol in symbols if symbol.kind != "U"]
+    counts = Counter(stripped_name(symbol.name) for symbol in defined)
+    lines = ["defined symbols in shim.o"]
+    for symbol in sorted(defined, key=lambda item: (stripped_name(item.name), item.kind)):
+        lines.append(f"  {symbol.kind} {stripped_name(symbol.name)}")
+    expected = Counter(SHIM_EXPORTS)
+    if counts == expected:
+        return lines, []
+    missing = sorted((expected - counts).elements())
+    unexpected = sorted((counts - expected).elements())
+    duplicate = sorted(name for name, count in counts.items() if count > 1)
+    return lines, [
+        "shim.o defined symbols differ: "
+        f"missing {missing or 'none'}; "
+        f"unexpected {unexpected or 'none'}; "
+        f"duplicate {duplicate or 'none'}"
+    ]
+
+
+def require_panic(label: str, symbols: list[Symbol]) -> tuple[list[str], list[str]]:
+    names = {stripped_name(symbol.name) for symbol in symbols if symbol.kind == "U"}
+    lines = [f"internal panic symbol in {label}"]
+    if "lean_internal_panic" in names:
+        lines.append("  present lean_internal_panic")
+        return lines, []
+    lines.append("  missing lean_internal_panic")
+    return lines, [f"{label} does not reference lean_internal_panic"]
+
+
+def reject_forbidden_symbols(
+    label: str, symbols: list[Symbol], demangled: dict[str, str]
+) -> tuple[list[str], list[str]]:
+    lines = [f"forbidden symbols in {label}"]
+    failures: list[str] = []
+    for symbol in symbols:
+        rendered = demangled[symbol.name]
+        reason = forbidden_reason(symbol.name, rendered)
+        if reason:
+            lines.append(f"  {reason} {symbol.name} {rendered}")
+            failures.append(f"{label}: {reason} {symbol.name} {rendered}")
+    if len(lines) == 1:
+        lines.append("  none")
     return lines, failures
 
 
@@ -279,6 +356,7 @@ def audit_paths(args: argparse.Namespace) -> None:
     roles = (
         ("snappy.block.o", args.production_core, False),
         ("snappy-sinksource.block.o", args.production_sink, False),
+        ("shim.o", args.production_shim, False),
         ("libsnappy.a", args.production_archive, True),
         ("snappy.pristine.o", args.pristine_core, False),
         ("snappy-sinksource.pristine.o", args.pristine_sink, False),
@@ -303,18 +381,34 @@ def audit_paths(args: argparse.Namespace) -> None:
     for label in (
         "snappy.block.o",
         "snappy-sinksource.block.o",
+        "shim.o",
         "libsnappy.a",
     ):
         lines, found = inventory(label, loaded[label], demangled)
         report.extend(lines)
         failures.extend(found)
+    for label in ("shim.o", "libsnappy.a"):
+        lines, found = require_panic(label, loaded[label])
+        report.extend(lines)
+        failures.extend(found)
+    lines, found = reject_forbidden_symbols("shim.o", loaded["shim.o"], demangled)
+    report.extend(lines)
+    failures.extend(found)
+    lines, found = shim_defined_exports(loaded["shim.o"])
+    report.extend(lines)
+    failures.extend(found)
     for label in ("snappy-sinksource.block.o", "libsnappy.a"):
         lines, found = require_guarded(label, loaded[label], demangled)
         report.extend(lines)
         failures.extend(found)
-    lines, found = archive_members(args.production_archive, args.ar)
-    report.extend(lines)
-    failures.extend(found)
+    for label, path, expected in (
+        ("production", args.production_archive, PRODUCTION_MEMBERS),
+        ("pristine", args.pristine_archive, PRISTINE_MEMBERS),
+        ("patched", args.patched_archive, PATCHED_MEMBERS),
+    ):
+        lines, found = archive_members(label, path, args.ar, expected)
+        report.extend(lines)
+        failures.extend(found)
     pairs = (
         ("pristine/patched snappy object", "snappy.pristine.o", "snappy.patched.o"),
         (
@@ -392,6 +486,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit.add_argument("--ar", required=True)
     audit.add_argument("--production-core", required=True)
     audit.add_argument("--production-sink", required=True)
+    audit.add_argument("--production-shim", required=True)
     audit.add_argument("--production-archive", required=True)
     audit.add_argument("--pristine-core", required=True)
     audit.add_argument("--pristine-sink", required=True)

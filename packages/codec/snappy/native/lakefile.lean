@@ -10,9 +10,12 @@ directory by a relative path. The Snappy library waits for the
 production archive. The two control archives stay on explicit targets.
 
 The helper compiles with the host C++ compiler. That compiler supplies
-the standard-library headers for these translation units. The boundary
-target compiles one driver and links that object to each archive.
-The abort target calls each guarded production body in its own process.
+the standard-library headers for these translation units. The production
+archive also contains `shim.o`. The two control archives stay the two
+upstream objects. The boundary target compiles one driver and links
+that object to each archive. The abort target calls each guarded
+production body in its own process. The internal-panic target links one
+child to the production archive and calls `leanp2p_snappy_internal_panic`.
 The audit target reads the production objects, the production archive,
 and the two control surfaces.
 -/
@@ -174,11 +177,12 @@ private def archiveName : ArchiveKind → String
   | .block => "libsnappy.a"
 
 /--
-Build the two objects and the static archive.
-The array is the core object, the sink object, and the archive.
-`buildStaticLib` waits for the two object jobs and archives them with
-the toolchain `ar`. An object whose bytes stay the same leaves the
-archive current. The audit fetches this same job.
+Build the upstream objects and the static archive.
+The control arrays are the core object, the sink object, and the archive.
+The production array adds `shim.o` before the archive.
+`buildStaticLib` archives the object jobs with the toolchain `ar`.
+An object whose bytes stay the same leaves the archive current.
+The audit fetches this same job.
 -/
 private def buildParts (pkg : Package) (kind : ArchiveKind) : FetchM (Job (Array FilePath)) := do
   let cxx ← selectCxx
@@ -201,22 +205,40 @@ private def buildParts (pkg : Package) (kind : ArchiveKind) : FetchM (Job (Array
     (srcDir / "snappy-sinksource.cc")
     #[srcDir / "snappy-sinksource.h"]
     cxx weakArgs traceArgs
-  let archive ← buildStaticLib (outDir / archiveName kind) #[snappyO, sinkO]
-  return Job.collectArray #[snappyO, sinkO, archive] s!"parts-{stem}"
+  let mut objects : Array (Job FilePath) := #[snappyO, sinkO]
+  if kind = .block then
+    let leanInc ← getLeanIncludeDir
+    let shimWeak := weakArgs ++ #["-I", leanInc.toString]
+    let shimO ← compileUnit
+      (outDir / "shim.o")
+      (pkg.dir / "shim.cpp")
+      #[
+        srcDir / "snappy.h",
+        includeDir / "snappy-stubs-public.h",
+        includeDir / "config.h",
+        leanInc / "lean" / "lean.h"
+      ]
+      cxx shimWeak traceArgs
+    objects := objects.push shimO
+  let archive ← buildStaticLib (outDir / archiveName kind) objects
+  return Job.collectArray (objects.push archive) s!"parts-{stem}"
 
-/-- Return the archive from a parts job after checking the three names. -/
+/-- Return the archive from a parts job after checking the member names. -/
 private def archiveFromParts (kind : ArchiveKind) (parts : Job (Array FilePath)) : SpawnM (Job FilePath) :=
   parts.mapM fun files => do
-    if files.size != 3 then
-      error s!"The {kind.dirName} parts job expected 3 files. It received {files.size}."
+    let expected := if kind = .block then 4 else 3
+    if files.size != expected then
+      error s!"The {kind.dirName} parts job expected {expected} files. It received {files.size}."
     else
       let core := files[0]!
       let sink := files[1]!
-      let archive := files[2]!
+      let archive := files[files.size - 1]!
       if core.fileName != some s!"snappy.{kind.dirName}.o" then
         error s!"The {kind.dirName} parts job expected snappy.{kind.dirName}.o. It received {core}."
       if sink.fileName != some s!"snappy-sinksource.{kind.dirName}.o" then
         error s!"The {kind.dirName} parts job expected snappy-sinksource.{kind.dirName}.o. It received {sink}."
+      if kind = .block && files[2]!.fileName != some "shim.o" then
+        error s!"The block parts job expected shim.o. It received {files[2]!}."
       if archive.fileName != some (archiveName kind) then
         error s!"The {kind.dirName} parts job expected {archiveName kind}. It received {archive}."
       return archive
@@ -225,8 +247,9 @@ package snappyNative
 
 /--
 Production objects and the production archive.
-The array is `snappy.block.o`, `snappy-sinksource.block.o`, and `libsnappy.a`.
-The archive target and the audit target both fetch this job.
+The array is `snappy.block.o`, `snappy-sinksource.block.o`, `shim.o`,
+and `libsnappy.a`. The archive target and the audit target both fetch
+this job.
 -/
 target snappyBlockParts pkg : Array FilePath :=
   buildParts pkg .block
@@ -241,8 +264,8 @@ target snappyPatchedParts pkg : Array FilePath :=
 
 /--
 Production block-only archive.
-The objects come from `vendor/snappy` with `LEANP2P_SNAPPY_BLOCK_ONLY=1`.
-The archive is `libsnappy.a`.
+The objects come from `vendor/snappy` with `LEANP2P_SNAPPY_BLOCK_ONLY=1`,
+plus `shim.o`. The archive is `libsnappy.a`.
 -/
 @[default_target]
 target snappy _pkg : FilePath := do
@@ -579,7 +602,7 @@ the text artifact, and the executable stays an input of that artifact.
 target snappyAbort pkg : FilePath := do
   let cxx ← selectCxx
   let obj ← buildAbortObj pkg cxx
-  let archive ← (← snappyBlockParts.fetch).mapM fun files => partFile files 2 "libsnappy.a"
+  let archive ← (← snappyBlockParts.fetch).mapM fun files => partFile files 3 "libsnappy.a"
   let exe := pkg.buildDir / "check" / "abort"
   let artifact := pkg.buildDir / "check" / "abort.txt"
   (Job.collectArray #[obj, archive] "abort-link").mapM fun files => do
@@ -616,7 +639,7 @@ target snappyAbort pkg : FilePath := do
       return art.path
 
 /-- Policy string shared with `scripts/audit-native.py`. -/
-private def auditPolicy : String := "phase-2c-c/1"
+private def auditPolicy : String := "phase-3a/1"
 
 /-- Package audit script. It sits beside the offline verifier. -/
 private def auditScript (pkg : Package) : FilePath :=
@@ -634,9 +657,9 @@ private def toolReport (cmd : String) (args : Array String) : LogIO String := do
 
 /--
 Audit the production objects and archive, then compare the control surfaces.
-The object paths come from the three parts targets. The script does not
-search for a second copy. `lake build snappyNative/snappyAudit` runs this
-target from the repository root.
+The object paths come from the three parts targets, including `shim.o`.
+The script does not search for a second copy.
+`lake build snappyNative/snappyAudit` runs this target from the repository root.
 -/
 target snappyAudit pkg : FilePath := do
   let block ← snappyBlockParts.fetch
@@ -655,7 +678,8 @@ target snappyAudit pkg : FilePath := do
     else
       let prodCore ← partFile groups[0]! 0 "snappy.block.o"
       let prodSink ← partFile groups[0]! 1 "snappy-sinksource.block.o"
-      let prodArchive ← partFile groups[0]! 2 "libsnappy.a"
+      let prodShim ← partFile groups[0]! 2 "shim.o"
+      let prodArchive ← partFile groups[0]! 3 "libsnappy.a"
       let pristineCore ← partFile groups[1]! 0 "snappy.pristine.o"
       let pristineSink ← partFile groups[1]! 1 "snappy-sinksource.pristine.o"
       let pristineArchive ← partFile groups[1]! 2 "libsnappy_pristine.a"
@@ -685,6 +709,7 @@ target snappyAudit pkg : FilePath := do
             "--ar", ar.toString,
             "--production-core", prodCore.toString,
             "--production-sink", prodSink.toString,
+            "--production-shim", prodShim.toString,
             "--production-archive", prodArchive.toString,
             "--pristine-core", pristineCore.toString,
             "--pristine-sink", pristineSink.toString,
@@ -702,19 +727,99 @@ target snappyAudit pkg : FilePath := do
         IO.FS.writeFile report out.stdout
       return art.path
 
+/-- Source for the internal-panic child. -/
+private def internalPanicSrc (pkg : Package) : FilePath :=
+  pkg.dir / "check" / "internal-panic.cpp"
+
+/-- Stderr of a successful call to `leanp2p_snappy_internal_panic(1)`. -/
+private def internalPanicStderr : String :=
+  "INTERNAL PANIC: snappy: compression returned an unexpected status\n"
+
 /--
-Run the boundary check, the abort check, and the audit.
-The three targets share the production object jobs. This target waits
-for the abort text artifact. It does not compile a second `snappy.cc`
-or `snappy-sinksource.cc`.
+Link `check/internal-panic.cpp` to the production archive and call
+`leanp2p_snappy_internal_panic`. The link names `internal-panic.o` and
+`libsnappy.a` once. The child sets `LEAN_ABORT_ON_PANIC` itself.
+This target returns the text artifact.
+`lake build snappyNative/snappyInternalPanic` runs it from the repository root.
+-/
+target snappyInternalPanic pkg : FilePath := do
+  let cxx ← selectCxx
+  let leanInc ← getLeanIncludeDir
+  let obj ← compileUnit
+    (pkg.buildDir / "check" / "internal-panic.o")
+    (internalPanicSrc pkg)
+    #[leanInc / "lean" / "lean.h"]
+    cxx #["-I", leanInc.toString] driverTraceArgs
+  let archive ← (← snappyBlockParts.fetch).mapM fun files => partFile files 3 "libsnappy.a"
+  let exe := pkg.buildDir / "check" / "internal-panic"
+  let artifact := pkg.buildDir / "check" / "internal-panic.txt"
+  let leanc := (← getLeanSysroot) / "bin" / "leanc"
+  (Job.collectArray #[obj, archive] "internal-panic-link").mapM fun files => do
+    if files.size != 2 then
+      error s!"The internal-panic link expected the child and the production archive. It received {files.size}."
+    else
+      let driver := files[0]!
+      let lib := files[1]!
+      if driver.fileName != some "internal-panic.o" then
+        error s!"The internal-panic link expected internal-panic.o. It received {driver}."
+      if lib.fileName != some "libsnappy.a" then
+        error s!"The internal-panic link expected libsnappy.a. It received {lib}."
+      addPlatformTrace
+      addPureTrace sectionGcArgs "link-args"
+      addPureTrace leanc.toString "leanc"
+      addPureTrace cxx.command "cxx"
+      addPureTrace cxx.version "cxx-version"
+      addPureTrace cxx.machine "cxx-target"
+      addPureTrace (toString abortSentinel) "internal-panic-sentinel"
+      addPureTrace internalPanicStderr "internal-panic-stderr"
+      let linkArgs := #["-o", exe.toString, driver.toString, lib.toString] ++ sectionGcArgs
+      logVerbose s!"internal-panic-link: {leanc} {" ".intercalate linkArgs.toList}"
+      let linked ← buildArtifactUnlessUpToDate exe (ext := "exe") (exe := true) do
+        createParentDirs exe
+        proc {
+          cmd := leanc.toString
+          args := linkArgs
+        }
+      let exePath ← IO.FS.realPath linked.path
+      let some parent := exePath.parent
+        | error s!"The internal-panic executable has no directory: {exePath}."
+      let workDir ← IO.FS.realPath parent
+      removeFileIfExists artifact
+      dropChangedTextArtifact artifact
+      let art ← buildArtifactUnlessUpToDate artifact (ext := "txt") (text := true) do
+        let out ← IO.Process.output {
+          cmd := exePath.toString
+          cwd := some workDir
+        }
+        let mut cores : Array String := #[]
+        if (← workDir.pathExists) then
+          for entry in (← workDir.readDir) do
+            if isCoreDump entry.fileName then
+              cores := cores.push entry.fileName
+              IO.FS.removeFile entry.path
+        let statusOk := out.exitCode == abortSentinel
+        let stdoutOk := out.stdout == ""
+        let stderrOk := out.stderr == internalPanicStderr
+        if !statusOk || !stdoutOk || !stderrOk || !cores.isEmpty then
+          error s!"The internal-panic child failed.\nstatus {out.exitCode}\nstdout [{out.stdout}]\nstderr [{out.stderr}]\ncore {cores}"
+        createParentDirs artifact
+        IO.FS.writeFile artifact <|
+          s!"link {leanc} {" ".intercalate linkArgs.toList}\nstatus {abortSentinel}\nstderr:\n{internalPanicStderr}"
+      return art.path
+
+/--
+Run the boundary check, the abort check, the internal-panic check, and
+the audit. The targets share the production object jobs. This target
+does not compile a second `snappy.cc` or `snappy-sinksource.cc`.
 `lake build snappyNative/snappyValidation` runs it from the repository root.
 -/
 target snappyValidation pkg : FilePath := do
   let boundary ← (← snappyBoundary.fetch).mapM fun _ => pure "boundary"
   let abortTxt ← (← snappyAbort.fetch).mapM fun path => pure path.toString
+  let panicTxt ← (← snappyInternalPanic.fetch).mapM fun path => pure path.toString
   let auditTxt ← (← snappyAudit.fetch).mapM fun path => pure path.toString
   let stamp := pkg.buildDir / "check" / "validation.stamp"
-  (Job.collectArray #[boundary, abortTxt, auditTxt] "validation").mapM fun _ => do
+  (Job.collectArray #[boundary, abortTxt, panicTxt, auditTxt] "validation").mapM fun _ => do
     dropChangedTextArtifact stamp
     let art ← buildArtifactUnlessUpToDate stamp (ext := "stamp") (text := true) do
       createParentDirs stamp

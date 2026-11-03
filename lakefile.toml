@@ -104,8 +104,9 @@ globs = ["Proto.*"]
 name = "Snappy"
 srcDir = "packages/codec/snappy"
 roots = ["Snappy"]
-# The library waits for the production block-only archive.
+# The library waits for the production block-only archive and links it.
 needs = ["snappyNative/snappy"]
+moreLinkObjs = ["snappyNative/snappy"]
 
 [[lean_lib]]
 name = "Crypto"

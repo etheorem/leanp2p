@@ -12,14 +12,12 @@ working binding.
 
 ## Root unit
 
-W6.2 is P0. Its root dependency is W1.2, `base/bytes`. W1.2 is still a
-scaffold. The approved public surface uses the prelude `ByteArray` and
-the package inductive `Snappy.Error`. The package does not import
-`Bytes`. The root plan lets an implementer write against a frozen
-signature before the dependency finishes (root PLAN, "How to read this
-plan"). W1.2 stays a planning dependency and does not block the native
-binding. When W1.2 lands, a shared helper may be adopted only when it
-leaves the committed public surface unchanged.
+W6.2 is P0. Its root dependency is W1.2, `base/bytes`. W1.2 has landed.
+The approved public surface uses the prelude `ByteArray` and the
+package inductive `Snappy.Error`. Production `Snappy.lean` does not
+import `Bytes`. `Tests/Snappy.lean` imports `Bytes` for fixtures and
+for the input snapshot. That test import does not add a production
+dependency.
 
 W6.3 consumes this package after `compress`, `decompress`, and the
 bounded-decompression tests exist. Until then W6.3 does not start on
@@ -96,14 +94,18 @@ feat(snappy): add raw block compression
 The commit adds the compression entry point, the private compression
 extern, `Snappy.Error`, public `compress`, and the first
 `Tests/Snappy.lean` cases, registered from `Tests/Main.lean`. It adds
-the compression shim to the Phase 2C archive and reruns the boundary
-command and the symbol audit against that updated archive. A borrowed
+`shim.o` to the production archive. The pristine archive and the
+define-disabled archive stay the two upstream objects. A borrowed
 input is unchanged. Empty input produces `0x00`. Known compression
-regression cases pass, and repeated compression of the same input is
+cases pass, and repeated compression of the same input is
 deterministic for the pinned backend. A length of at least `2^32` is
 rejected in the wrapper and again in the shim, with no unsafe
-narrowing. An unknown status and an impossible reported compressed
-length panic. A failed test makes the process exit nonzero.
+narrowing. Compression accepts ordinary statuses `0` and `1`. Statuses
+`2` and `3`, an empty success, a reported length past the allocated
+capacity, and an unknown status call `lean_internal_panic` through
+`leanp2p_snappy_internal_panic`. The isolated child links the
+production archive and checks that helper. A failed test makes the
+process exit nonzero.
 
 ### Phase 3B. Bounded decompression
 
@@ -343,7 +345,7 @@ complete.
 | An upstream assertion fires on hostile input | Malformed input returns `.invalidCompressedData`. The shim does not aim that input at an assertion. Phase 4A holds the hostile cases. |
 | The patch and `native/vendor/snappy/` diverge | Phase 2B rebuilds the tree with `git apply` and compares it byte for byte. |
 | ASan or LSan reports a Lean or GMP initialization leak | Phase 4C accepts a leak only when the same stacks appear in the matched Snappy-free control from the same job. |
-| W1.2 lands after this work starts | The public surface stays `ByteArray` and `Snappy.Error`. A shared helper is adopted only when that surface stays unchanged. |
+| W1.2 has landed | The public surface stays `ByteArray` and `Snappy.Error`. Production `Snappy.lean` does not import `Bytes`. |
 
 ## W6.3
 
