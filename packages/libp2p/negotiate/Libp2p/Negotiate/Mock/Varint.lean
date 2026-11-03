@@ -6,8 +6,8 @@ import Bytes
 
 W2.1 is not merged. The executable opaque definitions follow its
 documented nine-byte minimal-form contract. The three axioms below are
-dependency contracts, not negotiate results. They must disappear with
-this mock. This module mirrors `Proto/Mock/Varint.lean`.
+dependency contracts. They state what W2.1 promises, and they must
+disappear with this mock. This module mirrors `Proto/Mock/Varint.lean`.
 -/
 
 set_option autoImplicit false

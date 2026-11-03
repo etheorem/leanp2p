@@ -25,6 +25,9 @@ owned by `net/streams` and lives in `Streams/Constants.lean` (the
 streams pair, contracts; the security pair, contract 7). This package
 imports it and wires it; it keeps no copy.
 
+Until W4.1 merges, `Mock/Streams.lean` holds that value, so the copy lives
+in the mock. The swap to `Streams` deletes the mock with it.
+
 ## Public surface
 
 - `Msg` is the multistream message: one uvarint length prefix, then

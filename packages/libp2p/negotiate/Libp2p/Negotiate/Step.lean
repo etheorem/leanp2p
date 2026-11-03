@@ -9,7 +9,7 @@ import Bytes
 multistream-select (root §3.3). One `Event.bytes` feeds raw bytes, and
 the core decodes exactly one frame per call, so the
 malformed-versus-incomplete call stays in the core (§3.1). A decoded
-frame goes through a private `classify` step that names the verdict,
+frame goes through a private `classify` step that names the answer,
 then a private `act` step that performs it. Every theorem about choice
 lives in `classify`; every theorem about writes and phase lives in
 `act`.
@@ -104,7 +104,7 @@ error; `negotiationFailed` covers every peer violation the core sees. -/
 inductive Error where
   | decode (e : DecodeError)
   | negotiationFailed
-  deriving Repr, DecidableEq
+  deriving Repr, DecidableEq, Hashable
 
 /-- The pure negotiation core of the spike: the first of `ours` that
 `theirs` also supports. -/
@@ -112,16 +112,16 @@ def choose (ours theirs : List Mock.Core.ProtocolId) : Option Mock.Core.Protocol
   List.find? theirs.contains ours
 
 /-- A chosen id is in our list and supported by theirs. -/
-theorem choose_spec {ours theirs : List Mock.Core.ProtocolId} {p : Mock.Core.ProtocolId}
+theorem chooseSpec {ours theirs : List Mock.Core.ProtocolId} {p : Mock.Core.ProtocolId}
     (h : choose ours theirs = some p) : p ∈ ours ∧ theirs.contains p = true := by
   unfold choose at h
   exact ⟨List.mem_of_find?_eq_some h, List.find?_some h⟩
 
-/-! ## The verdicts -/
+/-! ## The answers -/
 
 /-- What a decoded text means for this state. Byte-free, so every
 theorem about choice lives here. -/
-private inductive Verdict where
+private inductive Answer where
   | echo
   | listIds
   | pick (p : Mock.Core.ProtocolId)
@@ -132,7 +132,7 @@ private inductive Verdict where
   | fail
 
 /-- Classify a decoded text for a state. -/
-private def classify (s : State) (text : String) : Verdict :=
+private def classify (s : State) (text : String) : Answer :=
   match s.role, s.phase with
   | .responder, .headerPending => if text = protocolId.toString then .echo else .fail
   | .responder, .negotiating =>
@@ -154,9 +154,9 @@ private def classify (s : State) (text : String) : Verdict :=
         else if text = p.toString then .accept p else .fail
   | _, _ => .fail
 
-/-- Perform a verdict. Byte-free per verdict, so every theorem about
+/-- Perform a answer. Byte-free per answer, so every theorem about
 writes and phase lives here. -/
-private def act (s : State) (rest : List Nat) : Verdict → Except Error (State × List Action)
+private def act (s : State) (rest : List Nat) : Answer → Except Error (State × List Action)
   | .echo => .ok ({ s with buffer := rest, phase := .negotiating }, [.write (encodeText protocolId.toString)])
   | .listIds => .ok ({ s with buffer := rest }, [.write (encodeLs s.supported)])
   | .pick p => .ok ({ s with buffer := [], phase := .selected },
@@ -197,10 +197,10 @@ def step (s : State) : Event → Except Error (State × List Action)
       | .error .malformed => .error (.decode .malformed)
       | .ok (m, rest) => act s rest (classify s m.text)
 
-/-! ## The verdict lemmas -/
+/-! ## The answer lemmas -/
 
-/-- A step that selects came from the pick or accept verdict. -/
-private theorem actSelect {s : State} {rest : List Nat} {v : Verdict} {s' : State}
+/-- A step that selects came from the pick or accept answer. -/
+private theorem actSelect {s : State} {rest : List Nat} {v : Answer} {s' : State}
     {acts : List Action} {p : Mock.Core.ProtocolId} {r : List Nat}
     (h : act s rest v = .ok (s', acts)) (hm : Action.select p r ∈ acts) :
     v = .pick p ∨ v = .accept p := by
@@ -245,28 +245,28 @@ private theorem classifyPickInitiator {s : State} {t : String} {p : Mock.Core.Pr
   repeat' split at h
   all_goals simp_all
 
-/-- An initiator never sees the echo verdict. -/
+/-- An initiator never sees the echo answer. -/
 private theorem classifyEchoInitiator {s : State} {t : String}
     (hr : s.role = .initiator) (h : classify s t = .echo) : False := by
   unfold classify at h
   repeat' split at h
   all_goals simp_all
 
-/-- An initiator never sees the list verdict. -/
+/-- An initiator never sees the list answer. -/
 private theorem classifyListIdsInitiator {s : State} {t : String}
     (hr : s.role = .initiator) (h : classify s t = .listIds) : False := by
   unfold classify at h
   repeat' split at h
   all_goals simp_all
 
-/-- An initiator never sees the refuse verdict. -/
+/-- An initiator never sees the refuse answer. -/
 private theorem classifyRefuseInitiator {s : State} {t : String}
     (hr : s.role = .initiator) (h : classify s t = .refuse) : False := by
   unfold classify at h
   repeat' split at h
   all_goals simp_all
 
-/-- The `ls` text in the negotiation draws the list verdict. -/
+/-- The `ls` text in the negotiation draws the list answer. -/
 private theorem classifyListIds {s : State} {t : String}
     (hrole : s.role = .responder) (hphase : s.phase = .negotiating)
     (hls : Reply.ofText? t = some .ls) : classify s t = .listIds := by
@@ -274,7 +274,7 @@ private theorem classifyListIds {s : State} {t : String}
   rw [hrole, hphase]
   rw [hls]
 
-/-- An unknown id in the negotiation draws the refuse verdict. -/
+/-- An unknown id in the negotiation draws the refuse answer. -/
 private theorem classifyRefuse {s : State} {t : String}
     (hrole : s.role = .responder) (hphase : s.phase = .negotiating)
     (hnot : (⟨t⟩ : Mock.Core.ProtocolId) ∉ s.supported)
@@ -293,8 +293,8 @@ private theorem classifyRetryTail {s : State} {t : String} {q : Mock.Core.Protoc
   repeat' split at h
   all_goals (cases h <;> simp_all [List.tail_cons])
 
-/-- A write came from one of the five writing verdicts. -/
-private theorem actWriteVerdict {s : State} {rest : List Nat} {v : Verdict} {s' : State}
+/-- A write came from one of the five writing answers. -/
+private theorem actWriteAnswer {s : State} {rest : List Nat} {v : Answer} {s' : State}
     {actions : List Action} {w : List Nat}
     (h : act s rest v = .ok (s', actions)) (hw : Action.write w ∈ actions) :
     v = .echo ∨ v = .listIds ∨ (∃ p, v = .pick p) ∨ v = .refuse ∨
@@ -318,7 +318,7 @@ private theorem actWriteVerdict {s : State} {rest : List Nat} {v : Verdict} {s' 
       simp only [act] at h
       cases h
 
-/-- The list verdict writes the `ls` reply and stays in the phase. -/
+/-- The list answer writes the `ls` reply and stays in the phase. -/
 private theorem actListIds {s : State} {rest : List Nat} {s' : State} {actions : List Action}
     (h : act s rest .listIds = .ok (s', actions)) :
     actions = [.write (encodeLs s.supported)] ∧ s'.phase = s.phase ∧ s'.buffer = rest := by
@@ -329,7 +329,7 @@ private theorem actListIds {s : State} {rest : List Nat} {s' : State} {actions :
   rw [← hstate]
   simp
 
-/-- The refuse verdict writes the `na` frame and stays in the phase. -/
+/-- The refuse answer writes the `na` frame and stays in the phase. -/
 private theorem actRefuse {s : State} {rest : List Nat} {s' : State} {actions : List Action}
     (h : act s rest .refuse = .ok (s', actions)) :
     actions = [.write (encodeMsg (Reply.toMsg .na))] ∧ s'.phase = s.phase ∧ s'.buffer = rest := by
@@ -340,7 +340,7 @@ private theorem actRefuse {s : State} {rest : List Nat} {s' : State} {actions : 
   rw [← hstate]
   simp
 
-/-- The retry verdict replaces the proposals with the remaining list. -/
+/-- The retry answer replaces the proposals with the remaining list. -/
 private theorem actRetryWrites {s : State} {rest : List Nat} {q : Mock.Core.ProtocolId}
     {ps : List Mock.Core.ProtocolId} {s' : State} {actions : List Action}
     (h : act s rest (.retry q ps) = .ok (s', actions)) : s'.proposals = ps := by
@@ -352,7 +352,7 @@ private theorem actRetryWrites {s : State} {rest : List Nat} {q : Mock.Core.Prot
 /-! ## The step theorems -/
 
 /-- A responder selects only from its supported list (contract 2). -/
-theorem step_select_responder_mem {s : State} {bs : List Nat} {s' : State}
+theorem stepSelectResponderMem {s : State} {bs : List Nat} {s' : State}
     {actions : List Action} {p : Mock.Core.ProtocolId} {rest : List Nat}
     (hrole : s.role = .responder)
     (hstep : step s (.bytes bs) = .ok (s', actions))
@@ -368,7 +368,7 @@ theorem step_select_responder_mem {s : State} {bs : List Nat} {s' : State}
     · exact (classifyAcceptResponder hrole hv).elim
 
 /-- An initiator selects only from its own proposal list. -/
-theorem step_select_initiator_mem {s : State} {bs : List Nat} {s' : State}
+theorem stepSelectInitiatorMem {s : State} {bs : List Nat} {s' : State}
     {actions : List Action} {p : Mock.Core.ProtocolId} {rest : List Nat}
     (hrole : s.role = .initiator)
     (hstep : step s (.bytes bs) = .ok (s', actions))
@@ -386,7 +386,7 @@ theorem step_select_initiator_mem {s : State} {bs : List Nat} {s' : State}
 /-- A step that writes advances the initiator's proposal list by one
 head: the new list is the old tail, so it is strictly shorter
 (contract 2, the `na` retry). -/
-theorem step_initiator_na_progress {s : State} {bs : List Nat} {s' : State}
+theorem stepInitiatorNaProgress {s : State} {bs : List Nat} {s' : State}
     {actions : List Action} {p : Mock.Core.ProtocolId} {ps : List Mock.Core.ProtocolId}
     {w : List Nat}
     (hrole : s.role = .initiator) (hprop : s.proposals = p :: ps)
@@ -399,7 +399,7 @@ theorem step_initiator_na_progress {s : State} {bs : List Nat} {s' : State}
     obtain ⟨-, rfl⟩ := hstep
     simp at hwrite
   · simp at hstep
-  · rcases actWriteVerdict hstep hwrite with hc | hc | hc | hc | hc
+  · rcases actWriteAnswer hstep hwrite with hc | hc | hc | hc | hc
     · exact (classifyEchoInitiator hrole hc).elim
     · exact (classifyListIdsInitiator hrole hc).elim
     · rcases hc with ⟨p', hc⟩
@@ -420,7 +420,7 @@ theorem step_initiator_na_progress {s : State} {bs : List Nat} {s' : State}
 
 /-- The `ls` answer writes the reply and stays in the negotiation
 (contract 3). -/
-theorem step_responder_ls_stays {s : State} {bs : List Nat} {s' : State}
+theorem stepResponderLsStays {s : State} {bs : List Nat} {s' : State}
     {actions : List Action} {m : Msg} {rest : List Nat}
     (hrole : s.role = .responder) (hphase : s.phase = .negotiating)
     (hdec : decodeMsg? (s.buffer ++ bs) = .ok (m, rest))
@@ -441,7 +441,7 @@ theorem step_responder_ls_stays {s : State} {bs : List Nat} {s' : State}
 
 /-- An unknown id draws the `na` frame and stays in the negotiation
 (contract 2). -/
-theorem step_responder_unknown_stays {s : State} {bs : List Nat} {s' : State}
+theorem stepResponderUnknownStays {s : State} {bs : List Nat} {s' : State}
     {actions : List Action} {m : Msg} {rest : List Nat} {id : Mock.Core.ProtocolId}
     (hrole : s.role = .responder) (hphase : s.phase = .negotiating)
     (hdec : decodeMsg? (s.buffer ++ bs) = .ok (m, rest))
@@ -468,7 +468,7 @@ theorem step_responder_unknown_stays {s : State} {bs : List Nat} {s' : State}
 
 /-- Conservation: the bytes the accepting initiator consumed, plus the
 leftover, equal the bytes fed in (contract 5). -/
-theorem step_select_conservation {s : State} {bs : List Nat} {s' : State}
+theorem stepSelectConservation {s : State} {bs : List Nat} {s' : State}
     {p : Mock.Core.ProtocolId} {rest r : List Nat} {m : Msg}
     (hrole : s.role = .initiator)
     (hdec : decodeMsg? (s.buffer ++ bs) = .ok (m, r))
@@ -495,7 +495,7 @@ theorem step_select_conservation {s : State} {bs : List Nat} {s' : State}
 
 /-- A truncated buffer waits: no actions, no error, the phase holds,
 and the buffer keeps the bytes (§3.1). -/
-theorem step_truncated_waits {s : State} {bs : List Nat} {s' : State} {actions : List Action}
+theorem stepTruncatedWaits {s : State} {bs : List Nat} {s' : State} {actions : List Action}
     (hdec : decodeMsg? (s.buffer ++ bs) = .error .truncated)
     (hstep : step s (.bytes bs) = .ok (s', actions)) :
     actions = [] ∧ s'.phase = s.phase ∧ s'.buffer = s.buffer ++ bs := by

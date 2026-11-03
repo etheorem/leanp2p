@@ -40,7 +40,7 @@ def encodeText (s : String) : List Nat :=
 
 /-- A multistream message. `text` excludes the trailing newline.
 `fits` is the proof-carrying cap fact of root §3.7: the message fits
-the 1 KiB cap, so the encoder writes the exact length, no modulo. -/
+the 1 KiB cap, so the encoder writes the exact length. -/
 structure Msg where
   text : String
   fits : (Bytes.ofString (text ++ "\n")).size ≤ maxMsg
