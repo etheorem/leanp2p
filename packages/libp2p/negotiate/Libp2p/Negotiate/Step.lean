@@ -170,18 +170,18 @@ private def act (s : State) (rest : List Nat) : Answer → Except Error (State �
   | .accept p => .ok ({ s with buffer := [], phase := .selected }, [.select p rest])
   | .fail => .error .negotiationFailed
 
-/-- A proposal event. An initiator in the header phase records the id in
-`proposals` and writes the coalesced header plus the first proposal frame. A
-second proposal in the same phase extends the list and writes nothing. The
-frame for every later id is written when `step` answers `na`, and `classify`
-derives that answer from the recorded list. -/
+/-- A proposal event. An initiator in the header phase with an empty list
+records the id and writes the coalesced header plus the first proposal frame.
+Any other proposal event leaves the state unchanged: `initiatorStart` seeds
+the ordered list before the first frame moves, and the `na` retry walks that
+list from `classify`. -/
 private def propose (s : State) (p : Mock.Core.ProtocolId) : Except Error (State × List Action) :=
   if s.role = .initiator then
     if s.phase = .headerPending then
       if s.proposals = [] then
         .ok ({ s with proposals := [p], phase := .negotiating },
              [.write (encodeMsg header ++ encodeText p.toString)])
-      else .ok ({ s with proposals := s.proposals ++ [p] }, [])
+      else .ok (s, [])
     else .ok (s, [])
   else .ok (s, [])
 
