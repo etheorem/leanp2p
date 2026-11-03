@@ -167,10 +167,11 @@ private def act (s : State) (rest : List Nat) : Verdict → Except Error (State 
   | .accept p => .ok ({ s with buffer := [], phase := .selected }, [.select p rest])
   | .fail => .error .negotiationFailed
 
-/-- A proposal event. Only the first proposal of an initiator in the
-header phase writes the coalesced header plus proposal frame. Every
-other proposal event is a no-op, because local input cannot fail a
-negotiation and cannot corrupt the core. -/
+/-- A proposal event. An initiator in the header phase records the id in
+`proposals` and writes the coalesced header plus the first proposal frame. A
+second proposal in the same phase extends the list and writes nothing. The
+frame for every later id is written when `step` answers `na`, and `classify`
+derives that answer from the recorded list. -/
 private def propose (s : State) (p : Mock.Core.ProtocolId) : Except Error (State × List Action) :=
   if s.role = .initiator then
     if s.phase = .headerPending then
