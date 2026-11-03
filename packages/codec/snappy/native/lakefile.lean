@@ -639,7 +639,7 @@ target snappyAbort pkg : FilePath := do
       return art.path
 
 /-- Policy string shared with `scripts/audit-native.py`. -/
-private def auditPolicy : String := "phase-3a/1"
+private def auditPolicy : String := "phase-3b/1"
 
 /-- Package audit script. It sits beside the offline verifier. -/
 private def auditScript (pkg : Package) : FilePath :=

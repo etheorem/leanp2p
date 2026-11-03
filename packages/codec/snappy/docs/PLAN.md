@@ -113,17 +113,20 @@ process exit nonzero.
 feat(snappy): add bounded raw block decompression
 ```
 
-The commit adds the decompression entry point, the private
-decompression extern, the public cap conversion, public `decompress`,
-and the minimal valid, malformed, and cap tests. The shim parses the
-advertised length and compares it with the clamped cap before it
-allocates. An exact cap succeeds. A smaller cap returns
-`.outputTooLarge`. Invalid input returns `.invalidCompressedData`. A
-cap of `2^32` or greater accepts every length the raw format can
-store. An unknown native status panics in the wrapper. The first
-end-to-end public round trips pass: if `compress x = .ok c`, then
-`decompress c x.size = .ok x`. The commit adds the decompression shim
-to the archive and reruns the boundary command and the symbol audit.
+The commit adds the decompression entry point to `shim.o`, the private
+decompression extern, the private cap clamp, public `decompress`, and
+the first bounded tests. The shim parses the advertised length,
+compares it with the clamped cap, and validates the whole block before
+it allocates. A cap rejection precedes a payload-malformation
+rejection. An exact cap succeeds. A smaller cap returns
+`.outputTooLarge`. Invalid input returns `.invalidCompressedData`.
+Empty decompressed output is a successful status `0`. A cap of `2^32`
+or greater accepts every length the raw format can store. The
+comparison with `2^32` happens before `Nat.toUInt32`. Decompression
+status `1` and every unknown status call `lean_internal_panic` through
+category `4`. The first public round trips pass: if `compress x = .ok c`,
+then `decompress c x.size = .ok x`. The audit requires the three shim
+exports. The hostile input matrix remains Phase 4A.
 
 ### Phase 4A. Invalid input
 

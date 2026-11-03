@@ -44,7 +44,7 @@ module.
 
 | Module | Responsibility |
 |---|---|
-| `Snappy.lean` | Public `Snappy.Error` and `compress`. The private compression extern, the internal-panic extern, and the compression status map. `decompress` arrives in Phase 3B. |
+| `Snappy.lean` | Public `Snappy.Error`, `compress`, and `decompress`. The private externs, the cap clamp, the status maps, and the internal-panic extern. |
 
 The public surface and the private adapter are small, so both stay in
 the root module. The root `lean_lib` keeps its one-module glob until a
@@ -171,13 +171,33 @@ uses a separate category:
 | `0` | successful compression produced an empty output |
 | `1` | compression returned an unexpected status |
 | `2` | the reported compressed length exceeded the allocated capacity |
+| `3` | a block that passed validation then failed `RawUncompress` |
+| `4` | decompression returned an unexpected status |
 
 Statuses `2`, `3`, and every unknown compression status select
 category `1`. The wrapper returns the helper call from each impossible
-branch. Empty input compresses to the one-byte block `0x00`.
+branch. Empty input compresses to the one-byte block `0x00`. A
+successful compression result is nonempty.
 
-Every ordinary return from the shim is a valid Lean object. The wrapper
-reads a successful output only from status `0` with a nonempty array.
+Decompression accepts ordinary codes `0`, `2`, and `3`. Code `0` is
+the decompressed block, and that block may be empty. Code `2` is
+`.invalidCompressedData`. Code `3` is `.outputTooLarge`. Code `1` is a
+compression outcome. Decompression treats code `1` and every unknown
+code as category `4`.
+
+The caller cap is a `Nat`. `clampOutputCap` compares it with `2^32`
+before `Nat.toUInt32`. A cap of `2^32` or more becomes `0xFFFFFFFF`
+and accepts every length the raw format can store.
+
+The shim parses the advertised length, compares that length with the
+clamped cap, and validates the whole block before it allocates. A cap
+rejection therefore precedes a payload-malformation rejection. An
+allocation that cannot represent an accepted length calls
+`lean_internal_panic`. It does not return a `Snappy.Error`.
+
+Every ordinary return from the shim is a valid Lean object. An error
+status carries an owned empty array. The wrapper reads a successful
+decompression only from status `0`.
 
 ## Ownership
 
@@ -187,7 +207,7 @@ reads a successful output only from status `0` with a nonempty array.
 | Output `ByteArray` | A new Lean-owned scalar array. The shim returns it to Lean. |
 | Compression scratch workspace | A native temporary allocation. The shim frees it on every ordinary path. |
 | `CompressionContext` | A separate native object over the caller-provided workspace. The shim runs its destructor before it frees the workspace. |
-| Decompression output | The shim allocates it only after the advertised length is valid and within the clamped cap. |
+| Decompression output | A new Lean-owned scalar array. The shim allocates it only after the length parses, the cap accepts it, and the full block validates. |
 
 No native pointer outlives the owner that allocated it. The shim never
 writes the borrowed input. Any scratch allocation that was made is
@@ -397,7 +417,9 @@ show that a later shim avoids the calls.
 unresolved `std::` facility, a global `operator new`, a global
 `operator delete`, `__cxa_*`, and `__gxx_personality*`. Lean runtime
 symbols stay on a separate exact allowlist and are reported as
-`lean-runtime`. It checks the guarded symbols and the three production
+`lean-runtime`. `shim.o` defines exactly `leanp2p_snappy_compress`,
+`leanp2p_snappy_decompress`, and `leanp2p_snappy_internal_panic`. It
+checks the guarded symbols and the three production
 archive members. The pristine archive and the define-disabled archive
 stay the two upstream objects. It compares the defined global symbols
 of the pristine build and the define-disabled build. The local run is

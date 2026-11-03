@@ -3,13 +3,12 @@ import Bytes
 import Snappy
 
 /-!
-# Snappy compression (unit W6.2, Phase 3A)
+# Snappy raw blocks (unit W6.2, Phases 3A and 3B)
 
-Raw-block compression against `google/snappy` 1.3.1. The expected
-blocks for the empty input and for `hello hello hello hello` are the
-bytes pinned by `native/check/core.cpp`. Each case materializes an
-independent content list before the extern call, then compares that
-list with the input after the call.
+Compression and bounded decompression against `google/snappy` 1.3.1.
+The empty block and `hello hello hello hello` use the bytes pinned by
+`native/check/core.cpp`. Each borrowed input is snapshotted as a
+`List Nat` before the extern call.
 -/
 
 set_option autoImplicit false
@@ -77,14 +76,67 @@ private def checkExact (r : Runner) (name : String) (input : ByteArray)
 private def checkNonempty (r : Runner) (name : String) (input : ByteArray) : IO Unit := do
   checkCase r name input fun out => !out.isEmpty
 
-/-- Phase 3A compression checks. -/
+/--
+Materialize the compressed bytes, decompress, then read those bytes again.
+-/
+@[noinline]
+private def snapshotAndDecompress (input : ByteArray) (cap : Nat) :
+    List Nat × List Nat × Except Snappy.Error ByteArray :=
+  let before := toNatList input
+  let result := Snappy.decompress input cap
+  let after := bytesAfter result input
+  (before, after, result)
+
+/-- Check one decompression and the borrowed compressed bytes. -/
+private def checkDecompress (r : Runner) (name : String) (input : ByteArray)
+    (cap : Nat) (expect : Except Snappy.Error ByteArray → Bool) : IO Unit := do
+  let (before, after, result) := snapshotAndDecompress input cap
+  r.check s!"{name} input unchanged" (before == after)
+  r.check name (expect result)
+
+/-- `compress x` then `decompress` with cap `x.size` returns `x`. -/
+private def checkRound (r : Runner) (name : String) (input : ByteArray) : IO Unit := do
+  match Snappy.compress input with
+  | .error _ =>
+    r.check s!"{name} round trip compresses" false
+  | .ok compressed =>
+    checkDecompress r s!"{name} round trip" compressed input.size (succeedsWith input)
+
+/-- Phase 3A compression checks and Phase 3B bounded decompression. -/
 def Snappy.run (r : Runner) : IO Unit := do
   r.section "snappy" "google/snappy 1.3.1 raw block (native/check/core.cpp)"
+  let hello := ofString "hello hello hello hello"
+  let oneByte := ofNatList [0x42]
+  let repetitive := ofNatList (List.replicate 16 0x61)
+  let binary := ofNatList [0x00, 0x01, 0x7f, 0x80, 0xfe, 0xff, 0x00, 0x10]
   checkExact r "empty" ByteArray.empty "00"
-  checkExact r "hello hello hello hello" (ofString "hello hello hello hello")
-    "171468656c6c6f20420600"
-  checkNonempty r "one byte" (ofNatList [0x42])
-  checkNonempty r "repetitive" (ofNatList (List.replicate 16 0x61))
-  checkNonempty r "binary" (ofNatList [0x00, 0x01, 0x7f, 0x80, 0xfe, 0xff, 0x00, 0x10])
+  checkExact r "hello hello hello hello" hello "171468656c6c6f20420600"
+  checkNonempty r "one byte" oneByte
+  checkNonempty r "repetitive" repetitive
+  checkNonempty r "binary" binary
+  match ← parsedHex r "empty block" "00" with
+  | none => pure ()
+  | some emptyBlock =>
+    checkDecompress r "empty block cap 0" emptyBlock 0 (succeedsWith ByteArray.empty)
+  match ← parsedHex r "hello block" "171468656c6c6f20420600" with
+  | none => pure ()
+  | some helloBlock =>
+    checkDecompress r "hello exact cap" helloBlock hello.size (succeedsWith hello)
+    checkDecompress r "hello short cap" helloBlock (hello.size - 1)
+      (failsWith Snappy.Error.outputTooLarge)
+    checkDecompress r "hello cap 2^32" helloBlock (2 ^ 32) (succeedsWith hello)
+    checkDecompress r "hello cap 2^64" helloBlock (2 ^ 64) (succeedsWith hello)
+  let truncated := ofNatList [0x01]
+  checkDecompress r "empty compressed" ByteArray.empty 0
+    (failsWith Snappy.Error.invalidCompressedData)
+  checkDecompress r "truncated within cap" truncated 1
+    (failsWith Snappy.Error.invalidCompressedData)
+  checkDecompress r "truncated over cap" truncated 0
+    (failsWith Snappy.Error.outputTooLarge)
+  checkRound r "empty" ByteArray.empty
+  checkRound r "one byte" oneByte
+  checkRound r "hello hello hello hello" hello
+  checkRound r "repetitive" repetitive
+  checkRound r "binary" binary
 
 end Tests

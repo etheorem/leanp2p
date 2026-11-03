@@ -15,7 +15,7 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 
-POLICY = "phase-3a/1"
+POLICY = "phase-3b/1"
 
 # Undefined C and platform symbols observed in the production objects.
 # A symbol outside this set, and outside the Snappy classes and the Lean
@@ -69,6 +69,7 @@ PRISTINE_MEMBERS = ("snappy.pristine.o", "snappy-sinksource.pristine.o")
 PATCHED_MEMBERS = ("snappy.patched.o", "snappy-sinksource.patched.o")
 SHIM_EXPORTS = (
     "leanp2p_snappy_compress",
+    "leanp2p_snappy_decompress",
     "leanp2p_snappy_internal_panic",
 )
 
