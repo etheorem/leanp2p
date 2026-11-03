@@ -43,8 +43,10 @@ private def ma (s : String) : Async Multiaddr := do
   | .ok a => return a
   | .error _ => throw <| IO.userError s!"test address {s} does not parse"
 
-/-- The bytes of a hex string. -/
-private def unhex (s : String) : List Nat :=
+/-- The bytes of a hex string, on the `List Nat` model. The name
+differs from `Tests.unhex`, the `ByteArray` reader of `Tests/Support`,
+which lands with W3.2. -/
+private def unhexList (s : String) : List Nat :=
   let digit (c : Char) : Nat :=
     if c.isDigit then c.toNat - '0'.toNat else c.toLower.toNat - 'a'.toNat + 10
   let rec go : List Char → List Nat
@@ -74,7 +76,7 @@ private def mockChecks (r : Runner) : IO Unit := do
   let j ← loadJson file
   for ex in ← jArr file j "examples" do
     let n ← jNat file ex "n"
-    let wire := unhex (← jStr file ex "uvarintHex")
+    let wire := unhexList (← jStr file ex "uvarintHex")
     r.check s!"mock varint: {n} encodes as the spec says" (Varint.encodeNat n == wire)
     r.check s!"mock varint: the spec bytes of {n} decode on the model"
       (match Varint.decode? wire with | .ok (v, []) => v.val == n | _ => false)
@@ -86,7 +88,7 @@ private def mockChecks (r : Runner) : IO Unit := do
   for rule in ← jArr file j "rules" do
     if let some hex ← jStr? file rule "counterExampleHex" then
       r.check s!"mock varint: the non-minimal {hex} is malformed"
-        (failsWith .malformed (Varint.decode? (unhex hex)))
+        (failsWith .malformed (Varint.decode? (unhexList hex)))
   let ninth := List.replicate 9 0x80 ++ [0x01]
   r.check "mock varint: a ninth continuation byte is malformed"
     (failsWith .malformed (Varint.decode? ninth))
