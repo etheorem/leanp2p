@@ -44,7 +44,7 @@ W5.1 (`libp2p/identity`) derives, signs, and verifies through the
 facade. W5.3 (Noise) takes X25519, ChaCha20-Poly1305, SHA-256, and
 HKDF from it, and it draws its ephemeral keys through the `Rng` seam.
 Its fixed-key test value takes the seeded `Rng`. W6.1 takes
-keccak-256. W5.6 signs and verifies.
+keccak-256 and secp256k1 key recovery. W5.6 signs and verifies.
 
 ## Test milestones
 
@@ -53,7 +53,7 @@ root W0.2.
 
 - **The facade check** (`Tests/Facade.lean`): the module imports
   `Crypto` and no source package. It names every route of the
-  architecture table, so the build fails on a missing name. The two
+  architecture table, so the build fails on a missing name. The three
   routes that leave the backend, and the interim fallback, appear at
   their stated types. Rule 4 of the import lint holds over `packages/`.
 - **The `Rng` seam** (`Tests/Facade.lean`): two seeded values from one
@@ -104,6 +104,11 @@ root W0.2.
     SPKI of the strictness fixtures: both reject
   - eight fresh keys and signatures from the backend generator: both
     accept, and both reject a tampered message
+- **The secp256k1 recovery route** (`Tests/CryptoCross.lean`). The
+  backend binds no recovery, so the backend derivation is the
+  reference. For eight fresh keys, a recovery id from 0 to 3 gives
+  back the point of the signer, from the low S and from its high-S
+  twin. A recovery id past 3 gives the empty answer.
 
 ## Vector stance
 
