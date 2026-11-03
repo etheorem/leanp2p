@@ -4,7 +4,10 @@
 The script exits unless `uname` reports Linux and `x86_64`. It runs
 `lake build snappyNative/snappyAudit` on the production objects. It
 then links that archive into a shim workload and links a matched
-runtime control with the same Lean linker. AddressSanitizer and
+runtime control with the same Lean linker. Host `c++` compiles the
+instrumented units. Host `cc` from the same toolchain links them and
+supplies the GCC AddressSanitizer runtime. Lean's static `libc++` and
+`libc++abi` stay on that link line. AddressSanitizer and
 LeakSanitizer each run on that pair. A leak in either executable, a
 sanitizer error, or a negative control that exits cleanly fails the
 process. The control does not excuse a leak.
@@ -147,8 +150,7 @@ def print_identities(prefix: Path, leanc: Path, ar: Path) -> None:
     print(first_line(["uname", "-r"]))
     print(f"lean --version {first_line(['lean', '--version'])}")
     print(f"leanc --version {first_line([str(leanc), '--version'])}")
-    print(f"c++ --version {first_line(['c++', '--version'])}")
-    print(f"c++ -dumpmachine {run(['c++', '-dumpmachine']).stdout.strip()}")
+    assert_compiler_linker_pair()
     print(first_line(["nm", "--version"]))
     print(first_line([str(ar), "--version"]))
     print(first_line(["ld", "--version"]))
@@ -170,6 +172,65 @@ def core_flags() -> list[str]:
         if flag == "-Werror":
             flags.append("-Wno-error=ignored-attributes")
     return flags
+
+
+CXX_RUNTIME_LIBS = frozenset({"-lc++", "-lc++abi", "-lstdc++"})
+STATIC_MODE = "-Wl,-Bstatic"
+DYNAMIC_MODE = "-Wl,-Bdynamic"
+SANITIZER_LINK = [
+    "cc",
+    "-fsanitize=address",
+    "-fno-omit-frame-pointer",
+    "-fno-sanitize-recover=address",
+]
+
+
+def driver_text(driver: str, *args: str) -> str:
+    result = run([driver, *args], check=False)
+    text = result.stdout.strip()
+    if result.returncode != 0 or text == "":
+        fail(f"{driver} {' '.join(args)} failed")
+    return text.splitlines()[0]
+
+
+def assert_compiler_linker_pair() -> None:
+    """Require host `cc` and `c++` to share a target and sanitizer runtime."""
+    print(f"c++ --version {driver_text('c++', '--version')}")
+    cxx_target = driver_text("c++", "-dumpmachine")
+    print(f"c++ -dumpmachine {cxx_target}")
+    print(f"cc --version {driver_text('cc', '--version')}")
+    cc_target = driver_text("cc", "-dumpmachine")
+    print(f"cc -dumpmachine {cc_target}")
+    if cc_target != cxx_target:
+        fail(f"cc target {cc_target} differs from c++ target {cxx_target}")
+    cxx_asan = run(["c++", "-print-file-name=libasan.so"], check=False).stdout.strip()
+    cc_asan = run(["cc", "-print-file-name=libasan.so"], check=False).stdout.strip()
+    print(f"c++ libasan {cxx_asan or 'unresolved'}")
+    print(f"cc libasan {cc_asan or 'unresolved'}")
+    cxx_found = "/" in cxx_asan
+    cc_found = "/" in cc_asan
+    if cxx_found != cc_found or (cxx_found and cxx_asan != cc_asan):
+        fail("cc and c++ resolve different AddressSanitizer runtimes")
+
+
+def validate_static_cxx_runtime(tokens: list[str]) -> None:
+    """Allow a C++ runtime library only inside a closed static region."""
+    static = False
+    for token in tokens:
+        if token == STATIC_MODE:
+            if static:
+                fail("leanc linker static mode is already active")
+            static = True
+            continue
+        if token == DYNAMIC_MODE:
+            if not static:
+                fail("leanc linker dynamic mode is already active")
+            static = False
+            continue
+        if token in CXX_RUNTIME_LIBS and not static:
+            fail(f"leanc links {token} outside static mode")
+    if static:
+        fail("leanc linker static mode does not return to dynamic mode")
 
 
 def filtered_link_flags(leanc: Path) -> list[str]:
@@ -195,8 +256,10 @@ def filtered_link_flags(leanc: Path) -> list[str]:
         index += 1
     if not kept:
         fail("leanc --print-ldflags produced no linker flags")
-    if any(token == "-lc++" or token.startswith("-lc++") for token in kept):
-        fail("leanc links libc++. The sanitizer link uses host c++ and libstdc++.")
+    validate_static_cxx_runtime(kept)
+    print("sanitizer link flags")
+    for token in kept:
+        print(f"  {token}")
     return kept
 
 
@@ -249,12 +312,7 @@ def link_sanitized(
     flags = filtered_link_flags(leanc)
     snappy = work / "shim-workload-asan"
     control = work / "runtime-control-asan"
-    common = [
-        "c++",
-        "-fsanitize=address",
-        "-fno-omit-frame-pointer",
-        "-fno-sanitize-recover=address",
-    ]
+    common = SANITIZER_LINK
     run(
         [
             *common,
@@ -521,12 +579,7 @@ def negative_controls(work: Path, root: Path) -> None:
     asan_exe = work / "asan-negative"
     lsan_exe = work / "lsan-negative"
     compile = ["c++", *LANGUAGE_FLAGS, *SANITIZE_FLAGS]
-    link = [
-        "c++",
-        "-fsanitize=address",
-        "-fno-omit-frame-pointer",
-        "-fno-sanitize-recover=address",
-    ]
+    link = SANITIZER_LINK
     run([*compile, "-c", str(checks / "asan-negative.cpp"), "-o", str(work / "asan-negative.o")])
     run([*link, "-o", str(asan_exe), str(work / "asan-negative.o")])
     run([*compile, "-c", str(checks / "lsan-negative.cpp"), "-o", str(work / "lsan-negative.o")])
