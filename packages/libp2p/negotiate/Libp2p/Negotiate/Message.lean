@@ -68,6 +68,12 @@ through it. -/
 def Msg.ofText? (s : String) : Option Msg :=
   if h : (Bytes.ofString (s ++ "\n")).size ≤ maxMsg then some ⟨s, h⟩ else none
 
+/-- A text whose frame fits the 1 KiB cap. The senders call this before
+they write, so a configured id that would produce an over-cap frame is a
+protocol error rather than a frame the decoder refuses (root §5.1). -/
+def fitsText (s : String) : Bool :=
+  decide ((Bytes.ofString (s ++ "\n")).size ≤ maxMsg)
+
 /-- The frame the codec writes for a message. -/
 def encodeMsg (m : Msg) : List Nat := encodeText m.text
 
