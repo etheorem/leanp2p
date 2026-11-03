@@ -24,6 +24,15 @@ once.
 
 Unit 0 is done. Sub-units 1a, 1b, and 1c close root W2.3 together.
 
+Current progress: 1b's CID codecs and text forms are implemented. The
+1a core is implemented with a checked multibase encoder; the total
+encoder's Proquint input domain still needs resolution. For 1c, the
+component and sequence codecs, value validators, segmentation and raw
+operation cores are implemented and tested. The public `Multiaddr`
+representation, text printer, class instances and checked operation
+wrappers remain. The package architecture records the unresolved
+public-surface decisions. This work does not yet close W2.3.
+
 ## Consumers
 
 W5.1 (`libp2p/identity`) builds the peer id on multihash, a validated

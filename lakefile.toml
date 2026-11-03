@@ -93,6 +93,7 @@ globs = ["Varint.*"]
 name = "Multiformats"
 srcDir = "packages/codec/multiformats"
 roots = ["Multiformats"]
+globs = ["Multiformats.*"]
 
 [[lean_lib]]
 name = "Proto"

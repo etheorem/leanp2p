@@ -7,6 +7,41 @@ Consensus dialing and the ENR mapping go through multiaddr. The
 package carries its own conformance suites, so a project that uses it
 without libp2p still runs them (§4.4).
 
+## Implementation status
+
+The registry generator, Base58, checked multibase conversions, multihash,
+CID, component framing, and validated sequence cores are implemented.
+The codec instances use the merged `Bytes` classes and harness. Varint
+remains behind `Multiformats.Mock.Varint` until W2.1 merges. Its four
+assumed dependency facts are named in that module and audited in the PR.
+
+`Multiformats.Multiaddr` currently names helper functions for IP text,
+UTF-8 percent escapes, protocol values and text segmentation. It does
+not yet name the public address type. `ComponentWire`, `SequenceWire`
+and `SequenceOps` hold its reusable wire and operation cores. The
+public address wrappers, remembered peer text and final class instances
+remain unfinished. The contracts below describe the required surface.
+
+Two public-surface decisions need resolution before W2.3 can close:
+
+- The remembered `p2p` text form does not survive binary encoding. Two
+  values that differ only in that form encode identically, so an exact
+  codec roundtrip cannot recover both. The text segment layer retains
+  the original spelling while the organiser decides its public home.
+- The registry includes experimental Proquint, whose pinned format
+  specifies complete 16-bit words. `Multibase.encode?` returns an
+  explicit error for an odd-byte Proquint input. The required total
+  `encode` entry point is pending a decision about that input domain.
+
+The generator consumes all pinned multicodec rows for `ContentCodec`,
+the `hash` and `multihash` tags for `HashCode`, and the protocol and
+multibase CSVs. It keeps the `ipfs` alias while giving code 421 one
+canonical protocol constructor. Reserved multibase prefixes have no
+`Base` constructor. The ECH converter follows the pinned
+`vendor/multiaddr/protocols/ech.md`: text is multibase and the wire
+payload is the decoded configuration, including non-UTF-8 bytes. The
+spike's raw UTF-8 encoding of that text is not the specified wire form.
+
 ## Modules
 
 | Module | Holds, and why |

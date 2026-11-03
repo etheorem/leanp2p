@@ -7,6 +7,13 @@
 # its provenance (repo, path, commit) in a "_provenance" field.
 
 [[vendor]]
+dir = "vendor/multicodec"
+repo = "https://github.com/multiformats/multicodec"
+commit = "fbd77ebf058c4e8a47e6759fff84210d8a63f73a"
+branch = "master"
+used-for = "table.csv: generated multicodec and hash-function registries (W2.3)"
+
+[[vendor]]
 dir = "vendor/multiaddr"
 repo = "https://github.com/multiformats/multiaddr"
 commit = "7a0710a4a2a425f9280a148561a3ff5af80aa2f5"
