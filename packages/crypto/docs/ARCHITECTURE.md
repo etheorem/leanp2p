@@ -33,11 +33,11 @@ namespace.
 | keccak-256 | `LeanHazmatKeccak` | §4.6. No own shim exists. |
 | ECDSA P-256 verify | `LeanHazmatP256`, through `Crypto/P256.lean` | §4.6. The backend PLAN, "Pin outcomes", gives the adapter to this unit. |
 | ECDSA P-256 derive, re-encode, sign, key generation | `crypto/backend` | the etheorem family binds verification only |
-| secp256k1 derive, point check, sign, verify, key generation | `crypto/backend` | the etheorem verifier accepts a high S, and §4.6 requires a low S (backend PLAN, "Pin outcomes") |
+| secp256k1 derive, point check, sign over a message or a digest, verify, key generation | `crypto/backend` | the etheorem verifier accepts a high S, and §4.6 requires a low S (backend PLAN, "Pin outcomes") |
 | Ed25519, X25519, RSA, ChaCha20-Poly1305, X.509, random bytes, the other generators | `crypto/backend` | no other source binds them |
 
 The facade also re-exports the types of the backend: `CryptoError`,
-`Key32`, `Nonce12`, and `Certificate`, with their checked
+`Key32`, `Digest32`, `Nonce12`, and `Certificate`, with their checked
 constructors. A caller then needs no second import to build an
 argument or to match an error.
 

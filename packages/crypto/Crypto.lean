@@ -35,8 +35,8 @@ namespace Crypto
 
 /-! ## Types and errors -/
 
-export Backend (CryptoError Key32 Nonce12 Key32.ofByteArray? Nonce12.ofByteArray?
-  Certificate Certificate.validAt)
+export Backend (CryptoError Key32 Digest32 Nonce12 Key32.ofByteArray?
+  Digest32.ofByteArray? Nonce12.ofByteArray? Certificate Certificate.validAt)
 
 /-! ## Randomness and key generation: the backend -/
 
@@ -65,7 +65,8 @@ export Backend (chachaSeal chachaOpen aeadTagLen aeadMaxLen x25519PublicKey x255
 export Backend (ed25519PublicKey ed25519Sign ed25519Verify ed25519SigLen
   rsaPublicKey rsaPkcs1 rsaSign rsaVerify rsaMinBits rsaMaxBits
   p256PublicKey p256Sec1 p256Sign
-  secp256k1PublicKey secp256k1PointValid secp256k1Sign secp256k1Verify)
+  secp256k1PublicKey secp256k1PointValid secp256k1Sign secp256k1SignDigest
+  secp256k1Verify)
 
 /-- ECDSA P-256 verification over SHA-256(`msg`), with an SPKI DER key
 and a DER signature: the etheorem package `LeanHazmatP256`, through

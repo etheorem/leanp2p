@@ -25,8 +25,9 @@ open Bytes Crypto
 
 /-! ## The facade check -/
 
-example : Type × Type × Type × Type := (CryptoError, Key32, Nonce12, Certificate)
-example := (Key32.ofByteArray?, Nonce12.ofByteArray?, Certificate.validAt)
+example : Type × Type × Type × Type × Type :=
+  (CryptoError, Key32, Digest32, Nonce12, Certificate)
+example := (Key32.ofByteArray?, Digest32.ofByteArray?, Nonce12.ofByteArray?, Certificate.validAt)
 example := (randomBytes, maxRandomBytes)
 example := (ed25519Generate, x25519Generate, secp256k1Generate, p256Generate, rsaGenerate)
 example := (sha1, sha512, hmacSha256, hkdfSha256, hkdfSha256MaxLen)
@@ -36,7 +37,8 @@ example := (chachaSeal, chachaOpen, aeadTagLen, aeadMaxLen, x25519PublicKey, x25
 example := (ed25519PublicKey, ed25519Sign, ed25519Verify, ed25519SigLen)
 example := (rsaPublicKey, rsaPkcs1, rsaSign, rsaVerify, rsaMinBits, rsaMaxBits)
 example := (p256PublicKey, p256Sec1, p256Sign)
-example := (secp256k1PublicKey, secp256k1PointValid, secp256k1Sign, secp256k1Verify)
+example := (secp256k1PublicKey, secp256k1PointValid, secp256k1Sign, secp256k1SignDigest,
+  secp256k1Verify)
 example : ByteArray → ByteArray → ByteArray → Bool := p256Verify
 example := (inspect, selfSigned)
 example := (Rng.system, Rng.seeded)

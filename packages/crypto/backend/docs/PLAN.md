@@ -224,8 +224,10 @@ Milestones for unit 2:
   unit 1a.
 - The `Rng` seam: the seeded test value replays its sequence exactly,
   and the production value draws through `randomBytes`.
-- The facade check: one import of `Crypto` resolves every public
-  binding of this package, and no caller module imports `Backend`.
+- The facade check: one import of `Crypto` resolves every family of
+  the package's public surface, and no caller module imports
+  `Backend`. The `liftShim` helper and the P-256 SPKI layout helpers
+  serve the group itself, and the facade leaves them out.
 
 ## Vector stance
 
