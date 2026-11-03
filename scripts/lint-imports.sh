@@ -34,6 +34,12 @@
 # violation even though the ranks alone would allow it. Rule 3 runs
 # inside rule 1's scan: one grep pass covers both import rules.
 #
+# Rule 4, the facade is the crypto import (ARCHITECTURE §3.6). A file
+# under packages/ outside the crypto group imports `Crypto`. It never
+# imports `Backend`, `CryptoPure`, or a `LeanHazmat` package. Lean's header
+# takes several `import` commands on one line (`import A import B`), so
+# the rule reads every module on every import line.
+#
 # Output: every violation goes to stderr as file:line, then exit 1.
 # A clean tree gets one summary line on stdout.
 set -euo pipefail
@@ -102,6 +108,10 @@ while IFS= read -r -d '' f; do
   ileaf=
   sub=${f#packages/$group/}
   case $sub in */*) ileaf=${sub%%/*} ;; esac
+  # The facade's submodules sit in `packages/crypto/Crypto/`, the module
+  # directory of the group root. They belong to the facade, the leaf the
+  # rank table calls `facade`.
+  [ "$group/$ileaf" = crypto/Crypto ] && ileaf=facade
 
   # The importer's rank decides what rule 3 allows. A leaf of a ranked
   # group that the table does not know is a broken table: fail loud,
@@ -234,6 +244,33 @@ while IFS= read -r -d '' f; do
     violations=$((violations + 1))
   done <<< "$matches"
 done < <(find packages/base packages/codec packages/crypto packages/net -type f -name '*.lean' -print0 | sort -z)
+
+# Rule 4: callers import the facade (ARCHITECTURE §3.6, backend PLAN,
+# unit 2 milestones). The crypto group itself is exempt: it holds the
+# sources the facade routes to. The suites under Tests/ test the
+# sources one by one, and the scan covers packages/ only.
+while IFS= read -r -d '' f; do
+  case $f in packages/crypto/*) continue ;; esac
+  # One `lineno module` line per `import` token. A `--` comment ends
+  # the line. `|| true` keeps grep's no-match exit code out of set -e's
+  # way.
+  mods=$({ grep -nE '^[[:space:]]*import[[:space:]]+[A-Za-z_]' -- "$f" || true; } |
+    awk -F: '{
+      n = $1; text = substr($0, length(n) + 2)
+      sub(/--.*/, "", text)
+      k = split(text, w, /[[:space:]]+/)
+      for (i = 1; i < k; i++) if (w[i] == "import") print n " " w[i + 1]
+    }')
+  while read -r lineno mod; do
+    [ -n "${lineno:-}" ] || continue
+    mod=${mod%$'\r'}
+    case $mod in
+      Backend|Backend.*|CryptoPure|CryptoPure.*|LeanHazmat*)
+        echo "$f:$lineno: imports $mod. Callers import the Crypto facade only (§3.6)." >&2
+        violations=$((violations + 1)) ;;
+    esac
+  done <<< "$mods"
+done < <(find packages -type f -name '*.lean' -print0 | sort -z)
 
 if [ "$violations" -gt 0 ]; then
   exit 1

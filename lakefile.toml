@@ -112,6 +112,7 @@ moreLinkObjs = ["snappyNative/snappy"]
 name = "Crypto"
 srcDir = "packages/crypto"
 roots = ["Crypto"]
+globs = ["Crypto.*"]
 
 [[lean_lib]]
 name = "CryptoPure"
