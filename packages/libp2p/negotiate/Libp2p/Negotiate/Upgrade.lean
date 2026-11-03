@@ -20,7 +20,7 @@ three-stage pipeline under one `Conc.withinDeadline`.
 The driver owns the byte cursor. It never reads `s.buffer`; it resets
 the buffer before every `step` call, and every unconsumed byte stays
 in the `input` argument. The `leftover` field of the result is
-authoritative (plan.md, "Deviations"). The shell always passes the
+authoritative. The shell always passes the
 driver's own states and leftovers back, so the convention is closed
 under use.
 
@@ -112,8 +112,8 @@ private def driveAux : Nat → State → List Nat → List Nat → List (List Na
           driveAux fuel s' rest (consumed ++ encodeMsg m)
             (writes ++ writesOf actions)
 
-/-- Drive the pure core over a byte cursor. `s.buffer` is a
-don't-care: pass every unconsumed byte in `input`, and read the
+/-- Drive the pure core over a byte cursor. `s.buffer` is
+unused: pass every unconsumed byte in `input`, and read the
 `leftover` field of the result as authoritative. One fuel unit
 consumes at most one frame. -/
 def drive (fuel : Nat) (s : State) (input : List Nat) : Except Error DriveResult :=
@@ -235,28 +235,28 @@ private theorem driveAux_conservation (fuel : Nat) :
           exact hrec
 
 /-- Every byte fed to the driver is consumed or left over. -/
-theorem drive_conservation {fuel : Nat} {s : State} {input : List Nat} {r : DriveResult}
+theorem driveConservation {fuel : Nat} {s : State} {input : List Nat} {r : DriveResult}
     (h : drive fuel s input = .ok r) : input = r.consumed ++ r.leftover := by
   have h' := driveAux_conservation fuel s input [] [] r h
   simpa using h'
 
-/-- U2. The selected arm: the bytes in equal the frames consumed plus
+/-- The selected arm: the bytes in equal the frames consumed plus
 the leftover handed to the next stage (contract 5). -/
-theorem drive_selected_conservation {fuel : Nat} {s : State} {input : List Nat}
+theorem driveSelectedConservation {fuel : Nat} {s : State} {input : List Nat}
     {p : Mock.Core.ProtocolId} {consumed leftover : List Nat}
     {writes : List (List Nat)}
     (h : drive fuel s input = .ok (.selected p consumed leftover writes)) :
     input = consumed ++ leftover := by
-  simpa using drive_conservation h
+  simpa using driveConservation h
 
-/-- U3. The truncated arm: every byte the run saw sits in the
+/-- The truncated arm: every byte the run saw sits in the
 consumed frames or in the waiting buffer, so the shell loses no byte
 when it reads the next chunk. -/
-theorem drive_waiting_conservation {fuel : Nat} {s s' : State} {input : List Nat}
+theorem driveWaitingConservation {fuel : Nat} {s s' : State} {input : List Nat}
     {consumed leftover : List Nat} {writes : List (List Nat)}
     (h : drive fuel s input = .ok (.waiting s' consumed leftover writes)) :
     input = consumed ++ leftover := by
-  simpa using drive_conservation h
+  simpa using driveConservation h
 
 /-- The accumulator prefix invariant: a run appends the frames it
 consumes to the accumulator it received. -/
@@ -295,7 +295,7 @@ private theorem driveAux_consumed_prefix (fuel : Nat) :
 
 /-- A frame the shell writes through `encodeMsg` decodes and appears
 at the head of the consumed bytes. -/
-theorem drive_consumed_head {fuel : Nat} {s : State} {m : Msg} {rest : List Nat}
+theorem driveConsumedHead {fuel : Nat} {s : State} {m : Msg} {rest : List Nat}
     {r : DriveResult}
     (h : drive (fuel + 1) s (encodeMsg m ++ rest) = .ok r) :
     ∃ tail : List Nat, r.consumed = encodeMsg m ++ tail := by
@@ -314,10 +314,10 @@ theorem drive_consumed_head {fuel : Nat} {s : State} {m : Msg} {rest : List Nat}
         driveAux_consumed_prefix fuel s' rest ([] ++ encodeMsg m) (writesOf actions) r h'
       exact ⟨tail, by simpa [encodeMsg, List.append_assoc] using htail⟩
 
-/-- U4. Two stages compose: bytes in equal the consumed bytes of both
-stages plus the final leftover. The reusable form of the brief's scope
+/-- Two stages compose: bytes in equal the consumed bytes of both
+stages plus the final leftover. The reusable form of the pipeline's scope
 item 2. -/
-theorem handover_compose {ε α β : Type}
+theorem handoverCompose {ε α β : Type}
     {f : List Nat → Except ε (α × List Nat)}
     {g : List Nat → Except ε (β × List Nat)}
     {c₁ : α → List Nat} {c₂ : β → List Nat}
@@ -330,25 +330,25 @@ theorem handover_compose {ε α β : Type}
   rw [law₁ bs₁ a₁ l₁ h₁, List.append_assoc, law₂ (l₁ ++ bs₂) a₂ l₂ h₂]
   simp only [List.append_assoc]
 
-/-- U5. The pure form of the hand-over: the muxer stage is seeded with
+/-- The pure form of the hand-over: the muxer stage is seeded with
 the negotiation's leftover, and the two drives consume exactly the
 bytes fed in. -/
-theorem drive_twostage {fuel₁ fuel₂ : Nat} {s₁ s₂ : State}
+theorem driveTwostage {fuel₁ fuel₂ : Nat} {s₁ s₂ : State}
     {input₁ input₂ : List Nat} {p₁ p₂ : Mock.Core.ProtocolId}
     {c₁ c₂ l₁ l₂ : List Nat} {w₁ w₂ : List (List Nat)}
     (h₁ : drive fuel₁ s₁ input₁ = .ok (.selected p₁ c₁ l₁ w₁))
     (h₂ : drive fuel₂ s₂ (l₁ ++ input₂) = .ok (.selected p₂ c₂ l₂ w₂)) :
     input₁ ++ input₂ = c₁ ++ c₂ ++ l₂ := by
-  have h1 := drive_selected_conservation h₁
-  have h2 := drive_selected_conservation h₂
+  have h1 := driveSelectedConservation h₁
+  have h2 := driveSelectedConservation h₂
   rw [h1, List.append_assoc, h2]
   simp only [List.append_assoc]
 
-/-- U1. The shell's manual first write equals the core's propose
+/-- The shell's manual first write equals the core's propose
 step for a singleton list, after both sides are read as write lists.
 The driver therefore starts the negotiation the way the proved core
 would. -/
-theorem initiatorStart_propose {p : Mock.Core.ProtocolId}
+theorem initiatorStartPropose {p : Mock.Core.ProtocolId}
     (hfits : fitsText p.toString = true) :
     initiatorStart [p] =
       (step { role := .initiator, supported := [], proposals := [], buffer := [],
@@ -361,38 +361,38 @@ theorem initiatorStart_propose {p : Mock.Core.ProtocolId}
 
 /-- An empty ordered list is a protocol error before any byte is
 written. -/
-theorem initiatorStart_nil : initiatorStart [] = .error .negotiationFailed := rfl
+theorem initiatorStartNil : initiatorStart [] = .error .negotiationFailed := rfl
 
-/-- U9. The one mapping point of contract 8: every `Negotiate.Error`
+/-- The one mapping point of contract 8: every `Negotiate.Error`
 becomes the `protocol` arm, with the detail rendered. -/
-theorem mapNegotiateError_spec {e : Bytes.DecodeError} :
+theorem mapNegotiateErrorSpec {e : Bytes.DecodeError} :
     mapNegotiateError (.decode e) =
       .protocol ("multistream decode: " ++ renderDecodeError e) ∧
     mapNegotiateError .negotiationFailed =
       .protocol "multistream negotiation failed" := by
   simp [mapNegotiateError]
 
-/-- U6. A differing derived id is authentication, before any muxer
+/-- A differing derived id is authentication, before any muxer
 byte moves. -/
-theorem checkIdentity_reject {expected remote : Mock.Identity.PeerId}
+theorem checkIdentityReject {expected remote : Mock.Identity.PeerId}
     (h : expected ≠ remote) :
     checkIdentity (some expected) remote =
       .error (.authentication "remote peer id differs from the expected peer id") := by
   simp [checkIdentity, h]
 
-/-- U7. The dial to the expected peer passes. -/
-theorem checkIdentity_accept {e : Mock.Identity.PeerId} :
+/-- The dial to the expected peer passes. -/
+theorem checkIdentityAccept {e : Mock.Identity.PeerId} :
     checkIdentity (some e) e = .ok () := by
   simp [checkIdentity]
 
-/-- U8. The listen path accepts any peer. -/
-theorem checkIdentity_none {r : Mock.Identity.PeerId} :
+/-- The listen path accepts any peer. -/
+theorem checkIdentityNone {r : Mock.Identity.PeerId} :
     checkIdentity none r = .ok () := rfl
 
-/-- U10. The deadline wiring of contract 6: the race's expiry is the
+/-- The deadline wiring of contract 6: the race's expiry is the
 `timeout` arm, and the seam errors pass through untouched. The
 `.closed` arm is required by the match over `Conc.Error`. -/
-theorem settleUpgrade_spec {α : Type} {e : Mock.Core.Error} {a : α} :
+theorem settleUpgradeSpec {α : Type} {e : Mock.Core.Error} {a : α} :
     settleUpgrade (α := α) (.error .deadlineExpired) =
       .error (.timeout "upgrade deadline expired") ∧
     settleUpgrade (α := α) (.error .closed) =
