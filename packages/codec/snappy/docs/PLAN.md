@@ -2,13 +2,10 @@
 
 This plan refines root unit W6.2 for `codec/snappy`. The root plan owns
 order across packages. The package architecture owns the contracts.
-This file owns the units, the commit checkpoints, and the gates. A
-checkpoint below is an unstaged diff. It is committed only after
-review and an explicit approval. The next checkpoint waits until that
-commit and its gates are accepted.
-
-No implementation unit is complete. The documents do not count as a
-working binding.
+This file records the units, reviewed commit checkpoints, and
+validation gates used to implement W6.2. Each checkpoint was reviewed
+and validated before the next one began. Units 0 through 4 are
+complete. The Phase 4D acceptance record states the final evidence.
 
 ## Root unit
 
@@ -19,19 +16,19 @@ import `Bytes`. `Tests/Snappy.lean` imports `Bytes` for fixtures and
 for the input snapshot. That test import does not add a production
 dependency.
 
-W6.3 consumes this package after `compress`, `decompress`, and the
-bounded-decompression tests exist. Until then W6.3 does not start on
-this API.
+W6.3 consumes this package. `compress`, `decompress`, and the
+bounded-decompression tests have passed, so W6.3 can start on this
+API.
 
 ## Units
 
 | Unit | Deliverable | Done when |
 |---|---|---|
-| 0 | The root native-helper exception, the root pure-FFI allocation rule, the Snappy architecture, and this plan | The four documents are committed and agree. No implementation is claimed. |
+| 0 | The root native-helper exception, the root pure-FFI allocation rule, the Snappy architecture, and this plan | The four documents are committed and agree. |
 | 1 | The pinned pristine `google/snappy` 1.3.1 sources, the canonical BSD license, the metadata and hashes, the guarded block-only patch, the committed patched tree, the offline verifier, the package-local Lake helper, the static archive of the patched upstream core, the three build controls, the native boundary command linked to that core archive, and the local object and archive audit | The ordinary build is offline. The verifier rebuilds the compiled tree exactly. The guarded-source gates and the local native-build gates pass. |
 | 2 | `Snappy.Error`, the private compression extern, the compression shim, public `compress`, the input-size checks in Lean and in the shim, empty-input compression, known compression regressions, borrowed-input immutability, repeated deterministic compression, native compression-boundary validation, and the compression panics for an unknown status and an impossible result | The shim, the wrapper, and the durable tests land together. No commit contains an untested compression shim. |
 | 3 | The private decompression extern, the cap conversion, the native length check before allocation, public `decompress`, the malformed and output-limit results, the minimal valid, malformed, exact-cap, and over-cap tests, and the first public round trips | The public surface in the architecture exists. The output cap is enforced before allocation. No commit contains an untested decompression shim. |
-| 4 | The malformed-input matrix, the generated round trips, the Go fixtures, the repeated-call and ownership stress, the production archive audits, the Linux x86-64 run, the paired sanitizer runs, and the acceptance record | Every definition-of-done gate passes in CI. W6.3 can call the documented API. |
+| 4 | The malformed-input matrix, the generated round trips, the Go fixtures, the repeated-call and ownership stress, the production archive audits, the Linux x86-64 run, the paired sanitizer runs, and the acceptance record | All required definition-of-done gates pass. The Linux x86-64 native-hardening gate passes in CI. Local macOS evidence and the provenance checks remain local evidence. W6.3 can call the documented API. |
 
 ## Commit checkpoints
 
@@ -126,7 +123,7 @@ comparison with `2^32` happens before `Nat.toUInt32`. Decompression
 status `1` and every unknown status call `lean_internal_panic` through
 category `4`. The first public round trips pass: if `compress x = .ok c`,
 then `decompress c x.size = .ok x`. The audit requires the three shim
-exports. The hostile input matrix remains Phase 4A.
+exports. That commit left the hostile input matrix for Phase 4A.
 
 ### Phase 4A. Invalid input
 
@@ -164,7 +161,9 @@ Snappy executable with a Snappy-free control from the same job. It runs
 ASan and LSan on the Snappy executable and on the control. Both leak
 runs must exit 0 with no leak report. A leak in either executable
 fails the job. The control checks the same runtime and linker. The job
-links no second C++ runtime.
+links no second C++ runtime. The job passed for
+`fb0e84cedf0be26561fa14a350aa374e5ef68804`. The acceptance record cites
+that run.
 
 ### Phase 4D. Acceptance record
 
@@ -172,8 +171,89 @@ links no second C++ runtime.
 docs(snappy): record completed validation
 ```
 
-This commit happens after the implementation and the CI evidence exist.
-It records completion. It does not rewrite the architecture.
+This commit records the completed validation. The architecture stays as
+written, with one status sentence for the completed Linux x86-64 job.
+
+Units 0 through 4 are complete once this acceptance record is
+committed. The public API is `Snappy.compress`,
+`Snappy.decompress`, and `Snappy.Error`. The constructors are
+`inputTooLarge`, `invalidCompressedData`, and `outputTooLarge`.
+`Snappy.compress` takes a `ByteArray` and returns
+`Except Snappy.Error ByteArray`. `Snappy.decompress` takes a
+`ByteArray` and a `Nat` cap and returns `Except Snappy.Error ByteArray`.
+`Snappy.Internal.inputWithinLimit` is an unsupported implementation
+detail. Callers use `compress`.
+
+The upstream pin is `https://github.com/google/snappy`, release
+`1.3.1`, commit `9c28114a38866f6deeaa826db918293bc28ae410`. The Go
+fixture tool is the module `leanp2p/snappy-go-fixtures`. It requires
+`github.com/golang/snappy` v0.0.4. The module has no replace directive.
+
+The local host is macOS ARM64. Lean is 4.34.0, commit
+`293d5d0c0c3f3dded4688b3ccd6a33939ac5102b`, target
+`arm64-apple-darwin24.6.0`. `lake build` passed. Both `lake test` runs
+reported 9208 passed, 0 failed, 0 todo, and two skips. The skips are
+the parked-task check and the borrowed-argument soak. Both need
+`/proc/self/status`. The native validation passed. The production
+archive members are `snappy.block.o`, `snappy-sinksource.block.o`, and
+`shim.o`. The shim exports are `leanp2p_snappy_compress`,
+`leanp2p_snappy_decompress`, and `leanp2p_snappy_internal_panic`. The
+archive is static. The linked check executables load the system C++
+runtime and `libSystem`. The Linux hardening script stops because
+`uname -s` is Darwin. That line is the platform guard.
+
+The Linux x86-64 evidence is
+[CI run 41691697297](https://github.com/etheorem/leanp2p/actions/runs/41691697297)
+for `fb0e84cedf0be26561fa14a350aa374e5ef68804`. The result is success.
+`build-and-test` passed, and `snappy-native-hardening` passed. The
+co-author guard and the license acceptance guard also passed for that
+commit. The runner is Linux `x86_64`. Lean is 4.34.0, commit
+`293d5d0c0c3f3dded4688b3ccd6a33939ac5102b`, target
+`x86_64-unknown-linux-gnu`. The archive members are the same three
+objects. The symbol audit passed. The unsanitized Snappy and control
+dynamic libraries match, and both dynamic C++ runtime sets are empty.
+The sanitized library sets match, and both link `libasan`. The Snappy
+ASan run is clean, and the control ASan run is clean. The Snappy LSan
+run is clean, and the control LSan run is clean. The deliberate use
+after free is reported as `heap-use-after-free`. The deliberate leak is
+reported by LeakSanitizer. The job ends with `linux-hardening: passed`.
+
+`fb0e84cedf0be26561fa14a350aa374e5ef68804` is the clean implementation
+HEAD. `lake update` and the full acceptance commands ran there and
+passed. `lake update` exited successfully and left both manifests
+unchanged. Those commands were `lake build`, both `lake test` runs,
+`scripts/lint-imports.sh`, `git diff --check`,
+`python3 packages/codec/snappy/scripts/verify-upstream.py`,
+`lake build snappyNative/snappyBoundary`,
+`lake build snappyNative/snappyAbort`,
+`lake build snappyNative/snappyInternalPanic`,
+`lake build snappyNative/snappyAudit`,
+`lake build snappyNative/snappyValidation`,
+`scripts/vendor-pull.sh --verify`, and
+`python3 scripts/extract-vectors.py`. `Tests/vectors` stayed empty in
+`git status`. Two generations of the committed Go fixture matched each
+other and `Tests/fixtures/snappy-go-v0.0.4.json`.
+
+After this documentation-only Phase 4D diff, `lake build`, both
+`lake test` runs, the import lint, and the whitespace check were
+repeated successfully.
+
+Linux ARM64 is a best-effort, non-gating portability check. The
+official Lean 4.34.0 archive reports `aarch64-unknown-linux-gnu` and
+the same commit. `uname` reported Linux and `aarch64`. The upstream
+verifier matched. Snappy native validation passed, with the same
+archive members and the same shim exports. Root `lake build` passed.
+Root `lake test` did not complete because the unrelated crypto backend
+requires `OSSL_SIGNATURE_PARAM_NONCE_TYPE`, absent from the tested
+Ubuntu 24.04 OpenSSL 3.0.13 headers. The failure is in
+`packages/crypto/backend/c/p2pcrypto.c`. The single-capability test and
+the import lint therefore did not run in that ARM64 environment. Linux
+ARM64 support is incomplete. The required P0 native-hardening gate
+is the successful Linux x86-64 CI job.
+
+The trust boundary stays empirical. The Lean kernel does not check the
+native bytes. The package states no axiom and no theorem that equates
+the native library with a pure model.
 
 ## Hardening
 
@@ -186,11 +266,11 @@ It records completion. It does not rewrite the architecture.
 | Linux x86-64 audit and a matched sanitizer control | Phase 4C | CI logs from a runner that asserts `x86_64` |
 
 The Phase 2B source checks, the Phase 2C builds, and the Phase 3
-evidence are local. The Phase 4C logs are CI-only. The repository
-workflow on `ubuntu-latest` already runs `lake build`, `lake test`,
-the single-capability run, the import lint,
-and the vector provenance check. It does not yet run the Snappy symbol
-audit or the paired sanitizers.
+evidence are local. The Phase 4C logs are CI-only. The
+`build-and-test` job on `ubuntu-latest` runs `lake build`, `lake test`,
+the single-capability run, the import lint, and the vector provenance
+check. The `snappy-native-hardening` job runs the Snappy symbol audit
+and the paired sanitizers. The acceptance record cites the passing run.
 
 ## Upstream and build gates
 
@@ -334,9 +414,9 @@ lake build snappyNative/snappyValidation
 `snappyAudit` reads the production objects and archive, and it compares
 the pristine and define-disabled symbol surfaces. `snappyValidation`
 runs those three checks on the same production archive. The local audit
-is macOS ARM64. Linux x86-64, ASan, LSan, and the Snappy-free control
-remain Phase 4C. These commands do not mark W6.2, Phase 3, or Phase 4
-complete.
+is macOS ARM64. The Linux x86-64 audit, ASan, LSan, and the
+Snappy-free control passed in the Phase 4C job. The acceptance record
+cites that run. These commands and that job complete W6.2.
 
 ## Risks
 
@@ -362,8 +442,8 @@ protocols. It owns SSZ, the outer uncompressed-length protobuf varint,
 the framed-stream chunks, and the masked CRC32C. It maps `Snappy.Error`
 into its own protocol error at its boundary. It does not depend on a
 native status, a native symbol, the helper package, the workspace, or
-the patch layout. It may start on this API after `compress`,
-`decompress`, and the bounded-decompression tests pass.
+the patch layout. `compress`, `decompress`, and the
+bounded-decompression tests have passed, so it can start on this API.
 
 ## Definition of done
 
@@ -399,4 +479,5 @@ W6.2 is complete when all of the following hold.
 - W6.3 can call `compress` and `decompress` without importing the
   helper or the shim.
 
-An implementation unit stays open until its evidence exists.
+An implementation unit stays open until its evidence exists. Units 0
+through 4 have that evidence.

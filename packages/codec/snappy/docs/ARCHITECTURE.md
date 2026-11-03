@@ -432,8 +432,8 @@ checks the guarded symbols and the three production
 archive members. The pristine archive and the define-disabled archive
 stay the two upstream objects. It compares the defined global symbols
 of the pristine build and the define-disabled build. The local run is
-macOS ARM64. Linux x86-64, ASan, LSan, and a Snappy-free dynamic
-library remain Phase 4C.
+macOS ARM64. The Linux x86-64 audit, ASan, LSan, and the Snappy-free
+control passed in the Phase 4C job recorded in the package plan.
 
 `lake build snappyNative/snappyInternalPanic` compiles
 `native/check/internal-panic.cpp` and links that object to `libsnappy.a`
