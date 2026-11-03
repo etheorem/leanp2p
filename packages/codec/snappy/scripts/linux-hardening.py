@@ -678,13 +678,30 @@ def negative_controls(work: Path, root: Path) -> None:
     lsan_exe = work / "lsan-negative"
     compile = ["c++", *LANGUAGE_FLAGS, *SANITIZE_FLAGS]
     link = SANITIZER_LINK
-    run([*compile, "-c", str(checks / "asan-negative.cpp"), "-o", str(work / "asan-negative.o")])
+    # asan-negative.cpp frees a block and then reads it. GCC must not
+    # reject that probe before AddressSanitizer runs it.
+    # `-Wno-use-after-free` suppresses only that compiler warning, and
+    # only for this disposable file. AddressSanitizer stays enabled.
+    run(
+        [
+            *compile,
+            "-Wno-use-after-free",
+            "-c",
+            str(checks / "asan-negative.cpp"),
+            "-o",
+            str(work / "asan-negative.o"),
+        ]
+    )
     run([*link, "-o", str(asan_exe), str(work / "asan-negative.o")])
     run([*compile, "-c", str(checks / "lsan-negative.cpp"), "-o", str(work / "lsan-negative.o")])
     run([*link, "-o", str(lsan_exe), str(work / "lsan-negative.o")])
     asan = run_gate(asan_exe, NEGATIVE_ASAN_OPTIONS, None)
     asan_text = asan.stdout + asan.stderr
-    if asan.returncode == 0 or "ERROR: AddressSanitizer" not in asan_text:
+    if (
+        asan.returncode == 0
+        or "ERROR: AddressSanitizer" not in asan_text
+        or "heap-use-after-free" not in asan_text
+    ):
         fail("the AddressSanitizer negative control was not detected")
     print("asan negative control detected")
     lsan = run_gate(lsan_exe, LSAN_ASAN_OPTIONS, LSAN_OPTIONS)
