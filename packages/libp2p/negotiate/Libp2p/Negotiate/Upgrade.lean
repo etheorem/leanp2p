@@ -129,9 +129,24 @@ def initiatorStart (ids : List Mock.Core.ProtocolId) :
   match ids with
   | [] => .error .negotiationFailed
   | p :: _ =>
-    .ok ({ role := .initiator, supported := [], proposals := ids, buffer := [],
+    if ids.any (fun q => !fitsText q.toString) then .error .negotiationFailed
+    else
+      .ok ({ role := .initiator, supported := [], proposals := ids, buffer := [],
+             phase := .negotiating },
+           [encodeMsg header ++ encodeText p.toString])
+
+/-- The responder's start: validate the offered list, then send the header
+at once. The spec lets either side send first, and the responder that waits
+for the dialer's header stalls a dialer that also waits. The state starts in
+`negotiating` because the header is already on the wire. -/
+def responderStart (ids : List Mock.Core.ProtocolId) :
+    Except Error (State × List (List Nat)) :=
+  if ids.any (fun q => !fitsText q.toString) then .error .negotiationFailed
+  else if maxMsg < (lsBody ids).length then .error .negotiationFailed
+  else
+    .ok ({ role := .responder, supported := ids, proposals := [], buffer := [],
            phase := .negotiating },
-         [encodeMsg header ++ encodeText p.toString])
+         [encodeMsg header])
 
 /-! ## The error mappings -/
 
@@ -333,11 +348,16 @@ theorem drive_twostage {fuel₁ fuel₂ : Nat} {s₁ s₂ : State}
 step for a singleton list, after both sides are read as write lists.
 The driver therefore starts the negotiation the way the proved core
 would. -/
-theorem initiatorStart_propose {p : Mock.Core.ProtocolId} :
+theorem initiatorStart_propose {p : Mock.Core.ProtocolId}
+    (hfits : fitsText p.toString = true) :
     initiatorStart [p] =
       (step { role := .initiator, supported := [], proposals := [], buffer := [],
               phase := .headerPending } (.propose p)).map
-        (fun sa => (sa.1, writesOf sa.2)) := rfl
+        (fun sa => (sa.1, writesOf sa.2)) := by
+  have hany : ([p].any (fun q => !fitsText q.toString)) = false := by
+    simp [List.any, hfits]
+  simp only [initiatorStart, hany]
+  rfl
 
 /-- An empty ordered list is a protocol error before any byte is
 written. -/
@@ -441,10 +461,11 @@ def negotiate (role : Mock.Core.Role) (reader : Mock.Streams.BufReader)
         sendWrites conn first
         negotiateLoop reader conn s (Bytes.toNatList seed)
   | .responder =>
-    negotiateLoop reader conn
-      { role := .responder, supported := ids, proposals := [], buffer := [],
-        phase := .headerPending }
-      (Bytes.toNatList seed)
+    match responderStart ids with
+    | .error e => throw (mapNegotiateError e)
+    | .ok (s, first) => do
+        sendWrites conn first
+        negotiateLoop reader conn s (Bytes.toNatList seed)
 
 /-- The pipeline: negotiate the security protocol, run the handshake,
 check the identity, negotiate the muxer, open the session. Each lookup
@@ -477,10 +498,26 @@ private def upgradeCore (role : Mock.Core.Role) (conn : Mock.Streams.Connection)
               | .error e => return .error e
               | .ok session => return .ok (session, sc.remotePeer)
 
+/-- Whether the deadline boundary already closed the connection. Both error
+arms of `withinDeadline` run the expiry hook. -/
+private def boundaryClosed {α : Type} : Except Conc.Error α → Bool
+  | .error _ => true
+  | .ok _ => false
+
+/-- Give a late session back to its owner. A result that arrives after the
+timer won never reaches a caller, so the release closes it here. -/
+private def releaseLate (r : Except Mock.Core.Error
+    (Mock.Core.MuxSession × Mock.Identity.PeerId)) : BaseIO Unit :=
+  match r with
+  | .ok pair => pair.1.close
+  | .error _ => pure ()
+
 /-- The upgrade under one `Conc.withinDeadline`. The expiry closes
 the connection once at the boundary (root §3.5), and the race's
 `deadlineExpired` maps to the `timeout` arm through `settleUpgrade`.
 The clock is a seam, so the deadline test can advance it. -/
+
+
 def upgradeWith (clock : Conc.Clock) (role : Mock.Core.Role)
     (conn : Mock.Streams.Connection) (leftover : ByteArray)
     (expected : Option Mock.Identity.PeerId)
@@ -488,11 +525,16 @@ def upgradeWith (clock : Conc.Clock) (role : Mock.Core.Role)
     ExceptT Mock.Core.Error Conc.Async (Mock.Core.MuxSession × Mock.Identity.PeerId) := do
   let answer ← Conc.withinDeadline clock Mock.Streams.upgradeDeadlineMs conn.close
     (upgradeCore role conn leftover expected secs muxers)
+    releaseLate
   match settleUpgrade answer with
   | .ok pair => return pair
   | .error e => do
-      conn.close
-      throw e
+      -- Both error arms of the boundary run the expiry hook, which closed the
+      -- connection once. Only a failure inside the work leaves it open.
+      if boundaryClosed answer then throw e
+      else do
+        conn.close
+        throw e
 
 /-- The frozen entry of the package docs. The clock is fixed to the
 system clock here and stays a seam in `upgradeWith` for the deadline

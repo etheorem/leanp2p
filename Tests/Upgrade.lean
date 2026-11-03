@@ -620,6 +620,37 @@ private def checkGoTraces (r : Runner) : Async Unit := do
         (ws == [lazyI2r] && s.phase = .negotiating && s.proposals == [kadId])
   | .error _ => r.check "upgrade lazy coalesced write" false
 
+/-! ## The send-side cap -/
+
+/-- A protocol id whose frame is over the 1 KiB cap. -/
+private def overCapId : Mock.Core.ProtocolId :=
+  ⟨String.ofList (List.replicate 1100 'a')⟩
+
+/-- A configured id that would produce an over-cap frame is refused before
+any byte moves, so the sender cannot emit a frame the decoder rejects. -/
+private def checkSendCap (r : Runner) : Async Unit := do
+  r.check "negotiate send cap refuses an over-long proposal"
+    (match initiatorStart [overCapId] with
+     | .error .negotiationFailed => true
+     | _ => false)
+  r.check "negotiate send cap refuses an over-long supported list"
+    (match responderStart [overCapId] with
+     | .error .negotiationFailed => true
+     | _ => false)
+  r.check "negotiate send cap admits a normal id"
+    (match initiatorStart [Mock.Core.ProtocolId.mk "/ipfs/kad/1.0.0"] with
+     | .ok _ => true
+     | _ => false)
+
+/-- The responder writes its header before it reads anything, so a dialer
+that also waits does not stall. -/
+private def checkResponderFirst (r : Runner) : Async Unit := do
+  match responderStart [Mock.Core.ProtocolId.mk "/ipfs/kad/1.0.0"] with
+  | .ok (s, ws) =>
+      r.check "negotiate responder sends its header first"
+        (ws == [encodeMsg header] && s.phase = .negotiating)
+  | .error _ => r.check "negotiate responder sends its header first" false
+
 /-! ## The suite -/
 
 /-- The suite. -/
@@ -639,6 +670,8 @@ def run (r : Runner) : IO Unit := do
     checkEof r
     checkExhausted r
     checkHostile r
+    checkSendCap r
+    checkResponderFirst r
     checkGoTraces r
   Conc.Async.run all
   r.skip "upgrade noise yamux matrix over tcp"

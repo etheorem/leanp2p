@@ -70,7 +70,7 @@ The upgrader returns the opened session and never calls its fields. -/
 structure MuxSession where
   openStream : ExceptT Error Conc.Async Mock.Streams.Stream
   accept : Conc.Async (Option Mock.Streams.Stream)
-  close : IO Unit
+  close : BaseIO Unit
   join : Conc.Async Unit
 
 /-- The muxer seam. The field is the frozen `open` of the core docs;

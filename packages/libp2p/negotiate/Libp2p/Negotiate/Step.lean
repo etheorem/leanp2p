@@ -139,7 +139,7 @@ private def classify (s : State) (text : String) : Verdict :=
       match Reply.ofText? text with
       | some .ls => .listIds
       | _ =>
-        if text = protocolId.toString then .echo
+        if text = protocolId.toString then .advance
         else if (⟨text⟩ : Mock.Core.ProtocolId) ∈ s.supported then .pick ⟨text⟩
         else .refuse
   | .initiator, .negotiating => if text = protocolId.toString then .advance else .fail
@@ -162,7 +162,10 @@ private def act (s : State) (rest : List Nat) : Verdict → Except Error (State 
   | .pick p => .ok ({ s with buffer := [], phase := .selected },
       [.write (encodeText p.toString), .select p rest])
   | .refuse => .ok ({ s with buffer := rest }, [.write (encodeMsg (Reply.toMsg .na))])
-  | .advance => .ok ({ s with buffer := rest, phase := .awaitingAnswer }, [])
+  | .advance =>
+    match s.role with
+    | .initiator => .ok ({ s with buffer := rest, phase := .awaitingAnswer }, [])
+    | .responder => .ok ({ s with buffer := rest }, [])
   | .retry q ps => .ok ({ s with buffer := rest, proposals := ps }, [.write (encodeText q.toString)])
   | .accept p => .ok ({ s with buffer := [], phase := .selected }, [.select p rest])
   | .fail => .error .negotiationFailed
@@ -202,8 +205,10 @@ private theorem actSelect {s : State} {rest : List Nat} {v : Verdict} {s' : Stat
     (h : act s rest v = .ok (s', acts)) (hm : Action.select p r ∈ acts) :
     v = .pick p ∨ v = .accept p := by
   cases v <;> simp only [act] at h
-    <;> ((try simp only [Except.ok.injEq, Prod.mk.injEq] at h);
-         (try obtain ⟨-, rfl⟩ := h); (try simp_all))
+    <;> ((try split at h)
+         <;> (try simp only [Except.ok.injEq, Prod.mk.injEq] at h)
+         <;> (try obtain ⟨-, rfl⟩ := h)
+         <;> (try simp_all))
 
 /-- A pick comes from the responder's supported list. -/
 private theorem classifyPick {s : State} {t : String} {p : Mock.Core.ProtocolId}
@@ -302,9 +307,8 @@ private theorem actWriteVerdict {s : State} {rest : List Nat} {v : Verdict} {s' 
   | retry q ps => exact Or.inr (Or.inr (Or.inr (Or.inr ⟨q, ps, rfl⟩)))
   | advance =>
       simp only [act] at h
-      simp only [Except.ok.injEq, Prod.mk.injEq] at h
-      obtain ⟨-, rfl⟩ := h
-      simp at hw
+      split at h <;> simp only [Except.ok.injEq, Prod.mk.injEq] at h
+      all_goals (obtain ⟨-, rfl⟩ := h; simp at hw)
   | accept p =>
       simp only [act] at h
       simp only [Except.ok.injEq, Prod.mk.injEq] at h
