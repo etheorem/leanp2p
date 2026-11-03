@@ -71,25 +71,25 @@ def take (s : Tally ε) : Option (Array ε × Nat) × Tally ε :=
     (none, s)
 
 /-- A task that starts and ends leaves the live count as it was. -/
-theorem finish_start_live (r : Except ε Unit) (s : Tally ε) :
+theorem finishStartLive (r : Except ε Unit) (s : Tally ε) :
     (finish r (start s)).live = s.live := by
   cases r <;> simp [finish, start]
 
 /-- The end of a task lowers the live count by one. -/
-theorem finish_live (r : Except ε Unit) (s : Tally ε) :
+theorem finishLive (r : Except ε Unit) (s : Tally ε) :
     (finish r s).live = s.live - 1 := by
   cases r <;> rfl
 
 /-- A failed task always counts, kept or not. -/
-theorem finish_failed (e : ε) (s : Tally ε) :
+theorem finishFailed (e : ε) (s : Tally ε) :
     (finish (.error e) s).failed = s.failed + 1 := rfl
 
 /-- A task that succeeds changes no error count. -/
-theorem finish_ok_failed (s : Tally ε) :
+theorem finishOkFailed (s : Tally ε) :
     (finish (.ok ()) s).failed = s.failed := rfl
 
 /-- The kept errors never pass the bound. -/
-theorem finish_errors_le (r : Except ε Unit) (s : Tally ε)
+theorem finishErrorsLe (r : Except ε Unit) (s : Tally ε)
     (h : s.errors.size ≤ maxTaskErrors) :
     (finish r s).errors.size ≤ maxTaskErrors := by
   cases r with
@@ -102,7 +102,7 @@ theorem finish_errors_le (r : Except ε Unit) (s : Tally ε)
     · exact h
 
 /-- A later failure never removes a kept error. -/
-theorem finish_errors_prefix (r : Except ε Unit) (s : Tally ε) :
+theorem finishErrorsPrefix (r : Except ε Unit) (s : Tally ε) :
     s.errors.toList <+: (finish r s).errors.toList := by
   cases r with
   | ok _ => exact List.prefix_refl _
@@ -113,11 +113,11 @@ theorem finish_errors_prefix (r : Except ε Unit) (s : Tally ε) :
     · exact List.prefix_refl _
 
 /-- While a task is live, `joinAll` gets no report, and nothing changes. -/
-theorem take_live (s : Tally ε) (h : s.live ≠ 0) : take s = (none, s) := by
+theorem takeLive (s : Tally ε) (h : s.live ≠ 0) : take s = (none, s) := by
   simp [take, h]
 
 /-- With no live task, `joinAll` gets every kept error and the count. -/
-theorem take_idle (s : Tally ε) (h : s.live = 0) :
+theorem takeIdle (s : Tally ε) (h : s.live = 0) :
     (take s).1 = some (s.errors, s.failed) := by
   simp [take, h]
 
