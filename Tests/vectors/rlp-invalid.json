@@ -1,0 +1,115 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/ethereum/tests",
+  "commit": "c67e485ff8b5be9abc8ad15345ec21aa22e290d9",
+  "path": "RLPTests/invalidRLPTest.json",
+  "upstreamTest": "RLPTests invalidRLPTest",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "cases": [
+  {
+   "name": "int32Overflow",
+   "inHex": "bf0f000000000000021111"
+  },
+  {
+   "name": "int32Overflow2",
+   "inHex": "ff0f000000000000021111"
+  },
+  {
+   "name": "wrongSizeList",
+   "inHex": "f80180"
+  },
+  {
+   "name": "wrongSizeList2",
+   "inHex": "f80100"
+  },
+  {
+   "name": "incorrectLengthInArray",
+   "inHex": "b9002100dc2b275d0f74e8a53e6f4ec61b27f24278820be3f82ea2110e582081b0565df0"
+  },
+  {
+   "name": "randomRLP",
+   "inHex": "f861f83eb9002100dc2b275d0f74e8a53e6f4ec61b27f24278820be3f82ea2110e582081b0565df027b90015002d5ef8325ae4d034df55d4b58d0dfba64d61ddd17be00000b9001a00dae30907045a2f66fa36f2bb8aa9029cbb0b8a7b3b5c435ab331"
+  },
+  {
+   "name": "bytesShouldBeSingleByte00",
+   "inHex": "8100"
+  },
+  {
+   "name": "bytesShouldBeSingleByte01",
+   "inHex": "8101"
+  },
+  {
+   "name": "bytesShouldBeSingleByte7F",
+   "inHex": "817f"
+  },
+  {
+   "name": "leadingZerosInLongLengthArray1",
+   "inHex": "b90040000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+  },
+  {
+   "name": "leadingZerosInLongLengthArray2",
+   "inHex": "b800"
+  },
+  {
+   "name": "leadingZerosInLongLengthList1",
+   "inHex": "fb00000040000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
+  },
+  {
+   "name": "leadingZerosInLongLengthList2",
+   "inHex": "f800"
+  },
+  {
+   "name": "nonOptimalLongLengthArray1",
+   "inHex": "b81000112233445566778899aabbccddeeff"
+  },
+  {
+   "name": "nonOptimalLongLengthArray2",
+   "inHex": "b801ff"
+  },
+  {
+   "name": "nonOptimalLongLengthList1",
+   "inHex": "f810000102030405060708090a0b0c0d0e0f"
+  },
+  {
+   "name": "nonOptimalLongLengthList2",
+   "inHex": "f803112233"
+  },
+  {
+   "name": "emptyEncoding",
+   "inHex": ""
+  },
+  {
+   "name": "lessThanShortLengthArray1",
+   "inHex": "81"
+  },
+  {
+   "name": "lessThanShortLengthArray2",
+   "inHex": "a0000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e"
+  },
+  {
+   "name": "lessThanShortLengthList1",
+   "inHex": "c5010203"
+  },
+  {
+   "name": "lessThanShortLengthList2",
+   "inHex": "e201020304050607"
+  },
+  {
+   "name": "lessThanLongLengthArray1",
+   "inHex": "ba010000aabbccddeeff"
+  },
+  {
+   "name": "lessThanLongLengthArray2",
+   "inHex": "b840ffeeddccbbaa99887766554433221100"
+  },
+  {
+   "name": "lessThanLongLengthList1",
+   "inHex": "f90180"
+  },
+  {
+   "name": "lessThanLongLengthList2",
+   "inHex": "ffffffffffffffffff0001020304050607"
+  }
+ ]
+}
