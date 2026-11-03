@@ -15,22 +15,6 @@ namespace Tests.Multiformats
 
 open _root_.Multiformats
 
-/-- Fixture text is validated before constructing its bytes. -/
-private def hexBytes (text : String) : IO ByteArray := do
-  let digit (c : Char) : IO Nat :=
-    if '0' ≤ c ∧ c ≤ '9' then pure (c.toNat - '0'.toNat)
-    else if 'a' ≤ c ∧ c ≤ 'f' then pure (c.toNat - 'a'.toNat + 10)
-    else if 'A' ≤ c ∧ c ≤ 'F' then pure (c.toNat - 'A'.toNat + 10)
-    else throw <| IO.userError s!"invalid fixture hex digit: {c}"
-  let rec go : List Char → IO (List Nat)
-    | [] => pure []
-    | [_] => throw <| IO.userError "odd fixture hex length"
-    | a :: b :: rest => do
-        let high ← digit a
-        let low ← digit b
-        pure ((16 * high + low) :: (← go rest))
-  return Bytes.ofNatList (← go text.toList)
-
 /-- Bad generated test data is a suite failure, independent of decoder behavior. -/
 private def hashValue (code : HashCode) (digest : List Nat) : IO Multihash :=
   match Multihash.ofDigest? code digest with
@@ -164,7 +148,7 @@ private def hashChecks (runner : Runner) : IO Unit := do
     for encoding in (← jArr "multihash-examples.json" item "encodings") do
       let kind ← jStr "multihash-examples.json" encoding "kind"
       let text ← jStr "multihash-examples.json" encoding "value"
-      let input ← if kind == "hex" then hexBytes text
+      let input ← if kind == "hex" then unhex "multihash-examples.json" text
         else
           match baseNamed? kind with
           | none => throw <| IO.userError s!"unsupported captured multihash encoding {kind}"

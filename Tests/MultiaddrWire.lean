@@ -52,18 +52,6 @@ private def production (input : ByteArray) : Except Bytes.DecodeError (Address �
   let value ← (decodeB? input).mapError Error.toDecodeError
   .ok (value, [])
 
-/-- Malformed fixture hex fails the test rather than becoming empty input. -/
-private def hexBytes (text : String) : IO ByteArray := do
-  let digit (c : Char) : IO Nat :=
-    if '0' ≤ c ∧ c ≤ '9' then pure (c.toNat - 48)
-    else if 'a' ≤ c ∧ c ≤ 'f' then pure (c.toNat - 87)
-    else throw <| IO.userError s!"bad fixture hex: {c}"
-  let rec go : List Char → IO (List Nat)
-    | [] => pure []
-    | [_] => throw <| IO.userError "odd fixture hex"
-    | a :: b :: rest => do pure ((16 * (← digit a) + (← digit b)) :: (← go rest))
-  return Bytes.ofNatList (← go text.toList)
-
 /-- Success rows exercise model laws and the independent cursor decoder. -/
 private def checkAddress (runner : Runner) (label text : String) : IO Unit := do
   match parse? text with
@@ -102,7 +90,7 @@ private def wireChecks (runner : Runner) : IO Unit := do
     let fixture ← loadJson file
     for row in (← jArr file fixture "cases") do
       let text ← jStr file row "string"
-      let expected ← hexBytes (← jStr file row "bytesHex")
+      let expected ← unhex file (← jStr file row "bytesHex")
       match parse? text with
       | .error e => runner.check s!"{file}: {repr e}" false
       | .ok address =>
@@ -116,7 +104,7 @@ private def wireChecks (runner : Runner) : IO Unit := do
               | .error _ => false)
   for file in ["multiaddr-go-zone.json", "multiaddr-go-dns.json"] do
     let fixture ← loadJson file
-    let bytes ← hexBytes (← jStr file fixture "bytesHex")
+    let bytes ← unhex file (← jStr file fixture "bytesHex")
     runner.check "zone or DNS bytes match the model" (Bytes.checkModelPins production [bytes])
     runner.check "zone or DNS bytes are accepted"
       (match decodeB? bytes with | .ok _ => true | .error _ => false)
@@ -135,7 +123,7 @@ private def invalidChecks (runner : Runner) : IO Unit := do
     runner.check ("strict boundary rejects " ++ text)
       (match parse? text with | .error _ => true | .ok _ => false)
   let fixture ← loadJson "multiaddr-go-invalid-p2p.json"
-  let bytes ← hexBytes (← jStr "invalid peer bytes" fixture "bytesHex")
+  let bytes ← unhex "invalid peer bytes" (← jStr "invalid peer bytes" fixture "bytesHex")
   runner.check "binary peer digest mismatch is rejected"
     (match decodeB? bytes with | .error _ => true | .ok _ => false)
   for row in (← jArr "invalid peer strings" fixture "strings") do
@@ -153,7 +141,7 @@ private def invalidChecks (runner : Runner) : IO Unit := do
 private def fuzzChecks (runner : Runner) : IO Unit := do
   let fixture ← loadJson "multiaddr-go-fuzz-bytes.json"
   for hex in (← jStrs "fuzz bytes" fixture "seedsHex") do
-    let bytes ← hexBytes hex
+    let bytes ← unhex "fuzz bytes" hex
     runner.check "captured fuzz bytes model pin" (Bytes.checkModelPins production [bytes])
     match decodeB? bytes with
     | .error _ => pure ()
