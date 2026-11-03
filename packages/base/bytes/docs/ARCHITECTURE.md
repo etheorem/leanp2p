@@ -39,8 +39,10 @@ follow the spike.
   bytes with no UTF-8 reading, and the docstring states that single
   meaning (§3.5).
 - `toHex : ByteArray → String` prints two lowercase digits per byte.
-  `ofHex? : String → Option ByteArray` returns `none` for an odd
-  length and for a non-hex digit.
+  `ofHex? : String → Option ByteArray` accepts lowercase ASCII hex
+  only: the digits `0` to `9` and the letters `a` to `f`. It returns
+  `none` for an odd length, and for every other character, uppercase
+  included. This matches the spike.
 - `xorWith (key : ByteArray) (data : ByteArray) : ByteArray` XORs each
   byte of the data with the repeating key. An empty key returns the
   data unchanged.
@@ -90,6 +92,21 @@ the budget, such as a non-minimal varint, is `malformed` too.
    `malformed` (ARCHITECTURE §3.2, §5.2). The caps of §5.1 live at the
    framing layers, and an over-long read reports `malformed` through
    this type.
+5. **The harness shape is fixed by contract, and its value is scoped.**
+   The shape `∀ [Codec α] [LawfulCodec α]` comes from root
+   ARCHITECTURE §3.2 and from owned contract 2 above.
+   `checkRoundTrips` runs the codec on samples, and
+   `checkRoundTripsEqTrue` states that it always answers true. On a purely
+   logical codec the check repeats what the kernel already proved. It
+   matters only where the runtime implementation of a `Codec` method can
+   differ from its model definition, through `@[implemented_by]` or
+   `@[extern]`. No codec in this package has one. Production byte paths
+   are the job of `checkModelPins`, and the suite also asserts that the
+   pin reports a wrong decoder.
+6. **`xorWith` carries two theorems.** `xorWithEmpty` and
+   `xorWithInvolution` hold. The byte-level index law is pinned by the
+   behavior suite. Proving that law as a theorem is follow-up work, and the
+   package records it here.
 
 ## Decisions
 
@@ -101,6 +118,21 @@ the budget, such as a non-minimal varint, is `malformed` too.
   bytes, so the production decoders take `ByteArray`. Each fuzz pin
   ties a production decoder to its model decoder, so the proof view
   and the wire view cannot drift (§4.2, §6; PRINCIPLES 5.1).
+- **The model read goes through `ByteArray.data.toList`.** At that
+  layer `List.toArray` is `fun xs => { toList := xs }` and
+  `Array.toList` is `fun self => self.1`, and both are `reducible`. The
+  round trip therefore closes on `Array.toList_inj` with no induction,
+  and `ofNatListData` holds by `rfl`. So `toNatList` reads
+  `ByteArray.data.toList`, and `ofNatList` builds through
+  `ByteArray.mk`.
+- **The public accessor is bridged by a theorem.** `ByteArray.toList`
+  runs a loop that carries `@[irreducible]`, so `unfold` stalls. Lean
+  generates the equation lemma `ByteArray.toList.loop.eq_1`, and
+  `toListLoopSpec` inducts on it. `toListEqDataToList` and
+  `toNatListEqToListMap` then prove that `toNatList` reads the same
+  bytes as `ByteArray.toList`, for every `ByteArray`. The behavior suite
+  additionally pins the runtime path over arrays that `ofNatList` did not
+  build.
 - **`decode?` returns `Except DecodeError`.** An `Option` decoder
   cannot tell `truncated` from `malformed`, and §3.5 and §5.2 need the
   distinction. The two `Option` returns here, `toString?` and
