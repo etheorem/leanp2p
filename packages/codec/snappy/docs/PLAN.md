@@ -161,9 +161,9 @@ Snappy executable with a Snappy-free control from the same job. It runs
 ASan and LSan on the Snappy executable and on the control. Both leak
 runs must exit 0 with no leak report. A leak in either executable
 fails the job. The control checks the same runtime and linker. The job
-links no second C++ runtime. The job passed for
-`fb0e84cedf0be26561fa14a350aa374e5ef68804`. The acceptance record cites
-that run.
+links no second C++ runtime. The job first passed for
+`fb0e84cedf0be26561fa14a350aa374e5ef68804`. The acceptance record
+cites the later warning-free run.
 
 ### Phase 4D. Acceptance record
 
@@ -203,25 +203,32 @@ runtime and `libSystem`. The Linux hardening script stops because
 `uname -s` is Darwin. That line is the platform guard.
 
 The Linux x86-64 evidence is
-[CI run 41691697297](https://github.com/etheorem/leanp2p/actions/runs/41691697297)
-for `fb0e84cedf0be26561fa14a350aa374e5ef68804`. The result is success.
+[CI run 41706761667](https://github.com/etheorem/leanp2p/actions/runs/41706761667)
+for `b5f6876b8b6490f402b39a7a763c8c391c3681d7`. The result is success.
 `build-and-test` passed, and `snappy-native-hardening` passed. The
 co-author guard and the license acceptance guard also passed for that
-commit. The runner is Linux `x86_64`. Lean is 4.34.0, commit
+commit. The runner is Linux `x86_64`. GCC is 15.2.0. The native
+compilation completed with no compiler warnings. Upstream
+`snappy.cc` is compiled with `-Wno-ignored-attributes` after `-Werror`.
+The package architecture explains that suppression. Lean is 4.34.0, commit
 `293d5d0c0c3f3dded4688b3ccd6a33939ac5102b`, target
-`x86_64-unknown-linux-gnu`. The archive members are the same three
-objects. The symbol audit passed. The unsanitized Snappy and control
-dynamic libraries match, and both dynamic C++ runtime sets are empty.
-The sanitized library sets match, and both link `libasan`. The Snappy
-ASan run is clean, and the control ASan run is clean. The Snappy LSan
-run is clean, and the control LSan run is clean. The deliberate use
-after free is reported as `heap-use-after-free`. The deliberate leak is
-reported by LeakSanitizer. The job ends with `linux-hardening: passed`.
+`x86_64-unknown-linux-gnu`. Both `lake test` runs reported 9211
+passed, 0 failed, 0 todo, and 0 skipped. The archive members are the
+same three objects. The symbol audit passed. The unsanitized Snappy
+and control dynamic libraries match, and both dynamic C++ runtime sets
+are empty. The sanitized library sets match, and both link `libasan`.
+The Snappy ASan run is clean, and the control ASan run is clean. The
+Snappy LSan run is clean, and the control LSan run is clean. The
+deliberate use after free is reported as `heap-use-after-free`. The
+deliberate leak is reported by LeakSanitizer. The job ends with
+`linux-hardening: passed`.
 
-`fb0e84cedf0be26561fa14a350aa374e5ef68804` is the clean implementation
-HEAD. `lake update` and the full acceptance commands ran there and
-passed. `lake update` exited successfully and left both manifests
-unchanged. Those commands were `lake build`, both `lake test` runs,
+`b5f6876b8b6490f402b39a7a763c8c391c3681d7` is the clean implementation
+HEAD. `lake update` and the full acceptance commands ran on the earlier
+implementation HEAD
+`fb0e84cedf0be26561fa14a350aa374e5ef68804` and passed. `lake update`
+exited successfully and left both manifests unchanged. Those commands
+were `lake build`, both `lake test` runs,
 `scripts/lint-imports.sh`, `git diff --check`,
 `python3 packages/codec/snappy/scripts/verify-upstream.py`,
 `lake build snappyNative/snappyBoundary`,
@@ -423,8 +430,8 @@ lake build snappyNative/snappyValidation
 the pristine and define-disabled symbol surfaces. `snappyValidation`
 runs those three checks on the same production archive. The local audit
 is macOS ARM64. The Linux x86-64 audit, ASan, LSan, and the
-Snappy-free control passed in the Phase 4C job. The acceptance record
-cites that run. These commands and that job complete W6.2.
+Snappy-free control passed in the warning-free CI run. The acceptance
+record cites that run. These commands and that job complete W6.2.
 
 ## Risks
 
