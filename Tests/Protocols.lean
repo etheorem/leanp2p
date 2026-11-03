@@ -2,12 +2,16 @@ import Tests.Support
 import Proto
 import Bytes
 import Varint
+import Conc
+import Streams
 import Libp2p.Protocols
 import Libp2p.Protocols.Mock.Identity
 import Libp2p.Protocols.Mock.Multiaddr
+import Libp2p.Protocols.Mock.Core
+import Libp2p.Protocols.Mock.Host
 
 /-!
-# Identify and ping suite (unit W5.7, sub-unit 1a)
+# Identify and ping suite (unit W5.7, sub-units 1a and 1b)
 
 Mirrors `vendor/specs/ping/ping.md` (32-byte echo, protocol id
 `/ipfs/ping/1.0.0`) and the captured go-libp2p Identify protobuf
@@ -15,6 +19,12 @@ Mirrors `vendor/specs/ping/ping.md` (32-byte echo, protocol id
 pure `Identify.validate` and `Ping.checkEcho` checks. The mock key
 and multiaddr stand-ins run their executable bodies here, so every
 mock outcome of the validate appears in a check.
+
+Sub-unit 1b adds the exchange cases: the identify client against the
+responder handler, the push handler against the in-memory peerstore
+double, the client deadline on the test clock, and the ping echo in
+both directions. The exchanges run over a private pair of `Conc.Pipe`
+values spliced into two `Streams.Stream` ends.
 -/
 
 set_option autoImplicit false
@@ -39,6 +49,318 @@ private def emptyIdentify : Identify := ⟨none, [], [], none, none, none, none�
 /-- The encoding of a message, through the shared Proto encoder. -/
 private def msgPayload (m : Identify) : List Nat :=
   Pb.encodeMessage m
+
+/-! ## The private stream pair (sub-unit 1b)
+
+Two `Conc.Pipe` values spliced like the spike's `mkSplit`
+(`Tests/PingId.lean`): end `a` reads `ba` and writes `ab`, end `b`
+reads `ab` and writes `ba`. The adapter's `close` is a no-op, so one
+pair serves the swapped-role exchange; the cases that need an end
+close the pipe directly. `reset` closes the pipe the end reads, so a
+reset reaches the parked read. -/
+
+/-- The pair: the two stream ends and the two pipes, for the cases
+that close a pipe directly. -/
+private structure Pair where
+  a : Streams.Stream
+  b : Streams.Stream
+  ab : Conc.Pipe
+  ba : Conc.Pipe
+
+/-- One stream end over the two pipes. -/
+private def mkEnd (readP writeP : Conc.Pipe) : Streams.Stream := {
+  read := do
+    match ← readP.read with
+    | none => return .ok none
+    | some chunk => return .ok (some chunk)
+  write := fun bytes =>
+    (Except.mapError (fun e => match e with
+      | Conc.Error.closed => Streams.Error.closed
+      | Conc.Error.deadlineExpired => Streams.Error.timeout)) <$> writeP.write bytes
+  close := pure ()
+  reset := readP.close }
+
+/-- The pair: `a` reads `ba` and writes `ab`; `b` reads `ab` and
+writes `ba`. -/
+private def mkPair : BaseIO Pair := do
+  let ab ← Conc.Pipe.new 4
+  let ba ← Conc.Pipe.new 4
+  return { a := mkEnd ba ab, b := mkEnd ab ba, ab, ba }
+
+/-- True when the answer is `.ok (some _)`. -/
+private def isOkSome {ε α : Type} (x : Except ε (Option α)) : Bool :=
+  match x with
+  | .ok (some _) => true
+  | _ => false
+
+/-- True when the answer is `.ok none`. -/
+private def isOkNone {ε α : Type} (x : Except ε (Option α)) : Bool :=
+  match x with
+  | .ok none => true
+  | _ => false
+
+/-- True when the handler answer is a protocol error. -/
+private def isProtocolError (x : Except Libp2p.Protocols.Mock.Core.Error Unit) : Bool :=
+  match x with
+  | .error (.protocol _) => true
+  | _ => false
+
+/-- Run the handler on `s`, and fail the task when the handler
+answers an error. -/
+private def runHandler (h : Libp2p.Protocols.Mock.Core.StreamHandler)
+    (s : Streams.Stream) : Conc.Async Unit := do
+  let res : Except Libp2p.Protocols.Mock.Core.Error Unit ← h.handle s
+  match res with
+  | .error e => throw (IO.userError s!"the handler answered {repr e}")
+  | .ok () => pure ()
+
+/-- The 1b exchange cases, on the test clock and the private pair. -/
+private def asyncChecks (r : Runner) : Conc.Async Unit := do
+  -- identify: the responder round trip
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let key : PubKey := ⟨.ed25519, [1, 2]⟩
+    let pid : PeerId := peerIdOfPubKey key
+    let addr := [4, 127, 0, 0, 1, 6, 138, 43]
+    let agent := "leanp2p"
+    let protocols := ["/ipfs/id/1.0.0"]
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      runHandler (Identify.respondHandler key [addr] protocols none agent none) pair.b
+    let res ← Identify.client pair.a tc.clock 1000 (some pid)
+    ts.joinAll
+    r.check "identify e2e responder round trip accepted"
+      (match res with
+       | .ok (some (m, got)) =>
+           got == pid && m.agentVersion == some agent && m.protocols == protocols
+       | _ => false)
+    tc.close
+
+  -- identify: the same pair runs the exchange twice, roles swapped
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let key : PubKey := ⟨.ed25519, [3, 4]⟩
+    let pid : PeerId := peerIdOfPubKey key
+    let agent := "leanp2p"
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      runHandler (Identify.respondHandler key [] [] none agent none) pair.b
+    let first ← Identify.client pair.a tc.clock 1000 (some pid)
+    ts.joinAll
+    ts.spawn do
+      runHandler (Identify.respondHandler key [] [] none agent none) pair.a
+    let second ← Identify.client pair.b tc.clock 1000 (some pid)
+    ts.joinAll
+    r.check "identify e2e round trip both directions"
+      (isOkSome first && isOkSome second)
+    tc.close
+
+  -- identify: the push handler updates the peerstore
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let store ← Mock.Host.inMemory
+    let key : PubKey := ⟨.ed25519, [1, 2]⟩
+    let pid : PeerId := peerIdOfPubKey key
+    let addr := [4, 127, 0, 0, 1, 6, 138, 43]
+    let msg := Identify.respond key [addr] [] none "" none
+    match Streams.Framing.encodeB? .uvarint Constants.identifyCap
+        (Pb.encodeMessageB msg) with
+    | none => r.check "identify e2e push updates the peerstore and reads back" false
+    | some frame =>
+        let ts ← Conc.TaskSet.new
+        ts.spawn do
+          runHandler (Identify.pushHandler store pid tc.clock 1000) pair.b
+        discard <| pair.a.write frame
+        ts.joinAll
+        let stored ← store.addrsOf pid
+        r.check "identify e2e push updates the peerstore and reads back"
+          (stored == [addr])
+    tc.close
+
+  -- identify: a second push of the same addresses grows nothing
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let store ← Mock.Host.inMemory
+    let key : PubKey := ⟨.ed25519, [1, 2]⟩
+    let pid : PeerId := peerIdOfPubKey key
+    let addr := [4, 127, 0, 0, 1, 6, 138, 43]
+    let msg := Identify.respond key [addr] [] none "" none
+    match Streams.Framing.encodeB? .uvarint Constants.identifyCap
+        (Pb.encodeMessageB msg) with
+    | none => r.check "identify e2e push redial adds no duplicate address" false
+    | some frame =>
+        let ts ← Conc.TaskSet.new
+        ts.spawn do
+          runHandler (Identify.pushHandler store pid tc.clock 1000) pair.b
+        discard <| pair.a.write frame
+        ts.joinAll
+        let ts2 ← Conc.TaskSet.new
+        ts2.spawn do
+          runHandler (Identify.pushHandler store pid tc.clock 1000) pair.b
+        discard <| pair.a.write frame
+        ts2.joinAll
+        let stored ← store.addrsOf pid
+        r.check "identify e2e push redial adds no duplicate address"
+          (stored == [addr])
+    tc.close
+
+  -- identify: the client rejects an over-cap frame before the body
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let overCapPrefix := Bytes.ofNatList (Streams.Framing.encodeLength .uvarint 65537)
+    discard <| pair.b.write overCapPrefix
+    pair.ba.close
+    let res ← Identify.client pair.a tc.clock 1000 none
+    r.check "identify client rejects an over-cap frame before the body"
+      (failsWith (Identify.Error.badMessage (.framing .malformed)) res)
+    tc.close
+
+  -- identify: the client rejects a zero-length frame
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    discard <| pair.b.write (Bytes.ofNatList (Streams.Framing.encodeLength .uvarint 0))
+    let res ← Identify.client pair.a tc.clock 1000 none
+    r.check "identify client rejects a zero-length frame"
+      (failsWith Identify.Error.emptyFrame res)
+    tc.close
+
+  -- identify: the client answers absent on a clean close in the header
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    pair.ba.close
+    let res ← Identify.client pair.a tc.clock 1000 none
+    r.check "identify client returns absent on a clean close in the header"
+      (isOkNone res)
+    tc.close
+
+  -- identify: the client hits the deadline on a silent peer
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let answer : Conc.OnceRef (Option (Except Identify.Error (Option (Identify × PeerId)))) ←
+      Conc.OnceRef.new none
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      answer.set (some (← Identify.client pair.a tc.clock 50 none))
+    let armed ← tc.nextTimer
+    tc.advance 50
+    ts.joinAll
+    let res ← answer.get
+    r.check "identify client hits the deadline on a silent peer"
+      (armed && res.any (failsWith Identify.Error.timeout))
+    tc.close
+
+  -- ping: the echo round trip measures the rtt
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let payload := Bytes.ofNatList (List.replicate 32 7)
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      runHandler Ping.pingHandler pair.b
+    let res ← Ping.ping pair.a tc.clock payload
+    pair.ab.close
+    ts.joinAll
+    r.check "ping e2e echo round trip measures the rtt" (isOkSome res)
+    tc.close
+
+  -- ping: an altered echo is rejected
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let payload := Bytes.ofNatList (List.replicate 32 7)
+    let altered := Bytes.ofNatList (0 :: List.replicate 31 7)
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      discard <| pair.b.write altered
+      discard <| pair.b.read
+    let res ← Ping.ping pair.a tc.clock payload
+    ts.joinAll
+    r.check "ping e2e altered echo rejected" (failsWith Ping.Error.mismatch res)
+    tc.close
+
+  -- ping: a partial echo at the end of the stream is rejected
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let payload := Bytes.ofNatList (List.replicate 32 7)
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      discard <| pair.b.write (Bytes.ofNatList (List.replicate 31 7))
+      pair.ba.close
+    let res ← Ping.ping pair.a tc.clock payload
+    ts.joinAll
+    r.check "ping e2e partial echo at EOF rejected" (failsWith Ping.Error.truncated res)
+    tc.close
+
+  -- ping: an echo split across chunks is accepted
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let payload := Bytes.ofNatList (List.replicate 32 7)
+    let half := List.replicate 16 7
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      discard <| pair.b.write (Bytes.ofNatList half)
+      discard <| pair.b.write (Bytes.ofNatList half)
+      discard <| pair.b.read
+    let res ← Ping.ping pair.a tc.clock payload
+    ts.joinAll
+    r.check "ping e2e echo split across chunks accepted" (isOkSome res)
+    tc.close
+
+  -- ping: the handler echoes a payload written in two chunks
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let payload := List.replicate 32 7
+    let half := List.replicate 16 7
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      runHandler Ping.pingHandler pair.b
+    discard <| pair.a.write (Bytes.ofNatList half)
+    discard <| pair.a.write (Bytes.ofNatList half)
+    let echo ← pair.a.read
+    let ok := match echo with
+      | .ok (some chunk) => succeedsWith () (Ping.checkEcho payload (Bytes.toNatList chunk))
+      | _ => false
+    pair.ab.close
+    ts.joinAll
+    r.check "ping e2e handler echoes a split write" ok
+    tc.close
+
+  -- ping: a partial payload at the end of the stream is a protocol error
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let answer : Conc.OnceRef (Option (Except Libp2p.Protocols.Mock.Core.Error Unit)) ←
+      Conc.OnceRef.new none
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      answer.set (some (← Ping.pingHandler.handle pair.b))
+    discard <| pair.a.write (Bytes.ofNatList (List.replicate 20 7))
+    pair.ab.close
+    ts.joinAll
+    let res ← answer.get
+    r.check "ping e2e handler partial payload at EOF is a protocol error"
+      (res.any isProtocolError)
+    tc.close
+
+  -- ping: a wrong outgoing size is rejected before the write
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let res ← Ping.ping pair.a tc.clock (Bytes.ofNatList (List.replicate 31 7))
+    r.check "ping e2e wrong outgoing size rejected"
+      (failsWith (Ping.Error.wrongSize 31) res)
+    tc.close
 
 def run (r : Runner) : IO Unit := do
   r.section "protocols"
@@ -105,6 +427,12 @@ def run (r : Runner) : IO Unit := do
               -- Multiaddr text codec is unmerged
               r.check "identify vector listenAddrs has one entry, the binary form of JSON listenAddrs[0]"
                 (m.listenAddrs == [[4, 127, 0, 0, 1, 6, 138, 43]])
+              -- the full captured bytes, prefix and payload, through the
+              -- pure client core: the wire decision path of sub-unit 1b
+              r.check "identify vector through the client core"
+                (match Identify.clientCore (Bytes.toNatList respBytes) none with
+                 | .ok (some (m2, _)) => m2 == m
+                 | _ => false)
               -- the wire carries the empty string, the JSON says
               -- /ipfs/1.0.0; the wire is the truth
               r.check "identify vector protocolVersion wire delta recorded"
@@ -158,5 +486,7 @@ def run (r : Runner) : IO Unit := do
   let altered := 0 :: List.replicate 31 7
   r.check "ping echo altered rejected"
     (failsWith .mismatch (Ping.checkEcho sent altered))
+
+  Conc.Async.run (asyncChecks r)
 
 end Tests.Protocols
