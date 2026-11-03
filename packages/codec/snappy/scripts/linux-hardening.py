@@ -6,8 +6,10 @@ The script exits unless `uname` reports Linux and `x86_64`. It runs
 then links that archive into a shim workload and links a matched
 runtime control with the same Lean linker. Host `c++` compiles the
 instrumented units. Host `cc` from the same toolchain links them and
-supplies the GCC AddressSanitizer runtime. Lean's static `libc++` and
-`libc++abi` stay on that link line. AddressSanitizer and
+supplies the GCC AddressSanitizer runtime. The link receives the
+toolchain library directories that the pinned `leanc` driver searches
+implicitly. Lean's static `libc++` and `libc++abi` stay on that link
+line. AddressSanitizer and
 LeakSanitizer each run on that pair. A leak in either executable, a
 sanitizer error, or a negative control that exits cleanly fails the
 process. The control does not excuse a leak.
@@ -233,6 +235,91 @@ def validate_static_cxx_runtime(tokens: list[str]) -> None:
         fail("leanc linker static mode does not return to dynamic mode")
 
 
+TOOLCHAIN_LIBRARY_NAMES = ("libc++.a", "libc++abi.a", "libuv.a", "libuv.so")
+
+
+def driver_library_path(prefix: Path, name: str, printed: str) -> Path | None:
+    """Accept a driver path that names an existing file inside the prefix."""
+    text = printed.strip()
+    if text == "" or text == name or "/" not in text:
+        return None
+    path = Path(text)
+    if not path.is_absolute():
+        path = prefix / path
+    if not path.is_file():
+        return None
+    resolved = path.resolve()
+    if not resolved.is_relative_to(prefix.resolve()):
+        return None
+    return resolved
+
+
+def prefix_library_path(prefix: Path, name: str) -> Path | None:
+    """Accept `<lean-prefix>/lib/<name>` when that file exists."""
+    path = prefix / "lib" / name
+    if not path.is_file():
+        return None
+    resolved = path.resolve()
+    if not resolved.is_relative_to(prefix.resolve()):
+        return None
+    return resolved
+
+
+def collect_toolchain_libraries(prefix: Path, printed: dict[str, str]) -> list[Path]:
+    """Resolve the C++ runtime and libuv from driver output and prefix/lib."""
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for name in TOOLCHAIN_LIBRARY_NAMES:
+        candidates = (
+            driver_library_path(prefix, name, printed.get(name, "")),
+            prefix_library_path(prefix, name),
+        )
+        for path in candidates:
+            if path is not None and path not in seen:
+                seen.add(path)
+                found.append(path)
+    names = {path.name for path in found}
+    if "libc++.a" not in names:
+        fail("the Lean toolchain has no libc++.a")
+    if "libc++abi.a" not in names:
+        fail("the Lean toolchain has no libc++abi.a")
+    if "libuv.a" not in names and "libuv.so" not in names:
+        fail("the Lean toolchain has no libuv.a or libuv.so")
+    return found
+
+
+def toolchain_search_directories(libraries: list[Path]) -> list[Path]:
+    """Return unique parent directories in first-seen order."""
+    directories: list[Path] = []
+    seen: set[Path] = set()
+    for library in libraries:
+        parent = library.parent
+        if parent not in seen:
+            seen.add(parent)
+            directories.append(parent)
+    return directories
+
+
+def toolchain_link_args(prefix: Path, leanc: Path) -> list[str]:
+    """Discover Lean library directories and return explicit `-L` arguments."""
+    printed: dict[str, str] = {}
+    for name in TOOLCHAIN_LIBRARY_NAMES:
+        result = run([str(leanc), f"-print-file-name={name}"], check=False)
+        if result.returncode != 0:
+            fail(f"leanc -print-file-name={name} exited {result.returncode}")
+        printed[name] = result.stdout.strip()
+    libraries = collect_toolchain_libraries(prefix, printed)
+    for library in libraries:
+        print(f"toolchain library {library.name} {library}")
+    args: list[str] = []
+    for directory in toolchain_search_directories(libraries):
+        if not directory.is_dir():
+            fail(f"Lean library search directory is absent: {directory}")
+        print(f"toolchain search directory {directory}")
+        args.extend(["-L", str(directory)])
+    return args
+
+
 def filtered_link_flags(leanc: Path) -> list[str]:
     text = run([str(leanc), "--print-ldflags"]).stdout.strip()
     if text == "":
@@ -307,8 +394,9 @@ def compile_sources(work: Path, prefix: Path, root: Path) -> dict[str, Path]:
 
 
 def link_sanitized(
-    leanc: Path, objects: dict[str, Path], work: Path
+    prefix: Path, leanc: Path, objects: dict[str, Path], work: Path
 ) -> tuple[Path, Path]:
+    search = toolchain_link_args(prefix, leanc)
     flags = filtered_link_flags(leanc)
     snappy = work / "shim-workload-asan"
     control = work / "runtime-control-asan"
@@ -322,10 +410,20 @@ def link_sanitized(
             str(objects["core"]),
             str(objects["sink"]),
             str(objects["shim"]),
+            *search,
             *flags,
         ]
     )
-    run([*common, "-o", str(control), str(objects["control"]), *flags])
+    run(
+        [
+            *common,
+            "-o",
+            str(control),
+            str(objects["control"]),
+            *search,
+            *flags,
+        ]
+    )
     return snappy, control
 
 
@@ -641,7 +739,7 @@ def main() -> None:
             "plain control",
             run([str(plain_control)], env=plain_env(), check=False),
         )
-        san_snappy, san_control = link_sanitized(leanc, objects, work)
+        san_snappy, san_control = link_sanitized(prefix, leanc, objects, work)
         require_symbol(san_snappy, "leanp2p_snappy_compress", True)
         require_symbol(san_control, "leanp2p_snappy_compress", False)
         compare_sanitized_dynamic(san_snappy, san_control)
