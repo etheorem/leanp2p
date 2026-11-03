@@ -20,6 +20,8 @@ POLICY = "phase-3b/1"
 # Undefined C and platform symbols observed in the production objects.
 # A symbol outside this set, and outside the Snappy classes and the Lean
 # runtime set, is a failure.
+# `__assert_rtn` and `bzero` are the macOS forms. `__assert_fail` and
+# `memset` are the glibc forms of those same references.
 C_RUNTIME = frozenset(
     {
         "abort",
@@ -29,11 +31,17 @@ C_RUNTIME = frozenset(
         "memcmp",
         "memcpy",
         "memmove",
+        "memset",
+        "__assert_fail",
         "__assert_rtn",
         "__stack_chk_fail",
         "__stack_chk_guard",
     }
 )
+
+# `-fPIC` on ELF refers to the global offset table. The reference is not
+# a call into a C++ runtime.
+ELF_SUPPORT = frozenset({"_GLOBAL_OFFSET_TABLE_"})
 
 # Exact Lean runtime symbols referenced by the compiled compression shim.
 # `lean_alloc_object` allocates the output scalar array.
@@ -55,7 +63,9 @@ LEAN_RUNTIME = frozenset(
 )
 
 NM_KINDS = frozenset("ABCDGINRSTUVWabcdginrstuvw")
-MEMBER_HEADER = re.compile(r"^[A-Za-z0-9._+-]+\.o:$")
+# POSIX nm prints `member.o:`. GNU nm prints `archive.a[member.o]:`
+# or the path that was passed, then `[member.o]:`.
+MEMBER_HEADER = re.compile(r"^(?:.*\[)?[A-Za-z0-9._+-]+\.o\]?:$")
 STD_NAME = re.compile(r"(^|[^A-Za-z0-9_])std::")
 SNAPPY_NAME = re.compile(r"(^|[^A-Za-z0-9_])snappy::")
 GLOBAL_ALLOC_DEMANGLED = re.compile(r"^operator (new|delete)(\[\])?\(")
@@ -189,6 +199,8 @@ def classify(raw: str, demangled: str) -> str:
     if reason:
         return reason
     stripped = stripped_name(raw)
+    if raw in ELF_SUPPORT:
+        return "elf-support"
     if raw in LEAN_RUNTIME or stripped in LEAN_RUNTIME:
         return "lean-runtime"
     if SNAPPY_NAME.search(demangled):

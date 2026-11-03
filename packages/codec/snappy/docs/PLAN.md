@@ -161,9 +161,10 @@ ci(snappy): audit native symbols and sanitizers
 The job asserts Linux `x86_64`. It audits undefined symbols in every
 object and in the archive. It compares the dynamic libraries of the
 Snappy executable with a Snappy-free control from the same job. It runs
-ASan and LSan on the Snappy executable and the same pair on the
-control. A leak is accepted only when the same stacks appear in the
-control. The job links no second C++ runtime.
+ASan and LSan on the Snappy executable and on the control. Both leak
+runs must exit 0 with no leak report. A leak in either executable
+fails the job. The control checks the same runtime and linker. The job
+links no second C++ runtime.
 
 ### Phase 4D. Acceptance record
 
@@ -351,7 +352,7 @@ complete.
 | Platform feature macros drift between the three builds | The build-support headers state the choices. The pristine control and the define-disabled build use one matched configuration. The interoperability cases cover each production configuration. |
 | An upstream assertion fires on hostile input | Malformed input returns `.invalidCompressedData`. The shim does not aim that input at an assertion. Phase 4A holds the hostile cases. |
 | The patch and `native/vendor/snappy/` diverge | Phase 2B rebuilds the tree with `git apply` and compares it byte for byte. |
-| ASan or LSan reports a Lean or GMP initialization leak | Phase 4C accepts a leak only when the same stacks appear in the matched Snappy-free control from the same job. |
+| ASan or LSan reports a Lean or GMP initialization leak | Phase 4C requires the Snappy executable and the matched runtime control to exit with no leak report. A leak in either executable fails the job. |
 | W1.2 has landed | The public surface stays `ByteArray` and `Snappy.Error`. Production `Snappy.lean` does not import `Bytes`. |
 
 ## W6.3
