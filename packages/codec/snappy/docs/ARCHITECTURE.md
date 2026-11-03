@@ -227,8 +227,13 @@ packages/codec/snappy/
 │       └── <seven upstream source/header files>
 ├── patches/
 │   └── 0001-block-only.patch
+├── scripts/
+│   └── audit-native.py
 └── native/
     ├── lakefile.lean
+    ├── check/
+    │   ├── core.cpp
+    │   └── abort.cpp
     ├── include/
     │   ├── config.h
     │   └── snappy-stubs-public.h
@@ -355,6 +360,38 @@ the pristine control. This comparison is regression evidence.
 `LEANP2P_SNAPPY_BLOCK_ONLY`. Run the production block tests. Audit
 every object and the archive for the forbidden C++ runtime references
 above.
+
+## Phase 2C commands
+
+The ordinary `lake build` does not run these commands. The root Snappy
+library waits only for `snappyNative/snappy`.
+
+`lake build snappyNative/snappyBoundary` builds the three archives and
+links one boundary driver to each archive. It checks that the three
+raw-block transcripts match. It shows that the production link uses
+the production archive. It does not show that a guarded body aborts,
+and it does not show that a forbidden C++ runtime symbol is absent.
+
+`lake build snappyNative/snappyAbort` compiles `native/check/abort.cpp`
+once and links that object to `libsnappy.a` once. Twelve child
+processes call the four fallback bodies and the eight class-specific
+`operator delete` functions. Each child must exit 86 from its
+`SIGABRT` handler. This shows those direct calls abort. It does not
+show that a later shim avoids the calls.
+
+`lake build snappyNative/snappyAudit` reads `snappy.block.o`,
+`snappy-sinksource.block.o`, and `libsnappy.a`. It rejects an unresolved
+`std::` facility, a global `operator new`, a global `operator delete`,
+`__cxa_*`, and `__gxx_personality*`. It checks the guarded symbols and
+the two archive members. It compares the defined global symbols of the
+pristine build and the define-disabled build. The local run is macOS
+ARM64. Linux x86-64, ASan, LSan, and a Snappy-free dynamic library
+remain Phase 4C.
+
+`lake build snappyNative/snappyValidation` runs the boundary check, the
+abort check, and the audit. Those targets share the production object
+jobs. The command does not compile a second `snappy.cc` or
+`snappy-sinksource.cc`.
 
 ## Trust and validation
 

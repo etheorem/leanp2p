@@ -310,11 +310,23 @@ python3 scripts/extract-vectors.py
 `git diff --check` passes, and `Tests/vectors` is clean after the
 extractor runs.
 
-The helper also gains package-local commands for the offline source
-verification, the pristine and define-disabled comparison, the
-production boundary check, the object and archive audit, and the
-sanitizer and control run. This plan does not name those commands. The
-helper commit records the stable names here.
+The helper records these stable commands:
+
+```text
+lake build snappyNative/snappyBoundary
+lake build snappyNative/snappyAbort
+lake build snappyNative/snappyAudit
+lake build snappyNative/snappyValidation
+```
+
+`snappyBoundary` matches the three raw-block transcripts.
+`snappyAbort` requires status 86 from each guarded call.
+`snappyAudit` reads the production objects and archive, and it compares
+the pristine and define-disabled symbol surfaces. `snappyValidation`
+runs those three checks on the same production archive. The local audit
+is macOS ARM64. Linux x86-64, ASan, LSan, and the Snappy-free control
+remain Phase 4C. These commands do not mark W6.2, Phase 3, or Phase 4
+complete.
 
 ## Risks
 
