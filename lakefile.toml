@@ -124,6 +124,7 @@ roots = ["Yamux"]
 name = "Libp2pIdentity"
 srcDir = "packages/libp2p/identity"
 roots = ["Libp2p.Identity"]
+globs = ["Libp2p.Identity.*"]
 
 [[lean_lib]]
 name = "Libp2pCore"
