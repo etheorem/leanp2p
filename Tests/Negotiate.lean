@@ -253,6 +253,6 @@ def run (r : Runner) : IO Unit := do
   r.check "mss generic round-trip harness" (Bytes.checkRoundTrips samples == true)
 
   r.skip "mss generic model pin"
-    "needs the ByteArray adapter (stretch S1, plan section 7); lands with unit 1b"
+    "needs the ByteArray adapter, a stretch item this pull request defers; the model decoder is the production path today"
 
 end Tests.Negotiate

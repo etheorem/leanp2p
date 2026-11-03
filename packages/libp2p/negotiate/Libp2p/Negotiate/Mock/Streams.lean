@@ -3,11 +3,12 @@ import Conc
 /-!
 # Streams mocks for unit 1b
 
-The streams seam types live in `net/streams` (#32, not merged yet).
-This module holds `Connection`, `BufReader`, and `Stream` verbatim from
-the streams ARCHITECTURE "Public surface", and the one constant the
+The streams package has merged (#32), and this module stands until the
+integration swap (the mock-substitution ledger, issue #25).
+This module holds `Connection`, `BufReader`, and `Stream` from the
+streams ARCHITECTURE "Public surface", and the one constant the
 upgrader wires, so the upgrader compiles against the frozen shapes.
-The imports swap to `Streams` when the streams package lands.
+The imports swap to `Streams` at the integration.
 
 `Connection` omits `localAddr` and `remoteAddr`. The upgrader never
 reads an address, and a `Multiaddr` import would break the package's

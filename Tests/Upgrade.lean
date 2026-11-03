@@ -8,7 +8,8 @@ import Bytes
 
 The test milestones of the negotiate package plan, unit 1b. The full
 pipeline runs both directions over an in-process pipe pair, which
-replaces the sim transport of streams (#32, unmerged). The fixed-key
+stands in for the sim transport of streams until the mock drop (#32
+has merged; the swap is owed, ledger issue #25). The fixed-key
 plaintext security value and the minimal muxer value replace the Noise
 and yamux milestones (#16, #17, unmerged). The deadline check advances
 the test `Clock` of `base/conc`, so the suite waits on no wall clock.

@@ -4,10 +4,12 @@ import Bytes
 /-!
 # Temporary unsigned-varint interface
 
-W2.1 is not merged. The executable opaque definitions follow its
-documented nine-byte minimal-form contract. The three axioms below are
-dependency contracts. They state what W2.1 promises, and they must
-disappear with this mock. This module mirrors `Proto/Mock/Varint.lean`.
+W2.1 has merged (#34), and this module stands until the integration
+swap (the mock-substitution ledger, issue #25). The executable opaque
+definitions follow its documented nine-byte minimal-form contract. The
+three axioms below are dependency contracts: the merged package proves
+each one as a theorem, and they disappear with this mock. This module
+mirrors `Proto/Mock/Varint.lean`.
 -/
 
 set_option autoImplicit false

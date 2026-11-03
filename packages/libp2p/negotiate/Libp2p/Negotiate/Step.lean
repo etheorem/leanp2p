@@ -154,7 +154,7 @@ private def classify (s : State) (text : String) : Answer :=
         else if text = p.toString then .accept p else .fail
   | _, _ => .fail
 
-/-- Perform a answer. Byte-free per answer, so every theorem about
+/-- Perform an answer. Byte-free per answer, so every theorem about
 writes and phase lives here. -/
 private def act (s : State) (rest : List Nat) : Answer → Except Error (State × List Action)
   | .echo => .ok ({ s with buffer := rest, phase := .negotiating }, [.write (encodeText protocolId.toString)])
