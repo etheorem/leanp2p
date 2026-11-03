@@ -195,14 +195,6 @@ comparison needs a total function on this side.
   comparison with the production path. Compression correctness for
   every input and cryptographic security remain outside these proofs.
 
-## Byte conversions
-
-The `digestB` forms import `Bytes` for `ofNatList` and `toNatList`.
-The suite also uses `Bytes.ofString` and `Bytes.ofHex?` to read its
-vectors. These are the real conversions from W1.2 (#2), and the
-digest pin theorems use them directly. The package carries no mock or
-assumed dependency fact.
-
 ## What the package must not depend on
 
 - No `crypto/backend` import, and no etheorem package import. A pure

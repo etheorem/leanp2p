@@ -24,12 +24,6 @@ and `codec/multiformats` set the pattern.
 
 Unit 0 is done. Sub-units 1a and 1b close root W3.1 together.
 
-Sub-units 1a and 1b are implemented and integrated with W1.2 (#2).
-The `digestB` forms and the suite import the real `Bytes` conversions.
-The package carries no mock or assumed dependency fact. Comparisons
-with the production path belong to W3.3, after W3.2 lands the backend
-bindings.
-
 ## Consumers
 
 W3.3 builds the `Crypto` facade and names the production
