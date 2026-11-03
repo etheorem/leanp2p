@@ -89,8 +89,8 @@ def HazmatPins.run (r : Runner) : IO Unit := do
         r.check "LeanHazmatSecp256k1: recovers the go fixture key" true
         r.check "LeanHazmatSecp256k1: verifies the go fixture"
           (LeanHazmat.Secp256k1.ecdsaVerify hash sr ss full)
-        -- The evidence against the root §4.6 sentence that the binding
-        -- rejects a high S (the package PLAN, "Pin outcomes").
+        -- The evidence for root §4.6: the etheorem verifier accepts a
+        -- high S, so secp256k1 verification stays on the backend shim.
         let highS := Ecdsa.bytesOfNat 32 (Ecdsa.secp256k1Order - s')
         r.check "LeanHazmatSecp256k1 accepts the high-S twin (so the facade keeps the backend verifier)"
           (LeanHazmat.Secp256k1.ecdsaVerify hash sr highS full)

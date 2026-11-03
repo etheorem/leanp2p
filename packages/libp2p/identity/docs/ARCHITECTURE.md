@@ -161,7 +161,7 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   is upstream work and not yet on its `main` (the monorepo says
   per-package publication repos will exist later); the license is
   LGPL-3.0 with a contributor agreement; the monorepo pins Lean
-  v4.29.1 against this repo's v4.34. Unit 2 tracks the package,
+  v4.34.1 against this repo's v4.34.0. Unit 2 tracks the package,
   checks the toolchain skew, and wraps it behind the `Codec` surface
   and the package's own error mapping, with no second RLP. The
   recorded fallback, should the upstream not land in time or the
@@ -191,6 +191,6 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   `lake update`, the pinned git rev, and `lake-manifest.json`
   committed. Unit 2's first step is tracking the upstream package,
   which is not yet on the monorepo's `main`, and the v4.34
-  toolchain-compat check of the pin (the monorepo pins v4.29.1). The
+  toolchain-compat check of the pin (the monorepo pins v4.34.1). The
   recorded fallback is the package's own small RLP if the upstream
   does not land or the skew does not close.

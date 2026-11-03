@@ -73,17 +73,19 @@ routed four. The binding type of each follows
 | X.509 parse and extension helpers | pure | one certificate parses to the same answer every time |
 | random bytes, key generation | `IO` | randomness (§3.6) |
 
-Four families route to the etheorem hazmat packages, and this package
-writes no second shim for them. The facade does the routing (§3.6):
-secp256k1 goes to `LeanHazmatSecp256k1` (libsecp256k1), ECDSA P-256 to
-`LeanHazmatP256` (OpenSSL), SHA-256 to `LeanHazmatSha256` (OpenSSL and
-ISA-L), and keccak-256 to `LeanHazmatKeccak` (keccak-tiny). Two of the
-routes do not hold at the current pin, and the plan's "Pin outcomes"
-records both: the `LeanHazmatSha256` archive breaks the executables
-that link it, and the `LeanHazmatSecp256k1` verifier turns a high S
-into a low S before it verifies, so it accepts what the low-S rule of
-§4.6 rejects. secp256k1 verification and SHA-256 therefore stay on this
-package's bindings. The integration facts constrain the
+Four families have etheorem hazmat packages: secp256k1
+(`LeanHazmatSecp256k1`, libsecp256k1), ECDSA P-256 (`LeanHazmatP256`,
+OpenSSL), SHA-256 (`LeanHazmatSha256`, OpenSSL and ISA-L), and
+keccak-256 (`LeanHazmatKeccak`, keccak-tiny). The facade (§3.6, W3.3)
+routes P-256 verification and keccak-256 there, and this package writes
+no second shim for them. Two families stay on this package's bindings,
+and the plan's "Pin outcomes" records both (§4.6). The
+`LeanHazmatSha256` archive breaks the executables that link it, so
+SHA-256 uses the interim fallback while that pin is out. The
+`LeanHazmatSecp256k1` verifier turns a high S into a low S before it
+verifies, so it accepts what the low-S rule of §4.6 rejects;
+secp256k1 verification stays here, and the etheorem package serves key
+recovery. The integration facts constrain the
 split: the etheorem monorepo pins Lean v4.34.1 against this repo's
 v4.34.0, the license is LGPL-3.0 with a contributor agreement, and the
 packages are monorepo-resident, with per-package publication repos
@@ -107,14 +109,16 @@ ISA-L `sha256_mb` unit that the x86_64 Linux build fetches through
 `just hazmat-sha256-vendor` and needs `nasm` for. A checkout that
 skips those recipes fails the build with
 the packages' own actionable hints, so the repo's CI runs the vendor
-fetch steps before `lake build`. The build itself stays offline after
-the fetch.
+fetch steps of the pinned families before `lake build`
+(`scripts/hazmat-vendor.sh`). The build itself stays offline after the
+fetch.
 
-Root unit W3.2 owns the pins, the
-toolchain-compat checks, and the facade routes. A primitive whose pin
-does not build falls back to this package's own shim for the interim,
-and the plan records the fallback. Keccak-256 is the exception: it
-has no own shim here, so a failed pin blocks W6.1 (§4.6).
+Root unit W3.2 owns the pins and the toolchain-compat checks, and W3.3
+lands the facade routes (§4.6). A primitive whose pin does not build,
+or whose archive breaks the executables that link it, falls back to
+this package's own shim for the interim, and the plan records the
+fallback. Keccak-256 is the exception: it has no own shim here, so a
+failed pin blocks W6.1 (§4.6).
 
 The shim also binds SHA-512, SHA-1, HMAC-SHA-256, and
 HKDF-SHA-256, and it keeps the OpenSSL SHA-256 binding as the interim
@@ -173,10 +177,12 @@ only when a proof here starts to consume a digest.
    (PRINCIPLES 4.1).
 2. **Sizes are checked before the call.** The Lean side checks a fixed
    size into a proof-carrying newtype (`Key32`, `Nonce12`, a 32-byte
-   seed) and passes the `ByteArray` with its proof (§3.7). The shim
-   checks the DER-derived lengths of a parsed key once, because the
-   newtype cannot know them; every other length crosses as a proved
-   size, and the shim validates nothing twice. The DER-content
+   seed) and passes the `ByteArray` with its proof (§3.7), or checks a
+   range bound, such as the `int` limit of the AEAD lengths, before the
+   call. The shim checks what the parse alone knows: the DER-derived
+   lengths of a parsed key, and that a DER input fits the `int` length
+   of the OpenSSL parser it goes to. Every other length crosses
+   checked, and the shim validates nothing twice. The DER-content
    strictness of the verifiers is a different check: it reads the parsed
    key, so it stays in the C verifier (§4.6; PRINCIPLES 2.4).
 3. **The shim stays auditable in one sitting.** One C file of our own,
@@ -184,8 +190,10 @@ only when a proof here starts to consume a digest.
    spike's conventions at the top. Any further C file needs a reason
    in this document first (PRINCIPLES 4.1).
 4. **Verifier strictness is a contract, with a regression per rule.**
-   The rules of §4.6 each close a divergence from go-libp2p, and §6
-   keeps them pinned by test. The package plan names the cases.
+   Each rule of §4.6 but one closes a divergence from go-libp2p. The
+   low-S rule follows the spec where go-libp2p accepts a high S, and
+   "Decisions" records it (PRINCIPLES 2.1, 2.4). §6 keeps every rule
+   pinned by test, and the package plan names the cases.
 5. **FFI behavior is pinned by vectors, never by the kernel.** No `decide`
    over an `@[extern]` result (CLAUDE.md, "Proofs and tests"). A finite
    goal over compiled data may close with `native_decide`, and the

@@ -66,7 +66,7 @@ Milestones for unit 2:
 
 - The upstream track is the first step: the RLP package lives in the
   etheorem monorepo (`etheorem/etheorem`, LGPL-3.0, toolchain
-  v4.29.1) and is not yet on its `main`. Unit 2 tracks its landing
+  v4.34.1) and is not yet on its `main`. Unit 2 tracks its landing
   or its per-package publication, adds the require block with a
   pinned git rev, runs `lake update`, commits `lake-manifest.json`,
   and checks that the pin builds under the v4.34 toolchain. The

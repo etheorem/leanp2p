@@ -11,10 +11,11 @@
  * - Every `ByteArray` argument is borrowed (`b_lean_obj_arg`). The shim
  *   never takes a reference to an argument and never frees one. An owned
  *   parameter leaks one reference per call (contract 1).
- * - Sizes that the Lean side proves (a 32-byte key, a 12-byte nonce, a
- *   tag-sized ciphertext) cross unchecked. The shim checks only what the
- *   Lean side cannot know: the DER-derived facts of a parsed key, and
- *   the `int` range of the OpenSSL length parameters (contract 2).
+ * - Sizes that the Lean side checks (a 32-byte key, a 12-byte nonce, a
+ *   tag-sized ciphertext, the `int` range of the AEAD lengths) cross
+ *   unchecked. The shim checks only what the parse alone knows: the
+ *   DER-derived facts of a parsed key, and that a DER input fits the
+ *   `int` length of its OpenSSL parser (contract 2).
  * - A pure binding returns `Option ByteArray`: `none` is a failure, and
  *   the Lean wrapper lifts it once into `Except CryptoError`. A verifier
  *   returns `uint8_t` (Lean `Bool`), and every malformed input or
@@ -155,11 +156,11 @@ LEAN_EXPORT uint32_t leanp2p_aead_tag_len(lean_obj_arg unit) {
 }
 
 /* Seal: the output is the ciphertext followed by the 16-byte tag. The
-   key is 32 bytes and the nonce 12, proved on the Lean side. */
+   key is 32 bytes and the nonce 12, and `pt` and `ad` fit an `int`, all
+   checked on the Lean side. */
 LEAN_EXPORT lean_obj_res leanp2p_chacha_seal(b_lean_obj_arg key, b_lean_obj_arg nonce,
                                              b_lean_obj_arg ad, b_lean_obj_arg pt) {
     size_t n = blen(pt);
-    if (!fits_int(n) || !fits_int(blen(ad))) return none();
     EVP_CIPHER_CTX *c = EVP_CIPHER_CTX_new();
     lean_object *out = alloc_bytes(n + TAG_LEN);
     uint8_t *o = lean_sarray_cptr(out);
@@ -174,12 +175,12 @@ LEAN_EXPORT lean_obj_res leanp2p_chacha_seal(b_lean_obj_arg key, b_lean_obj_arg 
     return some_or_free(ok, out);
 }
 
-/* Open: `none` on a tag mismatch. The Lean side proves `ct` holds at
-   least the tag, and maps `none` to the authentication-failure arm. */
+/* Open: `none` on a tag mismatch. The Lean side checks that `ct` holds at
+   least the tag and that `ct` and `ad` fit an `int`, and it maps `none`
+   to the authentication-failure arm. */
 LEAN_EXPORT lean_obj_res leanp2p_chacha_open(b_lean_obj_arg key, b_lean_obj_arg nonce,
                                              b_lean_obj_arg ad, b_lean_obj_arg ct) {
     size_t n = blen(ct) - TAG_LEN;
-    if (!fits_int(n) || !fits_int(blen(ad))) return none();
     EVP_CIPHER_CTX *c = EVP_CIPHER_CTX_new();
     lean_object *out = alloc_bytes(n);
     uint8_t *o = lean_sarray_cptr(out);

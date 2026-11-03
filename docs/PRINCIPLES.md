@@ -207,8 +207,11 @@ Verification is strict at the boundary: a verifier accepts only the key
 type it claims (an EC key never verifies under the RSA entry point),
 only key sizes in the libp2p range (RSA 2048 to 8192 bits), only
 low-S secp256k1 signatures, and certificates that are valid now and
-carry no unknown critical extensions. Each of these rules closes an
-accept-set divergence from go-libp2p, and each is one line of C. The
+carry no unknown critical extensions. Each rule but one closes an
+accept-set divergence from go-libp2p. The low-S rule follows the spec
+(BIP-62) where go-libp2p accepts a high S, so it opens a divergence,
+recorded under 2.1 in the backend's "Decisions". Each rule is one line
+of C. The
 cheapness is the point: boundary checks are the cheapest security there
 is, and the easiest to skip.
 

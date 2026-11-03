@@ -82,7 +82,7 @@ vendor verify included.
 | Unit | Pkg | P | deps | Deliverable |
 |---|---|---|---|---|
 | W3.1 | `crypto/pure` | P0 | W1.2 | pure SHA-256/512, SHA-1, HMAC, HKDF with theorems |
-| W3.2 | `crypto/backend` | P0 | W1.2 | own OpenSSL 3 bindings for what no etheorem package covers: Ed25519, X25519, RSA, SHA-1, SHA-512, HMAC, HKDF, ChaCha20-Poly1305, X.509, plus randomness and key generation; all `ByteArray` args **borrowed** (`@&`); pure bindings for deterministic primitives, `IO` for randomness (ARCHITECTURE §3.6); the etheorem hazmat integration: pins for `LeanHazmatSecp256k1`, `LeanHazmatP256`, `LeanHazmatSha256`, `LeanHazmatKeccak`, with the v4.34 build checks; verifier strictness (key type, RSA 2048–8192, low-S, validity + critical exts) |
+| W3.2 | `crypto/backend` | P0 | W1.2 | own OpenSSL 3 bindings for what no etheorem package covers: Ed25519, X25519, RSA, SHA-1, SHA-512, HMAC, HKDF, ChaCha20-Poly1305, X.509, plus randomness and key generation; all `ByteArray` args **borrowed** (`@&`); pure bindings for deterministic primitives, `IO` for randomness (ARCHITECTURE §3.6); the etheorem hazmat integration: the v4.34 build checks for `LeanHazmatSecp256k1`, `LeanHazmatP256`, `LeanHazmatSha256`, `LeanHazmatKeccak`, a pin for each family that passes them, and the interim fallback for one that fails (ARCHITECTURE §4.6); verifier strictness (key type, RSA 2048–8192, low-S, validity + critical exts) |
 | W3.3 | `Crypto` facade + cross-check | P0 | W3.1, W3.2 | the `Crypto` facade library (ARCHITECTURE §3.6; callers import only the facade) and the `Rng` seam; the pure package and the production path agree property-wise at the IO edge (RFC vectors both ways) |
 
 ## W4: networking (parallel after W4.1)

@@ -17,15 +17,16 @@ further C dependencies follow the FFI-first rule (CLAUDE.md,
 Unit 1 splits into two sub-units: 1a closes on the fixture suites, and
 1b closes on the verifier-strictness regressions and the X.509 suite.
 `crypto/pure` set the pattern. Unit 1 also lands the etheorem pins of
-§4.6: four primitives route there, and this package's shim is the
-interim fallback for a pin that does not build. Keccak-256 is the
-exception: no own shim exists for it, so a failed pin blocks W6.1
-(§4.6). The per-primitive outcome is recorded under the milestones.
+§4.6: it runs the build checks for the four families, pins each family
+that passes them, and keeps this package's shim as the interim fallback
+for one that fails. Keccak-256 is the exception: no own shim exists
+for it, so a failed pin blocks W6.1 (§4.6). The per-primitive outcome
+is recorded under the milestones.
 
 | Unit | Root deps | Deliverable | Done when |
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
-| 1a | W1.2 | the shim `c/p2pcrypto.c`, its `lakefile.lean` build target, the pins for `LeanHazmatSecp256k1`, `LeanHazmatP256`, `LeanHazmatSha256`, and `LeanHazmatKeccak` with the v4.34 build checks, `Backend/Error.lean`, and the binding modules `Backend/Sym.lean` and `Backend/Sign.lean`, with every `@&` argument written at the binding | the 1a milestones below pass |
+| 1a | W1.2 | the shim `c/p2pcrypto.c`, its `lakefile.lean` build target, the v4.34 build checks for `LeanHazmatSecp256k1`, `LeanHazmatP256`, `LeanHazmatSha256`, and `LeanHazmatKeccak` with a pin for each family that passes them, `Backend/Error.lean`, and the binding modules `Backend/Sym.lean` and `Backend/Sign.lean`, with every `@&` argument written at the binding | the 1a milestones below pass |
 | 1b | W1.2, 1a | the verifier strictness wired to its regressions, `Backend/X509.lean`, and the key-generation bindings of the §3.6 `IO` list | the 1b milestones below pass, and the root W3.2 row holds |
 | 2 | W3.1, 1 | the backend side of root W3.3: the facade file at the group root (`packages/crypto/Crypto.lean`) names the production implementations, the `Rng` seam lands beside it, and the cross-check runs at the IO edge | the root W3.3 row holds |
 
@@ -58,16 +59,17 @@ package's cross-check (W3.3), the one place that imports both stories.
 
 Milestones for 1a:
 
-- The etheorem pins: four Lake `require` lines, one per routed
-  family, each at a pinned rev with `subDir :=
-  packages/hazmat/<Pkg>`, and only single-family packages.
+- The etheorem pins: one Lake `require` line per family that passes
+  the build checks, each at a pinned rev with `subDir :=
+  packages/hazmat/<Pkg>`, and only single-family packages. Three pass
+  at the current rev ("Pin outcomes").
 - The build prerequisites: the CI runs the monorepo's `just`
-  vendor-fetch recipes for `LeanHazmatSecp256k1`,
-  `LeanHazmatKeccak`, and, on x86_64 Linux, the ISA-L unit of
-  `LeanHazmatSha256` (which needs `nasm`) before `lake build`. A
-  pkg-config check finds the system `libcrypto` for the OpenSSL
-  families. An actionable failure hint fires when either check
-  fails.
+  vendor-fetch recipes for the pinned families that need one,
+  `LeanHazmatSecp256k1` and `LeanHazmatKeccak`, before `lake build`.
+  When `LeanHazmatSha256` is pinned again, its ISA-L unit joins them
+  on x86_64 Linux (it needs `nasm`). A pkg-config check finds the
+  system `libcrypto` for the OpenSSL families. An actionable failure
+  hint fires when either check fails.
 - Ed25519: the RFC 8032 vectors of `keys-rfc8032.json`, the file's four
   entries (TEST 1, empty; TEST 2; TEST 1024; SHA(abc)): the derived
   public key matches `pubHex`, the signature matches `sigHex`, and a
@@ -120,10 +122,9 @@ The per-primitive record that unit 1 promises, at etheorem rev
   suite pins that behavior. The low-S rule of §4.6 rejects the twin, so
   secp256k1 verification stays on this package's verifier. The
   etheorem verifier also takes a 64-byte uncompressed key, while the
-  keys here cross as 33-byte compressed points. Root §4.6 says the
-  libsecp256k1 default "already rejects high-S, so the etheorem binding
-  and the rule agree"; at this rev the binding does not. The question
-  is open on etheorem/leanp2p#5.
+  keys here cross as 33-byte compressed points. The normalization is
+  deliberate: the execution layer has no low-S rule. Root §4.6 records
+  the split.
 - `LeanHazmatSha256`: not pinned; the interim fallback is in force. Its
   archive defines empty `__libc_csu_init` and `__libc_csu_fini` stubs,
   which win over the real ones in the toolchain's `libc_nonshared.a`.
@@ -134,7 +135,8 @@ The per-primitive record that unit 1 promises, at etheorem rev
   so the pin cannot stay in the build. SHA-256 routes to the backend
   binding until etheorem drops the stubs; the stubs exist to work
   around a system `-L` that the same lakefile puts ahead of the
-  toolchain's libraries.
+  toolchain's libraries. Reported as etheorem/etheorem#152; the fix is
+  etheorem/etheorem#153.
 
 Milestones for 1b:
 
