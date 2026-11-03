@@ -168,11 +168,19 @@ def print_identities(prefix: Path, leanc: Path, ar: Path) -> None:
 
 
 def core_flags() -> list[str]:
+    """Flags for upstream `snappy.cc`.
+
+    GCC 15 diagnoses ignored alignment attributes on the upstream
+    `std::pair<__m128i, __m128i>` construct. This list suppresses that
+    diagnostic after `-Werror`. Every other warning remains an error.
+    The sink, the shim, and the check drivers keep `PRODUCTION_FLAGS`
+    or `LANGUAGE_FLAGS`.
+    """
     flags: list[str] = []
     for flag in PRODUCTION_FLAGS:
         flags.append(flag)
         if flag == "-Werror":
-            flags.append("-Wno-error=ignored-attributes")
+            flags.append("-Wno-ignored-attributes")
     return flags
 
 

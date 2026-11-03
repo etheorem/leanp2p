@@ -285,7 +285,15 @@ the result to equal `native/vendor/snappy/`. The pristine control and
 the patched define-disabled build use matched configuration. The
 production build defines `LEANP2P_SNAPPY_BLOCK_ONLY`. The native
 compile uses `-Wall`, `-Wextra`, and `-Werror`, disables exceptions and
-RTTI, and enables function and data sections. The audit reads every
+RTTI, and enables function and data sections. GCC 15 diagnoses ignored
+alignment attributes on the upstream `std::pair<__m128i, __m128i>`
+construct. Upstream `snappy.cc` adds `-Wno-ignored-attributes` after
+`-Werror`. The diagnostic is suppressed only while compiling that file.
+Every other warning remains an error. `snappy-sinksource.cc`,
+`shim.cpp`, and the check drivers keep full `-Werror`. The upstream
+source and the SIMD behavior remain unchanged. This narrow suppression
+satisfies the repository warning-free build requirement. The pinned
+source stays unpatched. The audit reads every
 object and the archive. Omitting `snappy-stubs-internal.cc` stands only
 when those objects link and the audit finds no missing required symbol.
 The package architecture states the layout and the three builds.

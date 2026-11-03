@@ -72,18 +72,20 @@ private def traceCxxArgs (kind : ArchiveKind) : Array String := Id.run do
 
 /--
 Semantic flags for upstream `snappy.cc`.
-GCC 15 warns that `std::pair<__m128i, __m128i>` drops the alignment
-attribute on the template argument. `-Wno-error=ignored-attributes`
-follows `-Werror` in this list only. The warning stays visible. Every
-other warning remains an error. The sink unit, the shim, and the check
-drivers keep `traceCxxArgs` or `driverTraceArgs`.
+GCC 15 diagnoses ignored alignment attributes on the upstream
+`std::pair<__m128i, __m128i>` construct. `-Wno-ignored-attributes`
+follows `-Werror` in this list only. The diagnostic is suppressed
+only while compiling upstream `snappy.cc`. Every other warning remains
+an error. The sink unit, the shim, and the check drivers keep
+`traceCxxArgs` or `driverTraceArgs`. The upstream source and the SIMD
+paths stay unchanged.
 -/
 private def coreTraceCxxArgs (kind : ArchiveKind) : Array String := Id.run do
   let mut args : Array String := #[]
   for flag in traceCxxArgs kind do
     args := args.push flag
     if flag == "-Werror" then
-      args := args.push "-Wno-error=ignored-attributes"
+      args := args.push "-Wno-ignored-attributes"
   return args
 
 /--
