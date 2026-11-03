@@ -144,7 +144,15 @@ LEAN_EXPORT lean_obj_res leanp2p_hkdf_sha256(b_lean_obj_arg salt, b_lean_obj_arg
 /* ChaCha20-Poly1305 (RFC 8439)                                        */
 /* ------------------------------------------------------------------ */
 
+/* The one home of the Poly1305 tag length (RFC 8439 §2.8). The Lean side
+   reads it through `Backend.aeadTagLen`, and `chachaOpen` checks it
+   before `leanp2p_chacha_open` subtracts it. */
 #define TAG_LEN 16
+
+LEAN_EXPORT uint32_t leanp2p_aead_tag_len(lean_obj_arg unit) {
+    (void)unit;
+    return TAG_LEN;
+}
 
 /* Seal: the output is the ciphertext followed by the 16-byte tag. The
    key is 32 bytes and the nonce 12, proved on the Lean side. */
@@ -209,31 +217,42 @@ LEAN_EXPORT lean_obj_res leanp2p_x25519_public(b_lean_obj_arg priv) {
     return raw_public(EVP_PKEY_X25519, priv);
 }
 
+/* The one home of the Ed25519 signature length (RFC 8032 §5.1.6). The
+   Lean side reads it through `Backend.ed25519SigLen`, and
+   `ed25519Verify` checks it before `leanp2p_ed25519_verify` reads that
+   many bytes. */
+#define ED25519_SIG_LEN 64
+
+LEAN_EXPORT uint32_t leanp2p_ed25519_sig_len(lean_obj_arg unit) {
+    (void)unit;
+    return ED25519_SIG_LEN;
+}
+
 /* Ed25519 signs deterministically: the same seed and message give the
-   same 64 bytes. */
+   same signature. */
 LEAN_EXPORT lean_obj_res leanp2p_ed25519_sign(b_lean_obj_arg seed, b_lean_obj_arg msg) {
     EVP_PKEY *k = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, bptr(seed), 32);
     EVP_MD_CTX *m = EVP_MD_CTX_new();
-    lean_object *out = alloc_bytes(64);
-    size_t n = 64;
+    lean_object *out = alloc_bytes(ED25519_SIG_LEN);
+    size_t n = ED25519_SIG_LEN;
     int ok = k != NULL && m != NULL
         && EVP_DigestSignInit(m, NULL, NULL, NULL, k) == 1
         && EVP_DigestSign(m, lean_sarray_cptr(out), &n, bptr(msg), blen(msg)) == 1
-        && n == 64;
+        && n == ED25519_SIG_LEN;
     EVP_MD_CTX_free(m);
     EVP_PKEY_free(k);
     return some_or_free(ok, out);
 }
 
-/* The public key is 32 bytes and the signature 64, proved on the Lean
-   side. */
+/* The public key is 32 bytes and the signature `ED25519_SIG_LEN`,
+   checked on the Lean side. */
 LEAN_EXPORT uint8_t leanp2p_ed25519_verify(b_lean_obj_arg pub, b_lean_obj_arg msg,
                                            b_lean_obj_arg sig) {
     EVP_PKEY *k = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, NULL, bptr(pub), 32);
     EVP_MD_CTX *m = EVP_MD_CTX_new();
     int ok = k != NULL && m != NULL
         && EVP_DigestVerifyInit(m, NULL, NULL, NULL, k) == 1
-        && EVP_DigestVerify(m, bptr(sig), 64, bptr(msg), blen(msg)) == 1;
+        && EVP_DigestVerify(m, bptr(sig), ED25519_SIG_LEN, bptr(msg), blen(msg)) == 1;
     EVP_MD_CTX_free(m);
     EVP_PKEY_free(k);
     return ok;

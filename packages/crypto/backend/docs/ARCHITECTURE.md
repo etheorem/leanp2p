@@ -253,6 +253,19 @@ from its side. This pair's plan carries the unit.
 - **No `decide` over an FFI result.** An `@[extern]` value is opaque to
   the kernel, so the vector suites and the cross-check are the evidence
   (CLAUDE.md, "Proofs and tests"; PRINCIPLES 5.1).
+- **secp256k1 verification requires a low S, where go-libp2p accepts a
+  high S** (PRINCIPLES 2.1). The spec signs "using the standard Bitcoin
+  EC signature algorithm (BIP0062)" (`vendor/specs/peer-ids/peer-ids.md`,
+  lines 172 to 176), and BIP-62 requires a low S. go-libp2p verifies
+  through decred `secp256k1/v4` v4.4.1
+  (`vendor/go-libp2p/core/crypto/secp256k1.go`, lines 120 to 126).
+  There, `ParseDERSignature` rejects only an S of zero or past the
+  order, and `Verify` checks only zero; `Serialize` turns a high S low,
+  so a go peer signs low-S
+  ([`signature.go` at `76c0dc4f`](https://github.com/decred/dcrd/blob/76c0dc4f362b89331ff3bd46a3527f904181b8e0/dcrec/secp256k1/ecdsa/signature.go),
+  lines 98 to 105, 233, and 315 to 545). The spec wins, and the rule
+  costs no interop with a go signer. `Tests/BackendStrict.lean` checks
+  that the high-S twin of a valid signature fails.
 
 ## What the package must not depend on
 

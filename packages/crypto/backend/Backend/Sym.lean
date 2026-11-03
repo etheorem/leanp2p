@@ -116,8 +116,17 @@ def hkdfSha256 (salt ikm info : ByteArray) (len : Nat) : Except CryptoError Byte
 The AEAD of RFC 8439 §2.8. A sealed message is the ciphertext followed
 by the 16-byte Poly1305 tag. -/
 
-/-- The Poly1305 tag length (RFC 8439 §2.8). -/
-def aeadTagLen : Nat := 16
+@[extern "leanp2p_aead_tag_len"]
+private opaque aeadTagLenRaw : Unit → UInt32
+
+/-- The Poly1305 tag length (RFC 8439 §2.8), 16 bytes. The shim's
+`TAG_LEN` is the one home of the number, and this name reads it, as
+`rsaMinBits` reads the RSA range. -/
+def aeadTagLen : Nat := (aeadTagLenRaw ()).toNat
+
+/-- The longest plaintext, ciphertext, or associated data one call
+takes: OpenSSL counts AEAD lengths in a C `int`. -/
+def aeadMaxLen : Nat := 2 ^ 31 - 1
 
 @[extern "leanp2p_chacha_seal"]
 private opaque chachaSealRaw (key : @& ByteArray) (nonce : @& ByteArray) (ad : @& ByteArray)
@@ -128,18 +137,21 @@ private opaque chachaOpenRaw (key : @& ByteArray) (nonce : @& ByteArray) (ad : @
     (ct : @& ByteArray) : Option ByteArray
 
 /-- Seal `pt` with associated data `ad`: the ciphertext and then the tag,
-`pt.size + 16` bytes. `fault` only if the library fails, or for an
-input past 2 GiB, which OpenSSL's `int` lengths cannot carry. Pinned by
+`pt.size + aeadTagLen` bytes. A `pt` or `ad` past `aeadMaxLen` is
+`invalidInput`; otherwise `fault` only if the library fails. Pinned by
 the RFC 8439 §2.8.2 vector. -/
 def chachaSeal (key : Key32) (nonce : Nonce12) (ad pt : ByteArray) :
     Except CryptoError ByteArray :=
-  liftShim .fault (chachaSealRaw key.bytes nonce.bytes ad pt)
+  if pt.size > aeadMaxLen || ad.size > aeadMaxLen then .error .invalidInput
+  else liftShim .fault (chachaSealRaw key.bytes nonce.bytes ad pt)
 
-/-- Open a sealed message. A message shorter than the tag, or a tag that
-does not verify, is `authFailed`, the one failure arm of this call. -/
+/-- Open a sealed message. A `ct` or `ad` past `aeadMaxLen` is
+`invalidInput`. A message shorter than the tag, or a tag that does not
+verify, is `authFailed`. -/
 def chachaOpen (key : Key32) (nonce : Nonce12) (ad ct : ByteArray) :
     Except CryptoError ByteArray :=
-  if ct.size < aeadTagLen then .error .authFailed
+  if ct.size > aeadMaxLen || ad.size > aeadMaxLen then .error .invalidInput
+  else if ct.size < aeadTagLen then .error .authFailed
   else liftShim .authFailed (chachaOpenRaw key.bytes nonce.bytes ad ct)
 
 end Backend

@@ -44,11 +44,6 @@ namespace Tests
 
 open Bytes Backend
 
-private def unhexX (where_ hex : String) : IO ByteArray :=
-  match ofHex? hex with
-  | some b => pure b
-  | none => throw <| IO.userError s!"{where_}: no hex text: {hex}"
-
 /-- One DER element at `at_`: its tag and the bounds of its contents.
 Short lengths and the one- and two-byte long forms (X.690 §8.1.3); the
 spec certificates need no more. -/
@@ -102,7 +97,7 @@ private def specCertificates (r : Runner) : IO Unit := do
   let oid := "1.3.6.1.4.1.53594.1.1"
   for c in ← jArr file j "cases" do
     let name ← jStr file c "name"
-    let der ← unhexX file (← jStr file c "certHex")
+    let der ← unhex file (← jStr file c "certHex")
     r.check s!"TLS spec certificate {name}: the self-signature verifies" (selfSigned der)
     match inspect der oid with
     | .error e => r.check s!"TLS spec certificate {name}: inspect failed with {repr e}" false
@@ -119,7 +114,7 @@ private def specCertificates (r : Runner) : IO Unit := do
         r.check s!"TLS spec certificate {name}: the host-key signature verifies" ok
   -- A truncated certificate does not parse.
   let some first := (← jArr file j "cases").head? | throw <| IO.userError s!"{file}: no cases"
-  let der ← unhexX file (← jStr file first "certHex")
+  let der ← unhex file (← jStr file first "certHex")
   r.check "a truncated certificate is invalidCertificate"
     (failsWith .invalidCertificate (inspect (der.extract 0 (der.size - 1)) oid))
   r.check "a truncated certificate fails the self-signature check"
@@ -131,10 +126,10 @@ private def fixtureCertificates (r : Runner) : IO Unit := do
   let file := "backend-strictness.json"
   let j ← loadFixture file
   let oid ← jStr file j "requiredOid"
-  let value ← unhexX file (← jStr file j "extensionValueHex")
+  let value ← unhex file (← jStr file j "extensionValueHex")
   for c in ← jArr file j "certificates" do
     let name ← jStr file c "name"
-    let der ← unhexX file (← jStr file c "certHex")
+    let der ← unhex file (← jStr file c "certHex")
     let nb : Int := ← jNat file c "notBefore"
     let na : Int := ← jNat file c "notAfter"
     let why ← jStr file c "why"

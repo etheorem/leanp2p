@@ -41,8 +41,9 @@ namespace Backend
 
 /-- The shim's answer, as C lays it out: two objects, then two 64-bit
 scalars in declaration order. The times cross as the two's-complement
-bits of a signed 64-bit count. -/
-structure CertificateRaw where
+bits of a signed 64-bit count. The layout is the shim's, so the type
+stays private; callers read `Certificate`. -/
+private structure CertificateRaw where
   spki : ByteArray
   extension : ByteArray
   notBefore : UInt64

@@ -36,12 +36,6 @@ namespace Tests
 
 open Bytes Backend
 
-/-- The bytes a hex string spells; a malformed literal fails the run. -/
-private def unhex (where_ hex : String) : IO ByteArray :=
-  match ofHex? hex with
-  | some b => pure b
-  | none => throw <| IO.userError s!"{where_}: no hex text: {hex}"
-
 /-- A 32-byte key from hex; any other size fails the run. -/
 private def key32 (where_ hex : String) : IO Key32 := do
   match Key32.ofByteArray? (← unhex where_ hex) with

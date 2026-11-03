@@ -98,8 +98,13 @@ private opaque ed25519SignRaw (seed : @& ByteArray) (msg : @& ByteArray) : Optio
 private opaque ed25519VerifyRaw (pub : @& ByteArray) (msg : @& ByteArray)
     (sig : @& ByteArray) : Bool
 
-/-- The Ed25519 signature length (RFC 8032 §5.1.6). -/
-def ed25519SigLen : Nat := 64
+@[extern "leanp2p_ed25519_sig_len"]
+private opaque ed25519SigLenRaw : Unit → UInt32
+
+/-- The Ed25519 signature length (RFC 8032 §5.1.6), 64 bytes. The
+shim's `ED25519_SIG_LEN` is the one home of the number, and this name
+reads it, as `rsaMinBits` reads the RSA range. -/
+def ed25519SigLen : Nat := (ed25519SigLenRaw ()).toNat
 
 /-- The Ed25519 public key of a 32-byte seed (RFC 8032 §5.1.5). Every
 seed is valid, so `fault` is the only failure. -/

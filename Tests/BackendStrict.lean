@@ -35,11 +35,6 @@ namespace Tests
 -- namespace `Tests.Backend`, not the library.
 open Bytes _root_.Backend
 
-private def unhexS (where_ hex : String) : IO ByteArray :=
-  match ofHex? hex with
-  | some b => pure b
-  | none => throw <| IO.userError s!"{where_}: no hex text: {hex}"
-
 /-- The `ok` value of an IO computation, or a failed check and `none`. -/
 private def okOr {α : Type} (r : Runner) (name : String) (x : ExceptT CryptoError IO α) :
     IO (Option α) := do
@@ -51,12 +46,12 @@ private def strictness (r : Runner) : IO Unit := do
   -- Cross-type: the go fixtures, each fed to the other family's verifier.
   let go := "keys-go-libp2p.json"
   let gj ← loadJson go
-  let msg ← unhexS go (← jStr go gj "messageHex")
+  let msg ← unhex go (← jStr go gj "messageHex")
   let cases ← jArr go gj "cases"
   let field (name key : String) : IO ByteArray := do
     let some c ← cases.findM? (fun c => return (← jStr go c "name") == name)
       | throw <| IO.userError s!"{go}: no {name} case"
-    unhexS go (← jStr go c key)
+    unhex go (← jStr go c key)
   let rsaPub ← field "rsa" "pubRawHex"
   let rsaSig ← field "rsa" "sigHex"
   let ecPub ← field "ecdsa" "pubRawHex"
@@ -77,19 +72,19 @@ private def strictness (r : Runner) : IO Unit := do
   -- RSA sizes: the generated 1024-bit and 9216-bit keys.
   let fx := "backend-strictness.json"
   let fj ← loadFixture fx
-  let fmsg ← unhexS fx (← jStr fx fj "messageHex")
+  let fmsg ← unhex fx (← jStr fx fj "messageHex")
   for k in ← jArr fx fj "rsaOutOfRange" do
     let bits ← jNat fx k "bits"
-    let priv ← unhexS fx (← jStr fx k "privHex")
-    let spki ← unhexS fx (← jStr fx k "spkiHex")
-    let sig ← unhexS fx (← jStr fx k "sigHex")
+    let priv ← unhex fx (← jStr fx k "privHex")
+    let spki ← unhex fx (← jStr fx k "spkiHex")
+    let sig ← unhex fx (← jStr fx k "sigHex")
     r.check s!"strictness: a {bits}-bit RSA key fails verification" (!rsaVerify spki fmsg sig)
     r.check s!"strictness: a {bits}-bit RSA key does not derive" (failsWith .invalidKey (rsaPublicKey priv))
     r.check s!"strictness: a {bits}-bit RSA key does not sign" (failsWith .invalidKey (rsaSign priv fmsg))
 
   -- A SEC1 P-256 key that stores its public point compressed: the
   -- derivation still gives the uncompressed SPKI the verifiers take.
-  let cpriv ← unhexS fx (← jStr fx fj "p256CompressedSec1Hex")
+  let cpriv ← unhex fx (← jStr fx fj "p256CompressedSec1Hex")
   match p256PublicKey cpriv, ← (p256Sign cpriv fmsg).run with
   | .ok spki, .ok sig =>
     r.check "strictness: a compressed-point SEC1 key derives the 91-byte uncompressed SPKI"
@@ -101,7 +96,7 @@ private def strictness (r : Runner) : IO Unit := do
   -- A secp256k1 key under the P-256 verifier.
   let k1 ← jObj fx fj "secp256k1Spki"
   r.check "strictness: a secp256k1 SPKI key under the P-256 verifier fails"
-    (!p256Verify (← unhexS fx (← jStr fx k1 "spkiHex")) fmsg (← unhexS fx (← jStr fx k1 "sigHex")))
+    (!p256Verify (← unhex fx (← jStr fx k1 "spkiHex")) fmsg (← unhex fx (← jStr fx k1 "sigHex")))
 
   -- High S: a fresh low-S signature, then its twin with S replaced by n - S.
   let some scalar ← okOr r "strictness: secp256k1 generate" secp256k1Generate | return

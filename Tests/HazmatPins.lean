@@ -37,11 +37,6 @@ namespace Tests
 
 open Bytes
 
-private def unhexOrThrow (where_ hex : String) : IO ByteArray :=
-  match ofHex? hex with
-  | some b => pure b
-  | none => throw <| IO.userError s!"{where_}: no hex text: {hex}"
-
 def HazmatPins.run (r : Runner) : IO Unit := do
   r.section "etheorem hazmat pins" "etheorem/etheorem packages/hazmat at the pinned rev"
 
@@ -61,7 +56,7 @@ def HazmatPins.run (r : Runner) : IO Unit := do
     | .error e => throw <| IO.userError s!"backend SHA-256 failed: {repr e}"
   let file := "keys-go-libp2p.json"
   let j ← loadJson file
-  let msg ← unhexOrThrow file (← jStr file j "messageHex")
+  let msg ← unhex file (← jStr file j "messageHex")
   let hash ← sha256 msg
   let otherHash ← sha256 (ofString "abc")
   for c in ← jArr file j "cases" do
@@ -69,8 +64,8 @@ def HazmatPins.run (r : Runner) : IO Unit := do
     -- RSA has no routed family; only the two ECDSA cases parse a DER
     -- signature.
     unless name == "ecdsa" || name == "secp256k1" do continue
-    let pub ← unhexOrThrow file (← jStr file c "pubRawHex")
-    let (r', s') ← Ecdsa.derSig file (← unhexOrThrow file (← jStr file c "sigHex"))
+    let pub ← unhex file (← jStr file c "pubRawHex")
+    let (r', s') ← Ecdsa.derSig file (← unhex file (← jStr file c "sigHex"))
     let sr := Ecdsa.bytesOfNat 32 r'
     let ss := Ecdsa.bytesOfNat 32 s'
     match name with
