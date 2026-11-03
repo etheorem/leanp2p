@@ -71,6 +71,22 @@ private def traceCxxArgs (kind : ArchiveKind) : Array String := Id.run do
   return args
 
 /--
+Semantic flags for upstream `snappy.cc`.
+GCC 15 warns that `std::pair<__m128i, __m128i>` drops the alignment
+attribute on the template argument. `-Wno-error=ignored-attributes`
+follows `-Werror` in this list only. The warning stays visible. Every
+other warning remains an error. The sink unit, the shim, and the check
+drivers keep `traceCxxArgs` or `driverTraceArgs`.
+-/
+private def coreTraceCxxArgs (kind : ArchiveKind) : Array String := Id.run do
+  let mut args : Array String := #[]
+  for flag in traceCxxArgs kind do
+    args := args.push flag
+    if flag == "-Werror" then
+      args := args.push "-Wno-error=ignored-attributes"
+  return args
+
+/--
 Absolute include paths for one archive.
 `buildO` treats these as `weakArgs`, so the object trace follows the
 header bytes rather than the path spelling.
@@ -191,6 +207,7 @@ private def buildParts (pkg : Package) (kind : ArchiveKind) : FetchM (Job (Array
   let outDir := (pkg.buildDir / "snappy" / kind.dirName).normalize
   let weakArgs := weakCxxArgs srcDir includeDir
   let traceArgs := traceCxxArgs kind
+  let coreTraceArgs := coreTraceCxxArgs kind
   let stem := kind.dirName
   logVerbose s!"cxx: {cxx.command}"
   logVerbose s!"cxx-target: {cxx.machine}"
@@ -199,7 +216,7 @@ private def buildParts (pkg : Package) (kind : ArchiveKind) : FetchM (Job (Array
     (outDir / s!"snappy.{stem}.o")
     (srcDir / "snappy.cc")
     (coreHeaders srcDir ++ supportHeaders includeDir)
-    cxx weakArgs traceArgs
+    cxx weakArgs coreTraceArgs
   let sinkO ← compileUnit
     (outDir / s!"snappy-sinksource.{stem}.o")
     (srcDir / "snappy-sinksource.cc")

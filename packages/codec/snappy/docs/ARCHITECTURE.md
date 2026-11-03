@@ -367,6 +367,14 @@ The ordinary build is offline. The native compile uses `-Wall`,
 enables function and data sections so the linker can drop an unused
 upstream path.
 
+Upstream `snappy.cc` adds one flag after `-Werror`:
+`-Wno-error=ignored-attributes`. GCC 15 warns that
+`std::pair<__m128i, __m128i>` drops the alignment attribute on the
+template argument. The warning stays visible. Every other warning
+remains an error. `snappy-sinksource.cc`, `shim.cpp`, and the check
+drivers keep full `-Werror`. The pinned sources and the SIMD paths
+stay unchanged.
+
 The audit reads every object, and it reads the archive. None of them
 may carry a live unresolved reference to a `std::` runtime facility,
 a global `operator new`, a global `operator delete`, `__cxa_*`, or
