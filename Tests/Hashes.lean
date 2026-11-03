@@ -1,4 +1,5 @@
 import Tests.Support
+import Bytes
 import CryptoPure
 
 /-!
@@ -50,14 +51,14 @@ def Hashes.hmacKeyLengths : List Nat :=
 error, so it throws. -/
 private def hexField (file : String) (j : Lean.Json) (k : String) : IO (List Nat) := do
   let h ← jStr file j k
-  match Mock.Bytes.ofHex? h with
-  | some b => pure (Mock.Bytes.toNatList b)
+  match Bytes.ofHex? h with
+  | some b => pure (Bytes.toNatList b)
   | none => throw <| IO.userError s!"{file}: bad hex in {k}"
 
 /-- Checks that `digestB` agrees with the model and has the expected size. -/
 private def pinHolds (digest : List Nat → List Nat) (digestB : ByteArray → ByteArray)
     (size : Nat) (msg : ByteArray) : Bool :=
-  let viaModel := Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg))
+  let viaModel := Bytes.ofNatList (digest (Bytes.toNatList msg))
   digestB msg == viaModel && (digestB msg).size == size
 
 /-- Checks a digest vector through both forms of the pure copy: the
@@ -65,7 +66,7 @@ model `digest` and its `ByteArray` form `digestB`. -/
 private def bothForms (digest : List Nat → List Nat) (digestB : ByteArray → ByteArray)
     (input expected : List Nat) : Bool :=
   digest input == expected &&
-    digestB (Mock.Bytes.ofNatList input) == Mock.Bytes.ofNatList expected
+    digestB (Bytes.ofNatList input) == Bytes.ofNatList expected
 
 /-- Runs the RFC, NIST, and multihash vectors, the HKDF cap checks, and
 the length sweeps. -/
@@ -121,8 +122,8 @@ multihash-examples.json (sha1, sha2-256); NIST SHA-256/SHA-1 examples"
        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"),
      ("sha1", Sha1.digest, Sha1.digestB, "abc", "a9993e364706816aba3e25717850c26c9cd0d89d")]
   for (alg, digest, digestB, msg, want) in nist do
-    let wantBytes := (Mock.Bytes.ofHex? want).map Mock.Bytes.toNatList
-    let input := Mock.Bytes.toNatList (Mock.Bytes.ofString msg)
+    let wantBytes := (Bytes.ofHex? want).map Bytes.toNatList
+    let input := Bytes.toNatList (Bytes.ofString msg)
     r.check s!"{alg} nist \"{msg}\"" (wantBytes.any (bothForms digest digestB input))
 
   -- The multihash value is the code byte, the length byte, then the digest.
@@ -130,7 +131,7 @@ multihash-examples.json (sha1, sha2-256); NIST SHA-256/SHA-1 examples"
   let mh ← loadJson mhFile
   for c in (← jArr mhFile mh "cases") do
     let alg ← jStr mhFile c "algorithm"
-    let msg := Mock.Bytes.toNatList (Mock.Bytes.ofString (← jStr mhFile c "input"))
+    let msg := Bytes.toNatList (Bytes.ofString (← jStr mhFile c "input"))
     for enc in (← jArr mhFile c "encodings") do
       if (← jStr mhFile enc "kind") == "hex" then
         let digestBytes := (← hexField mhFile enc "value").drop 2
@@ -146,7 +147,7 @@ multihash-examples.json (sha1, sha2-256); NIST SHA-256/SHA-1 examples"
   let sweep (name : String) (lengths : List Nat) (mult : Nat) (digest : List Nat → List Nat)
       (digestB : ByteArray → ByteArray) (size : Nat) : IO Unit := do
     let bad := lengths.filter fun n =>
-      !pinHolds digest digestB size (Mock.Bytes.ofNatList (Hashes.pattern n mult))
+      !pinHolds digest digestB size (Bytes.ofNatList (Hashes.pattern n mult))
     r.check s!"{name} digestB pin and size over {lengths.length} lengths (failing: {bad})"
       bad.isEmpty
   sweep "sha256" Hashes.sha256Lengths 31 Sha256.digest Sha256.digestB Sha256.digestSize

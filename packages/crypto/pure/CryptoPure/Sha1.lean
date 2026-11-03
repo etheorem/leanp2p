@@ -1,6 +1,6 @@
 import CryptoPure.Constants
 import CryptoPure.Preprocess
-import CryptoPure.Mock.Bytes
+import Bytes
 
 /-!
 # SHA-1
@@ -63,12 +63,12 @@ def digest (msg : List Nat) : List Nat :=
 /-- The digest over `ByteArray`, using the model digest and the byte
 conversions (`digestBEq`). -/
 def digestB (msg : ByteArray) : ByteArray :=
-  Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg))
+  Bytes.ofNatList (digest (Bytes.toNatList msg))
 
 /-- Converting to model bytes, hashing, and converting back gives
 `digestB`. -/
 theorem digestBEq (msg : ByteArray) :
-    digestB msg = Mock.Bytes.ofNatList (digest (Mock.Bytes.toNatList msg)) :=
+    digestB msg = Bytes.ofNatList (digest (Bytes.toNatList msg)) :=
   rfl
 
 /-- Every digest is 20 bytes. -/

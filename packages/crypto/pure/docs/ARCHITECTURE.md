@@ -28,7 +28,6 @@ none does today. The constant-time code stays in the C shim of
 | `CryptoPure/Sha1.lean` | the 160-bit digest for multihash framing, using `UInt32` words and shared preprocessing (see "Decisions") |
 | `CryptoPure/Hmac.lean` | generic HMAC and SHA-256/SHA-512 functions, with reduction, long-key, and length theorems |
 | `CryptoPure/Hkdf.lean` | generic `extract` and `expand` and SHA-256 functions, with reduction, length, and prefix theorems |
-| `CryptoPure/Mock/Bytes.lean` | four temporary byte conversions for the package and its suite, until W1.2 merges (see "Working ahead of W1.2") |
 
 The package keeps the spike's one-module-per-primitive shape
 (`Crypto/{Sha256,Sha512,Sha1,Hmac,Hkdf}.lean`; ARCHITECTURE §10,
@@ -193,19 +192,13 @@ comparison needs a total function on this side.
   comparison with the production path. Compression correctness for
   every input and cryptographic security remain outside these proofs.
 
-## Working ahead of W1.2
+## Byte conversions
 
-Until W1.2 (#2) merges, the package uses `CryptoPure/Mock/Bytes.lean`
-under the `CryptoPure.Mock.Bytes` namespace, as `RULES.md` permits.
-The mock imports no real dependency. Its four `opaque` functions are
-`ofNatList`, `toNatList`, `ofString`, and `ofHex?`. Their executable
-bodies let the suite run, while their opacity keeps proofs from
-depending on those bodies. The mock adds no axiom.
-
-When W1.2 merges, replace the mock module with `import Bytes` and change
-`Mock.Bytes.` to `Bytes.` at each use. Rerun the build, both test modes,
-the import lint, and the axiom audit. `RULES.md` requires this
-integration within twelve hours of the merge.
+The `digestB` forms import `Bytes` for `ofNatList` and `toNatList`.
+The suite also uses `Bytes.ofString` and `Bytes.ofHex?` to read its
+vectors. These are the real conversions from W1.2 (#2), and the
+digest pin theorems use them directly. The package carries no mock or
+assumed dependency fact.
 
 ## What the package must not depend on
 

@@ -2,6 +2,7 @@ import Tests.Support
 import Tests.Vectors
 import Tests.Concurrency
 import Tests.Protobuf
+import Tests.Bytes
 import Tests.Hashes
 
 /-!
@@ -20,5 +21,6 @@ def main : IO UInt32 := do
   Tests.Vectors.run r
   Tests.Concurrency.run r
   Tests.Protobuf.run r
+  Bytes.runTests r
   Tests.Hashes.run r
   r.summary

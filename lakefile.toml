@@ -39,7 +39,7 @@ globs = ["Conc.*"]
 [[lean_lib]]
 name = "Bytes"
 srcDir = "packages/base/bytes"
-roots = ["Bytes"]
+globs = ["Bytes.*"]
 
 [[lean_lib]]
 name = "Varint"
