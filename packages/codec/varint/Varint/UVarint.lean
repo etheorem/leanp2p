@@ -221,6 +221,8 @@ theorem lengthEncodeLe (v : UVarint) : (encode v).length ≤ maxBytes := by
 
 /-! ## The instances -/
 
+/-- The model codec of `UVarint`. Both fields are the module functions
+above. -/
 instance : Codec UVarint where
   encode := encode
   decode? := decode?
@@ -238,6 +240,8 @@ theorem decodeEncodeSuffix (v : UVarint) (rest : List Nat) :
   simp only [bind, Except.bind, v.isLt, ↓reduceDIte]
   rfl
 
+/-- The laws hold with no hypothesis: the type carries the budget
+fact, and the decoder accepts minimal forms only. -/
 instance : LawfulCodec UVarint where
   decodeEncode v := by
     -- `Codec.encode` and `Codec.decode?` unfold to the module functions.
