@@ -118,6 +118,16 @@ def loadJson (name : String) : IO Json := do
   | .ok j => pure j
   | .error e => throw <| IO.userError s!"{path}: {e}"
 
+/-- Read and parse a generated fixture out of `Tests/fixtures`. Fixtures
+hold random material (keys, certificates) that no rerun reproduces, so
+they live outside the provenance-gated vector corpus; each file records
+the script and the tool that made it. -/
+def loadFixture (name : String) : IO Json := do
+  let path := System.FilePath.mk "Tests/fixtures" / name
+  match Json.parse (← IO.FS.readFile path) with
+  | .ok j => pure j
+  | .error e => throw <| IO.userError s!"{path}: {e}"
+
 private def asIO (file : String) (e : Except String α) : IO α :=
   match e with
   | .ok a => pure a

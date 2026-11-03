@@ -5,6 +5,11 @@ import Tests.Protobuf
 import Tests.Bytes
 import Tests.Varint
 import Tests.Streams
+import Tests.Backend
+import Tests.HazmatPins
+import Tests.BackendX509
+import Tests.BackendStrict
+import Tests.BackendSoak
 
 /-!
 # Test entry point
@@ -25,4 +30,9 @@ def main : IO UInt32 := do
   Bytes.runTests r
   Tests.Varint.run r
   Tests.Streams.run r
+  Tests.Backend.run r
+  Tests.HazmatPins.run r
+  Tests.BackendX509.run r
+  Tests.BackendStrict.run r
+  Tests.BackendSoak.run r
   r.summary

@@ -23,10 +23,11 @@ its constraints.
 | Module | Holds, and why |
 |---|---|
 | `c/p2pcrypto.c` | the shim, one C file over the OpenSSL 3 EVP surface; the spike's is about 770 lines, and it stays auditable in one sitting (PRINCIPLES 4.1) |
-| `Backend/Error.lean` | `CryptoError`, the one error inductive of the package (§3.5) |
+| `Backend/Error.lean` | `CryptoError`, the one error inductive of the package (§3.5), and `liftShim`, the one lift of a shim `Option` into it |
+| `Backend/Sized.lean` | `Key32` and `Nonce12`, the proof-carrying newtypes (§3.7) that cross the FFI edge; `Sym` and `Sign` both take them, so they sit below both |
 | `Backend/Sym.lean` | random bytes, the SHA-1 and SHA-512 digest bindings, the interim SHA-256 binding, HMAC, HKDF, and ChaCha20-Poly1305 seal and open |
-| `Backend/Sign.lean` | X25519 derivation and DH, plus derive, sign, and verify of the own-bound key types, Ed25519 and RSA, and the interim fallback bindings for secp256k1 and ECDSA P-256 |
-| `Backend/X509.lean` | the libp2p certificate extension helpers of the tls.md shape |
+| `Backend/Sign.lean` | X25519 derivation and DH, plus derive, sign, and verify of the own-bound key types, Ed25519 and RSA, the interim fallback bindings for secp256k1 and ECDSA P-256, the type-specific DER re-encode of an RSA or P-256 private key (`rsaPkcs1`, `p256Sec1`), and key generation for all five types |
+| `Backend/X509.lean` | the certificate helpers of the tls.md shape: `inspect` reads the SPKI, the value of one extension the caller names by OID, and the validity times; `selfSigned` checks the signature; the helpers know no protocol, so the caller passes the libp2p OID |
 | `Backend.lean` | the package root, one import line per submodule; production callers import `Crypto` instead (§3.6) |
 
 The bindings split into three modules because they carry three
@@ -39,9 +40,21 @@ in the `Backend` namespace.
 The shim compiles through a Lake target in this package's `lakefile.lean`.
 This is the standing example where `lakefile.lean` is permitted, because
 the declarative form cannot express a C build (PRINCIPLES 4.2; CLAUDE.md,
-"Configure, don't integrate"). OpenSSL 3 is the shim's library today,
-and further C dependencies follow the same FFI-first path (CLAUDE.md,
-"Dependencies").
+"Configure, don't integrate"). A Lake configuration is one file per
+package, so this directory is a nested Lake package, and the root
+`lakefile.toml` requires it by path. The checkout stays one repository
+at one rev, so the nesting adds no version skew (§2). The archive
+`libleanp2p_backend` crosses the `require`; link arguments do not.
+
+OpenSSL 3 is the shim's library today, and further C dependencies
+follow the same FFI-first path (CLAUDE.md, "Dependencies"). The shim
+compiles against the system OpenSSL 3 headers, which pkg-config
+locates; the target fails with an install hint when they are absent.
+It links against the static OpenSSL 3 `libcrypto.a` that the Lean
+toolchain bundles and links into every executable (3.6.0 on v4.34.0),
+so `lean-toolchain` pins the runtime library. The root names no system
+`-L`: the toolchain's `lld` would then find the system C library ahead
+of the toolchain's glibc and fail the link.
 
 ## Public surface
 
@@ -55,7 +68,7 @@ routed four. The binding type of each follows
 |---|---|---|
 | Ed25519 derive, sign, and verify | pure | Ed25519 signs deterministically (§3.6) |
 | X25519 public-key derivation and DH | pure | deterministic (§3.6) |
-| RSA derive, sign, verify | all pure | RSASSA-PKCS1-v1_5 signs deterministically (§3.6) |
+| RSA derive, re-encode, sign, verify | all pure | RSASSA-PKCS1-v1_5 signs deterministically, and the PKCS#1 re-encode depends on the key alone (§3.6) |
 | ChaCha20-Poly1305 seal and open | pure | deterministic (§3.6) |
 | X.509 parse and extension helpers | pure | one certificate parses to the same answer every time |
 | random bytes, key generation | `IO` | randomness (§3.6) |
@@ -64,11 +77,15 @@ Four families route to the etheorem hazmat packages, and this package
 writes no second shim for them. The facade does the routing (§3.6):
 secp256k1 goes to `LeanHazmatSecp256k1` (libsecp256k1), ECDSA P-256 to
 `LeanHazmatP256` (OpenSSL), SHA-256 to `LeanHazmatSha256` (OpenSSL and
-ISA-L), and keccak-256 to `LeanHazmatKeccak` (keccak-tiny). The
-libsecp256k1 default already rejects high-S, so the etheorem binding
-and the low-S rule of §4.6 agree. The integration facts constrain the
-split: the etheorem monorepo pins Lean v4.29.1 against this repo's
-v4.34, the license is LGPL-3.0 with a contributor agreement, and the
+ISA-L), and keccak-256 to `LeanHazmatKeccak` (keccak-tiny). Two of the
+routes do not hold at the current pin, and the plan's "Pin outcomes"
+records both: the `LeanHazmatSha256` archive breaks the executables
+that link it, and the `LeanHazmatSecp256k1` verifier turns a high S
+into a low S before it verifies, so it accepts what the low-S rule of
+§4.6 rejects. secp256k1 verification and SHA-256 therefore stay on this
+package's bindings. The integration facts constrain the
+split: the etheorem monorepo pins Lean v4.34.1 against this repo's
+v4.34.0, the license is LGPL-3.0 with a contributor agreement, and the
 packages are monorepo-resident, with per-package publication repos
 promised but not yet present.
 
@@ -112,9 +129,16 @@ compares the pure copies with the production path at the IO edge.
 
 Boundary contracts sit on the surface. A verifier accepts only the key
 type and size it claims: P-256 SPKI only, RSA of 2048 to 8192 bits only,
-secp256k1 low-S signatures only (§4.6). The X.509 helpers reject a
-certificate with an unknown critical extension, and only the libp2p
-extension may be critical. The helpers return the NotBefore and NotAfter
+secp256k1 low-S signatures only (§4.6), and the P-256 key as the SPKI of
+an uncompressed point, the one form Go accepts. The X.509 helpers reject
+a certificate with an unknown critical extension (tls.md, "the endpoint
+does not understand"): a critical extension passes when it is the libp2p
+extension or one OpenSSL understands (`X509_supported_extension`), as
+go-libp2p leaves the known ones to Go's `crypto/x509`
+(`vendor/go-libp2p/p2p/security/tls/crypto.go`, lines 171 to 184). Any extension
+that appears twice is rejected (RFC 5280 §4.2). The self-signature check
+accepts SHA-256, SHA-384, SHA-512, and Ed25519 signatures, the set Go
+accepts, and it applies the RSA range to an RSA subject key. The helpers return the NotBefore and NotAfter
 times instead of judging them, and the caller compares them against the
 `Clock` seam (§3.1), so the pure binding never reads the clock. A failed
 ChaCha20-Poly1305 open is an authentication failure, and `CryptoError`
@@ -123,7 +147,8 @@ keeps a backend fault separate (§3.5, §4.9).
 
 **Trust boundary.** Every `@[extern]` declaration's docstring names its
 empirical trust assumption: which library, at which pin, and which
-vector suite validates it. The etheorem packages' own suites validate
+vector suite validates it. For the own-bound bindings the library is
+the toolchain's bundled OpenSSL 3, pinned by `lean-toolchain`. The etheorem packages' own suites validate
 the four routed primitives, and the RFC and fixture suites validate the
 own-bound ones. The declarations are `opaque`, and the assumptions are
 visible under `#axioms`. A verifier binding folds every malformed

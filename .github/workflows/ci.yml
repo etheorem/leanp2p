@@ -17,6 +17,26 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install elan and the toolchain
+        # lean-action without its gates: the etheorem pins need their
+        # native sources fetched between the clone and the build.
+        uses: leanprover/lean-action@v1
+        with:
+          build: false
+          test: false
+
+      - name: Fetch the etheorem pins and their native sources
+        # Any Lake command loads the workspace and clones the pinned
+        # packages; `lake env true` does that and nothing else. The
+        # script then runs the monorepo's own vendor recipes in each
+        # clone (packages/crypto/backend/docs/PLAN.md, milestones for
+        # 1a). The OpenSSL 3 headers of the backend shim come from
+        # libssl-dev, which the runner image carries.
+        run: |
+          sudo apt-get install -y --no-install-recommends just
+          lake env true
+          scripts/hazmat-vendor.sh
+
       - name: Run lake build and lake test
         # lean-action runs the first two gates: lake
         # build, then lake test. The remaining three appear as explicit
