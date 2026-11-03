@@ -3,13 +3,15 @@ import Bytes
 import Snappy
 
 /-!
-# Snappy raw blocks (unit W6.2, Phases 3A, 3B, and 4A)
+# Snappy raw blocks (unit W6.2, Phases 3A through 4B)
 
 Compression and bounded decompression against `google/snappy` 1.3.1.
 The empty block and `hello hello hello hello` use the bytes pinned by
 `native/check/core.cpp`. Phase 4A adds small malformed blocks and cap
-rejections. Each borrowed input is snapshotted as a `List Nat` before
-the extern call.
+rejections. Phase 4B reads the Go v0.0.4 raw-block fixture, round-trips
+deterministic inputs through the public API, and repeats short calls.
+Each borrowed input is snapshotted as a `List Nat` before the extern
+call.
 -/
 
 set_option autoImplicit false
@@ -17,6 +19,7 @@ set_option autoImplicit false
 namespace Tests
 
 open Bytes
+open Lean (Json)
 
 /--
 Read the input bytes after `result` exists.
@@ -103,7 +106,126 @@ private def checkRound (r : Runner) (name : String) (input : ByteArray) : IO Uni
   | .ok compressed =>
     checkDecompress r s!"{name} round trip" compressed input.size (succeedsWith input)
 
-/-- Phase 3A compression, Phase 3B bounds, and Phase 4A hostile blocks. -/
+/-- Fail when a provenance or record field carries a different string. -/
+private def expectStr (file field got expected : String) : IO Unit := do
+  unless got == expected do
+    throw <| IO.userError s!"{file}: {field} expected {expected}, observed {got}"
+
+/-- The fixture names the Go raw-block tool, module, version, and API. -/
+private def checkProvenance (file : String) (j : Json) : IO Unit := do
+  let p ← jObj file j "_provenance"
+  expectStr file "_provenance.generatedBy" (← jStr file p "generatedBy")
+    "packages/codec/snappy/tools/go-fixtures/main.go"
+  expectStr file "_provenance.module" (← jStr file p "module") "github.com/golang/snappy"
+  expectStr file "_provenance.version" (← jStr file p "version") "v0.0.4"
+  expectStr file "_provenance.api" (← jStr file p "api") "Encode/Decode"
+  expectStr file "_provenance.format" (← jStr file p "format")
+    "raw Snappy block, not framed stream"
+
+/-- Go `Encode` output decompresses to the committed input. -/
+private def checkGoCase (r : Runner) (file : String) (c : Json) : IO Unit := do
+  let name ← jStr file c "name"
+  let input ← unhex s!"{file} {name} inputHex" (← jStr file c "inputHex")
+  let compressed ← unhex s!"{file} {name} compressedHex" (← jStr file c "compressedHex")
+  checkDecompress r s!"go {name}" compressed input.size (succeedsWith input)
+
+/--
+The recorded compressed bytes are a regression of this binding.
+`Snappy.compress` still emits them, and `Snappy.decompress` returns the input.
+-/
+private def checkNativeCase (r : Runner) (file : String) (c : Json) : IO Unit := do
+  let name ← jStr file c "name"
+  expectStr file s!"nativeEncode {name} record" (← jStr file c "record")
+    "native backend regression"
+  let input ← unhex s!"{file} {name} inputHex" (← jStr file c "inputHex")
+  let compressedHex ← jStr file c "compressedHex"
+  let compressed ← unhex s!"{file} {name} compressedHex" compressedHex
+  checkExact r s!"native {name}" input compressedHex
+  checkDecompress r s!"native {name} decode" compressed input.size (succeedsWith input)
+
+/-- Read `Tests/fixtures/snappy-go-v0.0.4.json` and check both directions. -/
+private def checkGoFixture (r : Runner) : IO Unit := do
+  let file := "snappy-go-v0.0.4.json"
+  let j ← loadFixture file
+  checkProvenance file j
+  for c in ← jArr file j "goEncode" do
+    checkGoCase r file c
+  for c in ← jArr file j "nativeEncode" do
+    checkNativeCase r file c
+
+/-- The next xorshift64* state. The multiply is not part of this step. -/
+private def xorshift64 (s : UInt64) : UInt64 :=
+  let s := s ^^^ (s >>> 12)
+  let s := s ^^^ (s <<< 25)
+  s ^^^ (s >>> 27)
+
+/-- The xorshift64* sample of a state. The state itself stays unchanged. -/
+private def sample (s : UInt64) : UInt64 :=
+  s * (0x2545F4914F6CDD1D : UInt64)
+
+/-- `n` varied bytes from a fixed seed. Each byte comes from `sample`. -/
+private def genBytes (n : Nat) : ByteArray := Id.run do
+  let mut state : UInt64 := 0xA5A5A5A5A5A5A5A5
+  let mut out : ByteArray := ByteArray.empty
+  for _ in [0:n] do
+    state := xorshift64 state
+    let drawn := sample state
+    out := out.push ((drawn >>> 56).toUInt8)
+  return out
+
+/--
+Lengths around a literal-length boundary and around one block.
+`kBlockSize` is 65536. 65535 fits in one block and is one byte short.
+65536 is exactly one block. 65537 begins a second block. 131073 is two
+blocks plus one byte.
+-/
+private def generatedLengths : List Nat :=
+  [1, 12, 60, 61, 256, 4096, 65535, 65536, 65537, 131073]
+
+/-- Compress, repeat the compression, and decompress at the exact cap. -/
+private def checkGenerated (r : Runner) (n : Nat) : IO Unit := do
+  let input := genBytes n
+  let name := s!"generated {n}"
+  let (before, after, result) := snapshotAndCompress input
+  r.check s!"{name} input unchanged" (before == after)
+  match result with
+  | .error _ =>
+    r.check s!"{name} compresses" false
+  | .ok compressed =>
+    let again := Snappy.compress input
+    let afterAgain := bytesAfter again input
+    r.check s!"{name} input unchanged again" (before == afterAgain)
+    match again with
+    | .ok repeated =>
+      r.check s!"{name} repeat" (compressed == repeated)
+    | .error _ =>
+      r.check s!"{name} repeat" false
+    checkDecompress r s!"{name} round trip" compressed input.size (succeedsWith input)
+
+/--
+32 iterations. Each one checks its result. The blocks stay short, so the
+loop exercises the extern and the result pair without a long CI run.
+The generated lengths cover the block boundary separately.
+-/
+private def repeatCount : Nat := 32
+
+/-- Repeat a successful round trip, a malformed block, and a small cap. -/
+private def checkRepeats (r : Runner) (hello : ByteArray) (helloBlock : ByteArray) : IO Unit := do
+  let bad := ofNatList [0x01, 0x00]
+  for i in [0:repeatCount] do
+    let (before, after, result) := snapshotAndCompress hello
+    r.check s!"repeat compress {i} input unchanged" (before == after)
+    match result with
+    | .error _ =>
+      r.check s!"repeat compress {i}" false
+    | .ok compressed =>
+      checkDecompress r s!"repeat decompress {i}" compressed hello.size (succeedsWith hello)
+    checkDecompress r s!"repeat malformed {i}" bad 1
+      (failsWith Snappy.Error.invalidCompressedData)
+    checkDecompress r s!"repeat over cap {i}" helloBlock (hello.size - 1)
+      (failsWith Snappy.Error.outputTooLarge)
+
+/-- Phase 3A compression, Phase 3B bounds, Phase 4A hostile blocks, and Phase 4B coverage. -/
 def Snappy.run (r : Runner) : IO Unit := do
   r.section "snappy" "google/snappy 1.3.1 raw block (native/check/core.cpp)"
   let hello := ofString "hello hello hello hello"
@@ -185,5 +307,12 @@ def Snappy.run (r : Runner) : IO Unit := do
   checkRound r "hello hello hello hello" hello
   checkRound r "repetitive" repetitive
   checkRound r "binary" binary
+  checkGoFixture r
+  for n in generatedLengths do
+    checkGenerated r n
+  match ← parsedHex r "repeat hello block" "171468656c6c6f20420600" with
+  | none => pure ()
+  | some helloBlock =>
+    checkRepeats r hello helloBlock
 
 end Tests
