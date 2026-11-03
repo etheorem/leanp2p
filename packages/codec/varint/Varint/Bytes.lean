@@ -14,7 +14,7 @@ set_option autoImplicit false
 
 namespace Varint
 
-open Varint.Mock.Bytes
+open Bytes
 
 /-- The wire bytes of a varint. -/
 def encodeB (v : UVarint) : ByteArray :=

@@ -15,7 +15,7 @@ set_option autoImplicit false
 
 namespace Varint
 
-open Varint.Mock.Bytes
+open Bytes
 
 /-- The accepted-input split: a successful decode consumed exactly the
 encoding of its value, and the rest is the input after it. No other

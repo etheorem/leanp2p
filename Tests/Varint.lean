@@ -1,6 +1,5 @@
 import Tests.Support
 import Varint
-import Varint.Mock.Bytes
 
 /-!
 # Varint suite (unit W2.1)
@@ -12,15 +11,14 @@ multiformats `unsigned-varint` README).
 The theorems of `Varint` prove the round trip and the split on the
 model. This suite pins the production decoder to the model through the
 generic harness of `base/bytes`, and it checks the wire bytes against
-the spec. W1.2 is still open, so the harness calls go to the mock in
-`Varint.Mock.Bytes`; the names follow etheorem/leanp2p#30.
+the spec.
 -/
 
 set_option autoImplicit false
 
 namespace Tests
 
-open Varint.Mock.Bytes Varint
+open Bytes Varint
 
 /-- A varint for a value inside the budget; `none` outside it. -/
 private def uvarint? (n : Nat) : Option UVarint :=

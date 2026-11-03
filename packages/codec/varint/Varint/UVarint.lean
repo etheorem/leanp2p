@@ -1,4 +1,4 @@
-import Varint.Mock.Bytes
+import Bytes
 
 /-!
 # The unsigned varint
@@ -33,7 +33,7 @@ set_option autoImplicit false
 
 namespace Varint
 
-open Varint.Mock.Bytes
+open Bytes
 
 /-- The byte budget of a varint: at most 9 bytes. Every other module
 takes the budget from here (PRINCIPLES 1.5). -/
