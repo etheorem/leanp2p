@@ -39,16 +39,16 @@ def Race.settle {ρ : Type} (race : Race ρ) (ready : Option ρ) : Race ρ :=
   | .expired, none => .expired
 
 /-- A finished race stays finished. -/
-theorem Race.settle_finished {ρ : Type} (r : ρ) (ready : Option ρ) :
+theorem Race.settleFinished {ρ : Type} (r : ρ) (ready : Option ρ) :
     (Race.finished r).settle ready = .finished r := rfl
 
 /-- The work wins a tie: an answer in the channel turns the expiry into
 that answer. -/
-theorem Race.settle_tie {ρ : Type} (r : ρ) :
+theorem Race.settleTie {ρ : Type} (r : ρ) :
     (Race.expired).settle (some r) = .finished r := rfl
 
 /-- The deadline expires only when the timer won and no answer waits. -/
-theorem Race.settle_eq_expired {ρ : Type} (race : Race ρ) (ready : Option ρ) :
+theorem Race.settleEqExpired {ρ : Type} (race : Race ρ) (ready : Option ρ) :
     race.settle ready = .expired ↔ race = .expired ∧ ready = none := by
   cases race <;> cases ready <;> simp [Race.settle]
 

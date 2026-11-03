@@ -62,11 +62,11 @@ def clearDue (fired current : Option Nat) : Option Nat :=
   if current == fired then none else current
 
 /-- The wake clears the due time that it served. -/
-theorem clearDue_served (fired : Option Nat) : clearDue fired fired = none := by
+theorem clearDueServed (fired : Option Nat) : clearDue fired fired = none := by
   simp [clearDue]
 
 /-- A different due time from a later `set` survives the wake. -/
-theorem clearDue_later {fired current : Option Nat} (h : current ≠ fired) :
+theorem clearDueLater {fired current : Option Nat} (h : current ≠ fired) :
     clearDue fired current = current := by
   simp [clearDue, h]
 

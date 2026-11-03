@@ -61,11 +61,11 @@ def record {φ : Type} (ended : Bool) (cell : Option φ) (e : φ) : Option φ :=
   if ended then cell else cell <|> some e
 
 /-- After the end, the cell does not change. -/
-theorem record_ended {φ : Type} (cell : Option φ) (e : φ) :
+theorem recordEnded {φ : Type} (cell : Option φ) (e : φ) :
     record true cell e = cell := rfl
 
 /-- A later fault never replaces the first one. -/
-theorem record_keeps {φ : Type} (a e : φ) (ended : Bool) :
+theorem recordKeeps {φ : Type} (a e : φ) (ended : Bool) :
     record ended (some a) e = some a := by
   cases ended <;> rfl
 
@@ -83,30 +83,30 @@ def State.recordWriteFault {φ : Type} (e : φ) (s : State ε φ) : State ε φ 
   { s with writeFault := record s.ended s.writeFault e }
 
 /-- After the end, a fault changes nothing. -/
-theorem State.recordFault_ended {φ : Type} (e : φ) (s : State ε φ) (h : s.ended = true) :
+theorem State.recordFaultEnded {φ : Type} (e : φ) (s : State ε φ) (h : s.ended = true) :
     s.recordFault e = s := by
-  simp [recordFault, h, record_ended]
+  simp [recordFault, h, recordEnded]
 
 /-- After the end, a failed write changes nothing. -/
-theorem State.recordWriteFault_ended {φ : Type} (e : φ) (s : State ε φ)
+theorem State.recordWriteFaultEnded {φ : Type} (e : φ) (s : State ε φ)
     (h : s.ended = true) : s.recordWriteFault e = s := by
-  simp [recordWriteFault, h, record_ended]
+  simp [recordWriteFault, h, recordEnded]
 
 /-- While the session runs, a cell that holds a fault keeps it through
 any list of later faults. -/
-theorem foldl_record_some {φ : Type} (a : φ) (es : List φ) :
+theorem foldlRecordSome {φ : Type} (a : φ) (es : List φ) :
     es.foldl (record false) (some a) = some a := by
   induction es with
   | nil => rfl
-  | cons _ _ ih => simpa [record_keeps] using ih
+  | cons _ _ ih => simpa [recordKeeps] using ih
 
 /-- While the session runs, the cell holds the first fault of the
 list. -/
-theorem foldl_record_none {φ : Type} (es : List φ) :
+theorem foldlRecordNone {φ : Type} (es : List φ) :
     es.foldl (record false) none = es.head? := by
   cases es with
   | nil => rfl
-  | cons e es => simpa [record] using foldl_record_some e es
+  | cons e es => simpa [record] using foldlRecordSome e es
 
 /-- The rule of the answer (§3.5): `.error` is the fault to throw, and
 `.ok` is the answer to return. A session with no answer yet reads as
@@ -118,16 +118,16 @@ def joinAnswer {φ : Type} (fault : Option φ) (result : Option (Except ε Unit)
   | _, r => .ok r
 
 /-- A fault under an orderly answer becomes the fault to throw. -/
-theorem joinAnswer_fault {φ : Type} (e : φ) :
+theorem joinAnswerFault {φ : Type} (e : φ) :
     joinAnswer (ε := ε) (some e) (some (.ok ())) = .error e := rfl
 
 /-- A protocol error stays the answer, with or without a fault. -/
-theorem joinAnswer_protocol {φ : Type} (fault : Option φ) (p : ε) :
+theorem joinAnswerProtocol {φ : Type} (fault : Option φ) (p : ε) :
     joinAnswer fault (some (.error p)) = .ok (.error p) := by
   cases fault <;> rfl
 
 /-- With no fault, the answer is the loop's answer. -/
-theorem joinAnswer_orderly {φ : Type} (r : Except ε Unit) :
+theorem joinAnswerOrderly {φ : Type} (r : Except ε Unit) :
     joinAnswer (none : Option φ) (some r) = .ok r := rfl
 
 /-- The outcome of a session that runs. -/
