@@ -67,13 +67,30 @@ private def fromCompress (code : UInt32) (out : ByteArray) : Except Error ByteAr
   | 1 => .error .inputTooLarge
   | _ => internalPanic unexpectedStatusReason
 
+namespace Internal
+
+/--
+Decide whether a raw-block input length may be compressed.
+`compress` calls this predicate before `compressRaw`.
+A length below `2^32` is accepted. `2^32` and every larger length
+are rejected. The comparison reads the `Nat` and allocates nothing.
+The native shim repeats the check on `size_t` before it narrows the
+length. `compress` returns before a rejected array reaches that check,
+so the shim comparison is reviewed in `shim.cpp` and has no test hook.
+Callers use `compress`.
+-/
+def inputWithinLimit (n : Nat) : Bool :=
+  n < 2 ^ 32
+
+end Internal
+
 /-- Compress bytes as one raw Snappy block. -/
 def compress (src : ByteArray) : Except Error ByteArray :=
-  if src.size ≥ 2 ^ 32 then
-    .error .inputTooLarge
-  else
+  if Internal.inputWithinLimit src.size then
     let (code, out) := compressRaw src
     fromCompress code out
+  else
+    .error .inputTooLarge
 
 /--
 Decompress one borrowed block.

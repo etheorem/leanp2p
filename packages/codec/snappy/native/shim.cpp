@@ -79,6 +79,9 @@ leanp2p_snappy_internal_panic(uint32_t reason) {
 extern "C" LEAN_EXPORT lean_object*
 leanp2p_snappy_compress(b_lean_obj_arg src) {
   const size_t inputSize = lean_sarray_size(src);
+  // `Snappy.Internal.inputWithinLimit` rejects this length before the
+  // extern call. The comparison here remains for a direct native caller.
+  // It tests the `size_t` length and does not narrow that length first.
   if (inputSize > static_cast<size_t>(UINT32_MAX)) {
     return emptyResult(kStatusInputTooLarge);
   }

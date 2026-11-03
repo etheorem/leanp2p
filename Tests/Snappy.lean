@@ -10,8 +10,10 @@ The empty block and `hello hello hello hello` use the bytes pinned by
 `native/check/core.cpp`. Phase 4A adds small malformed blocks and cap
 rejections. Phase 4B reads the Go v0.0.4 raw-block fixture, round-trips
 deterministic inputs through the public API, and repeats short calls.
-Each borrowed input is snapshotted as a `List Nat` before the extern
-call.
+The later checks repeat a public round trip, walk the `EmitCopy`
+lengths, reject a framed-stream identifier, and call the compression
+size predicate. Each borrowed input is snapshotted as a `List Nat`
+before the extern call.
 -/
 
 set_option autoImplicit false
@@ -209,6 +211,65 @@ The generated lengths cover the block boundary separately.
 -/
 private def repeatCount : Nat := 32
 
+/-- One thousand public round trips. The runner prints a failing iteration. -/
+private def publicTripCount : Nat := 1000
+
+/-- Compress and decompress one small input, and check every result. -/
+private def checkPublicTrips (r : Runner) (input : ByteArray) : IO Unit := do
+  for i in [0:publicTripCount] do
+    let ok :=
+      match Snappy.compress input with
+      | .ok compressed =>
+        match Snappy.decompress compressed input.size with
+        | .ok out => out == input
+        | .error _ => false
+      | .error _ => false
+    r.check s!"public round trip {i}" ok
+
+/--
+Succeed, reject a malformed block, then succeed again.
+The malformed call sits between the two successes.
+-/
+private def checkRestore (r : Runner) (input : ByteArray) : IO Unit := do
+  match Snappy.compress input with
+  | .error _ =>
+    r.check "restore compresses" false
+  | .ok compressed =>
+    checkDecompress r "restore success" compressed input.size (succeedsWith input)
+  checkDecompress r "restore malformed" (ofNatList [0x01, 0x00]) 1
+    (failsWith Snappy.Error.invalidCompressedData)
+  match Snappy.compress input with
+  | .error _ =>
+    r.check "restore compresses again" false
+  | .ok compressed =>
+    checkDecompress r "restore success again" compressed input.size (succeedsWith input)
+
+/--
+`abcd` followed by one distinct byte, eight times.
+Each match is four bytes. In pinned Snappy 1.3.1, `EmitCopy` takes the
+`len < 12` entry and returns through `EmitCopyAtMost64<true>`.
+A pure run shorter than 18 bytes is one literal, so this pattern is
+the short-copy input.
+-/
+private def shortCopyInput : ByteArray :=
+  ofNatList <| List.flatten <| (List.range 8).map fun i =>
+    [0x61, 0x62, 0x63, 0x64, 0x41 + i]
+
+/--
+Repetitive lengths around `EmitCopy` in pinned Snappy 1.3.1
+(`snappy.cc`). A one-byte run keeps the first byte as a literal and
+copies the rest.
+66 bytes leave a copy of 65. That length is above 64 and below 68, so
+the long form emits a 60-byte copy and a remainder below 12.
+69 bytes leave a copy of 68. `while (len >= 68)` emits one 64-byte
+copy. The generated lengths `60` and `61` already cover the
+literal-length encoding change. These checks are round trips.
+-/
+private def checkCopyBoundaries (r : Runner) : IO Unit := do
+  checkRound r "copy below 12" shortCopyInput
+  checkRound r "copy above 64" (ofNatList (List.replicate 66 0x61))
+  checkRound r "copy at least 68" (ofNatList (List.replicate 69 0x61))
+
 /-- Repeat a successful round trip, a malformed block, and a small cap. -/
 private def checkRepeats (r : Runner) (hello : ByteArray) (helloBlock : ByteArray) : IO Unit := do
   let bad := ofNatList [0x01, 0x00]
@@ -248,6 +309,9 @@ def Snappy.run (r : Runner) : IO Unit := do
     -- The block declares 23 output bytes. The cap is one byte smaller.
     checkDecompress r "hello declared above cap" helloBlock (hello.size - 1)
       (failsWith Snappy.Error.outputTooLarge)
+    -- The same block declares 23 output bytes. Cap 0 is below that length.
+    checkDecompress r "hello cap 0" helloBlock 0
+      (failsWith Snappy.Error.outputTooLarge)
     checkDecompress r "hello cap 2^32" helloBlock (2 ^ 32) (succeedsWith hello)
     checkDecompress r "hello cap 2^64" helloBlock (2 ^ 64) (succeedsWith hello)
   -- `0x01` is a one-byte length for one output byte, and no element follows.
@@ -275,6 +339,14 @@ def Snappy.run (r : Runner) : IO Unit := do
     (failsWith Snappy.Error.invalidCompressedData)
   -- Length 1, then literal tag `0x00` (one literal byte). The byte is absent.
   checkDecompress r "truncated literal" (ofNatList [0x01, 0x00]) 1
+    (failsWith Snappy.Error.invalidCompressedData)
+  -- `ff 06 00 00` followed by ASCII `sNaPpY` is the standard Snappy
+  -- framed-stream identifier. This call gives those bytes to the
+  -- raw-block API. The prefix stores a length below the cap, so the
+  -- result comes from the block check.
+  checkDecompress r "framed stream identifier"
+    (ofNatList [0xff, 0x06, 0x00, 0x00, 0x73, 0x4e, 0x61, 0x50, 0x70, 0x59])
+    1024
     (failsWith Snappy.Error.invalidCompressedData)
   -- Tag `0x02` is the assigned two-byte-offset copy. Its two offset
   -- bytes are absent. The low two bits select that copy form.
@@ -314,5 +386,15 @@ def Snappy.run (r : Runner) : IO Unit := do
   | none => pure ()
   | some helloBlock =>
     checkRepeats r hello helloBlock
+  checkPublicTrips r oneByte
+  checkRestore r oneByte
+  checkCopyBoundaries r
+  r.check "compression size below 2^32"
+    (Snappy.Internal.inputWithinLimit ((2 ^ 32) - 1))
+  r.check "compression size at 2^32"
+    (Snappy.Internal.inputWithinLimit (2 ^ 32) == false)
+  r.check "compression size at 2^64"
+    (Snappy.Internal.inputWithinLimit (2 ^ 64) == false)
+  r.check "2^64 narrows to zero" ((2 ^ 64).toUInt32 == 0)
 
 end Tests

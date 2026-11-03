@@ -106,9 +106,10 @@ The shim checks it again before narrowing the length, calculating the
 maximum compressed size, or allocating the compressed output.
 
 **`invalidCompressedData`.** The bytes are not one valid raw block.
-The case covers a bad or truncated length, a truncated payload, a bad
-tag, a bad copy offset, a decoded length that disagrees with the
-block, and any other failed check of the raw block. A cap rejection
+The case covers a bad or truncated length, a truncated payload,
+truncated copy operands, a bad copy offset, a malformed literal or
+copy encoding, a decoded length that disagrees with the block, and
+any other failed check of the raw block. A cap rejection
 uses `outputTooLarge` instead.
 
 **`outputTooLarge`.** The block's advertised uncompressed length is
@@ -465,7 +466,7 @@ The evidence is empirical:
   the extern.
 - Fixtures produced by Go Snappy and committed with the tests.
 - Malformed input and truncated input.
-- A bad tag and a bad copy offset.
+- Truncated copy operands, an invalid copy offset, and a malformed literal or copy encoding.
 - A cap equal to the advertised length, and a cap below it.
 - Extreme and overflowing length encodings.
 - A repeated run of success and failure.

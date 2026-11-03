@@ -135,10 +135,11 @@ test(snappy): cover malformed blocks and limits
 ```
 
 The suite adds a truncated length header, an overlong or overflowing
-length, a truncated payload, an invalid tag, an invalid copy offset, a
-corrupted block, a declared output above the cap, an extreme expansion
-ratio, and the case where the advertised length exceeds the cap before
-the payload is fully validated.
+length, a truncated payload, truncated copy operands, an invalid copy
+offset, a malformed literal or copy encoding, a corrupted block, a
+declared output above the cap, an extreme expansion ratio, and the
+case where the advertised length exceeds the cap before the payload
+is fully validated.
 
 ### Phase 4B. Interoperability and stress
 
@@ -262,9 +263,10 @@ successful round trip are the stable semantic contract.
 ### Invalid and hostile input
 
 The cases are a truncated header, an invalid or overflowing encoded
-length, a truncated payload, an invalid tag, an invalid copy offset, a
-corrupted block, an advertised length above the cap, an extreme
-expansion ratio, and a repeated invalid call. When the advertised
+length, a truncated payload, truncated copy operands, an invalid copy
+offset, a malformed literal or copy encoding, a corrupted block, an
+advertised length above the cap, an extreme expansion ratio, and a
+repeated invalid call. When the advertised
 length exceeds the cap, that result is `.outputTooLarge` even if the
 payload is also invalid.
 
@@ -282,10 +284,12 @@ The cases are an exact small cap, a cap one byte below the required
 size, a cap equal to `2^32`, and a boxed `Nat` such as `2^64`. The
 large caps clamp. They do not narrow to zero, and they do not allocate
 from that `Nat`. No cap case allocates a multi-gigabyte buffer. The
-compression limit of `2^32` is not tested by building a `ByteArray` of
-that size. That bound is closed by review of both checks and by a
-focused native boundary check. The production shim gains no test hook
-for it.
+compression limit is `Snappy.Internal.inputWithinLimit`, which
+`compress` calls. The suite calls that predicate with `2^32 - 1`,
+`2^32`, and `2^64`. It builds no `ByteArray` of those sizes. `2^64`
+narrows to zero under `Nat.toUInt32`, and the predicate still rejects
+it. The shim repeats the check on `size_t` before it narrows the
+length. That native check has no test hook.
 
 ## Fixtures and oracles
 
