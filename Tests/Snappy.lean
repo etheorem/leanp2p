@@ -3,12 +3,13 @@ import Bytes
 import Snappy
 
 /-!
-# Snappy raw blocks (unit W6.2, Phases 3A and 3B)
+# Snappy raw blocks (unit W6.2, Phases 3A, 3B, and 4A)
 
 Compression and bounded decompression against `google/snappy` 1.3.1.
 The empty block and `hello hello hello hello` use the bytes pinned by
-`native/check/core.cpp`. Each borrowed input is snapshotted as a
-`List Nat` before the extern call.
+`native/check/core.cpp`. Phase 4A adds small malformed blocks and cap
+rejections. Each borrowed input is snapshotted as a `List Nat` before
+the extern call.
 -/
 
 set_option autoImplicit false
@@ -102,7 +103,7 @@ private def checkRound (r : Runner) (name : String) (input : ByteArray) : IO Uni
   | .ok compressed =>
     checkDecompress r s!"{name} round trip" compressed input.size (succeedsWith input)
 
-/-- Phase 3A compression checks and Phase 3B bounded decompression. -/
+/-- Phase 3A compression, Phase 3B bounds, and Phase 4A hostile blocks. -/
 def Snappy.run (r : Runner) : IO Unit := do
   r.section "snappy" "google/snappy 1.3.1 raw block (native/check/core.cpp)"
   let hello := ofString "hello hello hello hello"
@@ -122,17 +123,63 @@ def Snappy.run (r : Runner) : IO Unit := do
   | none => pure ()
   | some helloBlock =>
     checkDecompress r "hello exact cap" helloBlock hello.size (succeedsWith hello)
-    checkDecompress r "hello short cap" helloBlock (hello.size - 1)
+    -- The block declares 23 output bytes. The cap is one byte smaller.
+    checkDecompress r "hello declared above cap" helloBlock (hello.size - 1)
       (failsWith Snappy.Error.outputTooLarge)
     checkDecompress r "hello cap 2^32" helloBlock (2 ^ 32) (succeedsWith hello)
     checkDecompress r "hello cap 2^64" helloBlock (2 ^ 64) (succeedsWith hello)
-  let truncated := ofNatList [0x01]
+  -- `0x01` is a one-byte length for one output byte, and no element follows.
+  let truncatedPayload := ofNatList [0x01]
   checkDecompress r "empty compressed" ByteArray.empty 0
     (failsWith Snappy.Error.invalidCompressedData)
-  checkDecompress r "truncated within cap" truncated 1
+  checkDecompress r "truncated payload within cap" truncatedPayload 1
     (failsWith Snappy.Error.invalidCompressedData)
-  checkDecompress r "truncated over cap" truncated 0
+  -- The same block advertises one byte. Cap 0 rejects it before the
+  -- missing payload is validated.
+  checkDecompress r "cap before truncated payload" truncatedPayload 0
     (failsWith Snappy.Error.outputTooLarge)
+  -- `ff ff ff ff 0f` is the longest legal length. It stores `2^32 - 1`.
+  -- Cap 1024 is below that length, so the call rejects the block before
+  -- it allocates the advertised output.
+  checkDecompress r "cap before max length" (ofNatList [0xff, 0xff, 0xff, 0xff, 0x0f]) 1024
+    (failsWith Snappy.Error.outputTooLarge)
+  -- `0x80` sets the length continuation bit and then the block ends.
+  checkDecompress r "truncated length header" (ofNatList [0x80]) 1
+    (failsWith Snappy.Error.invalidCompressedData)
+  -- Five length bytes. The fifth byte is `0x10`, so the value does not
+  -- fit in a 32-bit varint. `Parse32WithLimit` rejects a fifth byte
+  -- that is not below 16.
+  checkDecompress r "overflowing length" (ofNatList [0x80, 0x80, 0x80, 0x80, 0x10]) 1
+    (failsWith Snappy.Error.invalidCompressedData)
+  -- Length 1, then literal tag `0x00` (one literal byte). The byte is absent.
+  checkDecompress r "truncated literal" (ofNatList [0x01, 0x00]) 1
+    (failsWith Snappy.Error.invalidCompressedData)
+  -- Tag `0x02` is the assigned two-byte-offset copy. Its two offset
+  -- bytes are absent. The low two bits select that copy form.
+  checkDecompress r "truncated copy operands" (ofNatList [0x01, 0x02]) 1
+    (failsWith Snappy.Error.invalidCompressedData)
+  -- Length 1, then tag `0x02` (copy one byte) and offset 1. No output
+  -- byte exists yet, so the offset points before the output.
+  checkDecompress r "copy before output" (ofNatList [0x01, 0x02, 0x01, 0x00]) 1
+    (failsWith Snappy.Error.invalidCompressedData)
+  -- The hello block ends `42 06 00`: copy 17 bytes from offset 6.
+  -- The same bytes with offset 0 are not a valid copy.
+  let corruptedHello := ofNatList
+    [0x17, 0x14, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x42, 0x00, 0x00]
+  checkDecompress r "corrupted hello offset" corruptedHello hello.size
+    (failsWith Snappy.Error.invalidCompressedData)
+  -- 4096 equal bytes compress to a shorter block. The exact cap is
+  -- that length. Cap 1 is below the length the block advertises.
+  let highExpansionInput := ofNatList (List.replicate 4096 0x61)
+  match Snappy.compress highExpansionInput with
+  | .error _ =>
+    r.check "high expansion compresses" false
+  | .ok compressed =>
+    r.check "high expansion compresses smaller" (compressed.size < highExpansionInput.size)
+    checkDecompress r "high expansion exact cap" compressed highExpansionInput.size
+      (succeedsWith highExpansionInput)
+    checkDecompress r "high expansion small cap" compressed 1
+      (failsWith Snappy.Error.outputTooLarge)
   checkRound r "empty" ByteArray.empty
   checkRound r "one byte" oneByte
   checkRound r "hello hello hello hello" hello
