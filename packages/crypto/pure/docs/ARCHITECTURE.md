@@ -5,11 +5,13 @@ SHA-1, HMAC, and HKDF, with theorems (ARCHITECTURE §4.6). It is the
 "Lean later" phase of the dependency strategy (§4 preamble), and it
 plays two roles. It is the audited copy, and it states each algorithm
 in the language of the stack. It is the oracle that the cross-check
-(PLAN W3.3) compares with the production path, the backend bindings,
-and the etheorem packages for the four routed primitives, at the IO
-edge. §4.6 as amended fixes which side produces: the backend is the
-production path for every primitive it binds, the digests included,
-and production SHA-256 routes to `LeanHazmatSha256`. The facade names
+(PLAN W3.3) compares with the production path at the IO edge. The
+production path is the backend bindings and the etheorem packages for
+the routed primitives. §4.6 fixes which side produces. The backend is
+the production path for every primitive it binds, the digests
+included. Production SHA-256 routes to `LeanHazmatSha256` while that
+pin holds, and to the backend binding while it is out, as it is today
+(§4.6). The facade names
 the production implementation of every primitive in the surface. A
 pure copy moves to production only by a one-line facade change, and
 none does today. The constant-time code stays in the C shim of
@@ -126,9 +128,9 @@ comparison needs a total function on this side.
    the W0.3 infrastructure (§6, §7 row 6). The package plan names the
    files.
 4. **The cross-check contract.** The cross-check compares the pure
-   copies with the production path, the backend bindings, and the
-   etheorem packages for the four routed primitives, property-wise at
-   the IO edge (§4.6; PLAN W3.3). The cross-check runs in this
+   copies with the production path, property-wise at the IO edge
+   (§4.6, PLAN W3.3). The production path is the backend bindings and
+   the etheorem packages for the routed primitives. The cross-check runs in this
    package's suites, the one place that imports both stories through
    the facade, following
    the test-split rule of the backend pair. This package's side
@@ -146,13 +148,14 @@ comparison needs a total function on this side.
   same interface, back the code with theorems, and cross-check it
   against the FFI. Deleting the pure copies deletes the oracle, so the
   cross-check would compare the production path with itself. SHA-256
-  keeps its pure copy even though production routes to
-  `LeanHazmatSha256`: the copy is the oracle for that cross-check.
-- **The production path is the backend and the etheorem bindings; the
-  pure copies are the audited copies and the oracles.** §4.6 as amended
-  names the backend the
-  production path for every primitive it binds, the digests included,
-  and routes production SHA-256 to `LeanHazmatSha256`. The facade
+  keeps its pure copy, because the copy is the oracle for the SHA-256
+  cross-check, whichever binding is in production.
+- **The production path is the backend and the etheorem bindings. The
+  pure copies are the audited copies and the oracles.** §4.6 names the
+  backend the production path for every primitive it binds, the
+  digests included. It routes production SHA-256 to
+  `LeanHazmatSha256` while that pin holds, and to the backend binding
+  while it is out. The facade
   names the production implementation for everything in the surface. A
   pure copy moves to production only by a one-line facade change, and
   none does today. The facade exports the `ByteArray` forms, because

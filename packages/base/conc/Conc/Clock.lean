@@ -45,21 +45,21 @@ def takeDue {τ : Type} (now : Nat) (timers : List (Nat × τ)) :
   timers.partition (·.1 ≤ now)
 
 /-- No timer fires early. -/
-theorem takeDue_due {τ : Type} {now : Nat} {timers : List (Nat × τ)} {t : Nat × τ}
+theorem takeDueDue {τ : Type} {now : Nat} {timers : List (Nat × τ)} {t : Nat × τ}
     (h : t ∈ (takeDue now timers).1) : t.1 ≤ now := by
   simp only [takeDue, List.partition_eq_filter_filter, List.mem_filter,
     decide_eq_true_eq] at h
   exact h.2
 
 /-- Every due timer leaves the list. -/
-theorem takeDue_kept {τ : Type} {now : Nat} {timers : List (Nat × τ)} {t : Nat × τ}
+theorem takeDueKept {τ : Type} {now : Nat} {timers : List (Nat × τ)} {t : Nat × τ}
     (h : t ∈ (takeDue now timers).2) : now < t.1 := by
   simp only [takeDue, List.partition_eq_filter_filter, List.mem_filter,
     Function.comp, Bool.not_eq_true', decide_eq_false_iff_not] at h
   omega
 
 /-- The split loses no timer and adds none. -/
-theorem takeDue_mem {τ : Type} {now : Nat} {timers : List (Nat × τ)} {t : Nat × τ} :
+theorem takeDueMem {τ : Type} {now : Nat} {timers : List (Nat × τ)} {t : Nat × τ} :
     (t ∈ (takeDue now timers).1 ∨ t ∈ (takeDue now timers).2) ↔ t ∈ timers := by
   simp only [takeDue, List.partition_eq_filter_filter, List.mem_filter]
   by_cases h : t.1 ≤ now <;> simp [h]

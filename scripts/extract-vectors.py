@@ -746,7 +746,8 @@ def extract_peer_keys() -> None:
         hx = m.group(2).replace(" ", "").lower()
         if len(hx) < 8 or not re.fullmatch(r"[0-9a-f]+", hx):
             continue
-        cases.append({"name": name, "bytesHex": hx})
+        cases.append({"name": name, "bytesHex": hx,
+                      "rawHex": _key_envelope_data(bytes.fromhex(hx)).hex()})
     assert len(cases) == 8, f"expected 8 key vectors, got {len(cases)}"
     examples = []
     for line in src.splitlines():
@@ -943,6 +944,32 @@ def _pb_str(num: int, s: str) -> bytes:
     return _pb_bytes(num, s.encode())
 
 
+def _read_varint(b: bytes, i: int) -> tuple[int, int]:
+    v = shift = 0
+    while True:
+        byte = b[i]
+        i += 1
+        v |= (byte & 0x7F) << shift
+        shift += 7
+        if not byte & 0x80:
+            return v, i
+
+
+def _key_envelope_data(envelope: bytes) -> bytes:
+    """The raw key bytes inside a peer-ids key envelope. The envelope
+    holds field 1, the key type (varint), and field 2, the key data
+    (bytes), and nothing else (vendor/specs/peer-ids/peer-ids.md,
+    "Keys"). The crypto/backend suites consume these raw fields, so they
+    never unwrap the envelope (packages/crypto/backend/docs/PLAN.md,
+    "Vector stance")."""
+    assert envelope[0] == 0x08, envelope.hex()
+    _, i = _read_varint(envelope, 1)
+    assert envelope[i] == 0x12, envelope.hex()
+    n, i = _read_varint(envelope, i + 1)
+    assert i + n == len(envelope), envelope.hex()
+    return envelope[i:]
+
+
 def extract_protobuf_messages() -> None:
     ed25519_pub = bytes.fromhex(
         "080112201ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e")
@@ -1037,6 +1064,8 @@ def extract_go_libp2p_fixtures() -> None:
             "name": name,
             "privHex": rd("priv").hex(),
             "pubHex": rd("pub").hex(),
+            "privRawHex": _key_envelope_data(rd("priv")).hex(),
+            "pubRawHex": _key_envelope_data(rd("pub")).hex(),
             "sigHex": rd("sig").hex(),
             "sigDeterministic": deterministic[name],
         })
@@ -1046,10 +1075,9 @@ def extract_go_libp2p_fixtures() -> None:
         "messageHex": msg.hex(),
         "note": "sigDeterministic mirrors the upstream fixture test: for "
                 "deterministic schemes a re-sign must be byte-identical. We "
-                "check that for RSA; secp256k1 is a documented divergence "
-                "(OpenSSL randomizes the nonce, go's btcec uses RFC 6979 - "
-                "recorded as an open item), ECDSA is randomized on both "
-                "sides; verification is the contract for both.",
+                "check that for RSA and secp256k1 (RFC 6979 on both sides). "
+                "ECDSA is randomized on both sides; verification is its "
+                "contract.",
         "cases": cases,
     })
 

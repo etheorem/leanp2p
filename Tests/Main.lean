@@ -3,6 +3,13 @@ import Tests.Vectors
 import Tests.Concurrency
 import Tests.Protobuf
 import Tests.Bytes
+import Tests.Varint
+import Tests.Streams
+import Tests.Backend
+import Tests.HazmatPins
+import Tests.BackendX509
+import Tests.BackendStrict
+import Tests.BackendSoak
 import Tests.Hashes
 
 /-!
@@ -22,5 +29,12 @@ def main : IO UInt32 := do
   Tests.Concurrency.run r
   Tests.Protobuf.run r
   Bytes.runTests r
+  Tests.Varint.run r
+  Tests.Streams.run r
+  Tests.Backend.run r
+  Tests.HazmatPins.run r
+  Tests.BackendX509.run r
+  Tests.BackendStrict.run r
+  Tests.BackendSoak.run r
   Tests.Hashes.run r
   r.summary

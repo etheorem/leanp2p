@@ -13,8 +13,8 @@ error boundary" below.
 | Module | Holds, and why |
 |---|---|
 | `Varint.lean` | the root module; one import line per public submodule |
-| `Varint/UVarint.lean` | the newtype `structure UVarint where val : Nat` with its proof field, the model core `encode` and `decode?`, and the `Codec UVarint` / `LawfulCodec UVarint` instances; the instances live with the type (ARCHITECTURE §3.2), and the 9-byte budget constant lives here, its one home (PRINCIPLES 1.5) |
-| `Varint/Theorems.lean` | the theorems over the model beyond the instance law: the suffix form, the accepted-input split, and the budget lemma (ARCHITECTURE §6); the instance-law proof lives with the instance, in `Varint/UVarint.lean` |
+| `Varint/UVarint.lean` | the newtype `structure UVarint where val : Nat` with its proof field, the model core `encode` and `decode?`, and the `Codec UVarint` / `LawfulCodec UVarint` instances; the instances live with the type (ARCHITECTURE §3.2). The 9-byte budget constant `maxBytes` and the value bound `limit` live here, their one home (PRINCIPLES 1.5). The suffix form `decodeEncodeSuffix` and the budget lemma `lengthEncodeLe` live here too, because the proof of the instance law uses them |
+| `Varint/Theorems.lean` | the theorems over the model beyond the instance law (ARCHITECTURE §6): the accepted-input split `encodeDecode`, `encodeNonempty`, and `encodeBytes`, with the spec examples as `example` blocks |
 | `Varint/Bytes.lean` | the production `ByteArray` path, `encodeB` and `decodeB?`; it imports the 9-byte budget constant from `Varint/UVarint.lean` |
 
 All declarations live in the `Varint` namespace. The root module
@@ -84,10 +84,13 @@ every framing layer above inherits the bound and never re-derives it
 
 ## Decisions
 
-- **Minimal forms only, against the go decoder.** Go accepts the
-  non-minimal `0x81 0x00` and returns 1. The multiformats spec
-  requires minimal encodings, and the spec wins (PRINCIPLES 2.1). The
-  spike enforced the same rule.
+- **Minimal forms only.** The multiformats spec requires minimal
+  encodings, so `0x81 0x00` is `malformed`. go-varint v0.1.0, the
+  decoder of go-libp2p v0.50.0, rejects it with `ErrNotMinimal`
+  ([`varint.go`, line 73](https://github.com/multiformats/go-varint/blob/23576a8fddd196d6bc3b82014ae91d198e47d734/varint.go#L73)),
+  and js-multiformats v14.0.5 rejects it too
+  ([`src/varint.ts`, lines 9 and 10](https://github.com/multiformats/js-multiformats/blob/0dcd129adb06743d5005245c0e39631f13b86251/src/varint.ts#L9-L10)).
+  The spike enforced the same rule.
 - **`decode?` returns `Except DecodeError`.** The spike decoder
   returns `Option`. An `Option` cannot tell `truncated` from
   `malformed` (ARCHITECTURE §3.5), and §7 ports every `Option` result
@@ -117,6 +120,10 @@ by `rfl`, `simp`, and `omega` (ARCHITECTURE §6; PRINCIPLES 5.1):
 - The budget lemma: the encoding of a `UVarint` is at most 9 bytes.
   The proof field makes this true at the type level, and the encoder
   preserves it (ARCHITECTURE §4.3).
+- The shape facts: every encoding holds at least one byte, and every
+  entry of an encoding is below 256. A framing layer above uses the
+  first to show that a decode consumes input, and the second to move
+  the model to the wire with `ofNatList`.
 
 A `List Nat` input can hold 256 or more in a byte position.
 `decode?` reports `malformed` for it, so the ported accepted-input

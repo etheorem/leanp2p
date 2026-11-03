@@ -14,7 +14,6 @@ defaultTargets = [
   "Snappy",
   "Crypto",
   "CryptoPure",
-  "Backend",
   "Streams",
   "Yamux",
   "Libp2pIdentity",
@@ -29,6 +28,43 @@ defaultTargets = [
 ]
 # `lake test` builds and runs the executable named here.
 testDriver = "tests"
+# `crypto/backend` is a nested Lake package. Its `lakefile.lean` builds
+# the C shim, which the declarative form cannot express (CLAUDE.md,
+# "Configure, don't integrate"). It provides the `Backend` library. The
+# `Tests` library imports it, so `lake build` builds it.
+# The executables need no link argument for the shim. The toolchain
+# links its own static OpenSSL 3 `libcrypto.a` into every executable,
+# and the shim archive resolves against that copy.
+[[require]]
+name = "Backend"
+path = "packages/crypto/backend"
+
+# The etheorem hazmat pins (root ARCHITECTURE §4.6, PLAN W3.2). Each is
+# one single-family package, never the `LeanHazmat` umbrella, so the
+# build compiles only the families it uses. All sit at one monorepo
+# rev. Two need their native sources before `lake build`: run
+# `scripts/hazmat-vendor.sh` once after Lake clones them.
+# `LeanHazmatSha256` is not pinned. At this rev its archive replaces the
+# startup hook that runs the static constructors. An executable that
+# links it crashes on its first error print. SHA-256 falls back to the
+# backend binding (packages/crypto/backend/docs/PLAN.md, "Pin outcomes").
+[[require]]
+name = "LeanHazmatKeccak"
+git = "https://github.com/etheorem/etheorem"
+rev = "169cf718a7d149a2973aa4e6468994720a6f356e"
+subDir = "packages/hazmat/LeanHazmatKeccak"
+
+[[require]]
+name = "LeanHazmatP256"
+git = "https://github.com/etheorem/etheorem"
+rev = "169cf718a7d149a2973aa4e6468994720a6f356e"
+subDir = "packages/hazmat/LeanHazmatP256"
+
+[[require]]
+name = "LeanHazmatSecp256k1"
+git = "https://github.com/etheorem/etheorem"
+rev = "169cf718a7d149a2973aa4e6468994720a6f356e"
+subDir = "packages/hazmat/LeanHazmatSecp256k1"
 
 [[lean_lib]]
 name = "Conc"
@@ -45,6 +81,7 @@ globs = ["Bytes.*"]
 name = "Varint"
 srcDir = "packages/codec/varint"
 roots = ["Varint"]
+globs = ["Varint.*"]
 
 [[lean_lib]]
 name = "Multiformats"
@@ -74,14 +111,10 @@ roots = ["CryptoPure"]
 globs = ["CryptoPure.*"]
 
 [[lean_lib]]
-name = "Backend"
-srcDir = "packages/crypto/backend"
-roots = ["Backend"]
-
-[[lean_lib]]
 name = "Streams"
 srcDir = "packages/net/streams"
 roots = ["Streams"]
+globs = ["Streams.*"]
 
 [[lean_lib]]
 name = "Yamux"

@@ -405,16 +405,17 @@ type of each binding states what the C function does:
 
 - **Deterministic primitives are pure.** This covers SHA-256 and
   SHA-512, HMAC, HKDF, ChaCha20-Poly1305 seal and open, X25519, Ed25519
-  sign and verify, every verifier, and every public-key derivation.
+  sign and verify, secp256k1 sign (its nonce comes from RFC 6979),
+  every verifier, and every public-key derivation.
   Their bindings are `opaque f (… : @& ByteArray) : Option ByteArray`
   or `: Bool`, with no `IO`. The Lean interface lifts `Option` to
   `Except CryptoError`. A pure binding is a promise that the shim must
   keep: same input, same output, no read of global state, no side
   effect. The docstring of each binding records that promise.
-- **Randomness is `IO`.** `randomBytes`, key generation, and the
-  signatures that draw a random nonce (ECDSA P-256, secp256k1) return
-  `IO (…)`. Ed25519 and RSASSA-PKCS1-v1_5 sign deterministically, so
-  their bindings stay pure.
+- **Randomness is `IO`.** `randomBytes`, key generation, and the ECDSA
+  P-256 signature, which draws a random nonce, return `IO (…)`.
+  Ed25519, RSASSA-PKCS1-v1_5, and secp256k1 with the RFC 6979 nonce
+  sign deterministically, so their bindings stay pure.
 - Every `ByteArray` argument is borrowed (`@&`). The Lean side checks
   sizes into proof-carrying newtypes (§3.7) before the call, so the
   shim validates nothing twice.
@@ -425,7 +426,7 @@ at `packages/crypto/Crypto.lean`. No caller imports `crypto/backend`,
 `Crypto` is one `lean_lib` made of `export` and
 `abbrev` lines that name the production implementation of each
 primitive: the backend for the primitives it binds, the etheorem
-packages for the four primitives that route there. It also holds the
+packages for the primitives that route there (§4.6). It also holds the
 `Rng` seam. The pure package is the oracle home that the cross-check
 (PLAN W3.3) runs against the production path. To move one
 primitive to pure Lean or to another native library, change one line of
@@ -442,7 +443,7 @@ enter. From there, it carries the result as a fact:
 ```lean
 structure Key32 where
   bytes : ByteArray
-  size_eq : bytes.size = 32
+  sizeEq : bytes.size = 32
 
 def Key32.ofByteArray? (b : ByteArray) : Option Key32 := …
 ```
@@ -672,19 +673,28 @@ Three kinds of code under one group:
   phase, as verified cross-checks.
 - **The etheorem bindings.** Where the etheorem monorepo already binds
   a primitive, the facade routes to its package, and this repo writes
-  no second shim. Four primitives route there today: secp256k1
+  no second shim. Four families have such a package: secp256k1
   (`LeanHazmatSecp256k1`, libsecp256k1), ECDSA P-256 (`LeanHazmatP256`,
   OpenSSL), SHA-256 (`LeanHazmatSha256`, OpenSSL and ISA-L), and
-  keccak-256 (`LeanHazmatKeccak`, keccak-tiny). The etheorem facts
-  constrain the integration: the monorepo pins Lean v4.29.1 against this
-  repo's v4.34, the license is LGPL-3.0 with a contributor agreement,
-  and the packages are monorepo-resident, with per-package publication
-  repos promised but not yet present. Unit W3.2 owns the pins, the
-  toolchain-compat checks, and the facade routes; a primitive whose
-  pin does not build falls back to the `crypto/backend` shim for the
-  interim, recorded in the plan. Keccak-256 is the one exception: no
-  own shim exists for it, so a pin that does not build blocks W6.1
-  until the pin builds or the owner records a re-vendor.
+  keccak-256 (`LeanHazmatKeccak`, keccak-tiny). P-256 verification and
+  keccak-256 route there. secp256k1 verification stays on the shim for
+  the low-S rule (below), and SHA-256 is on the fallback (below).
+
+  The etheorem facts constrain the integration:
+  - The monorepo pins Lean v4.34.1, and this repo pins v4.34.0.
+  - The license is LGPL-3.0 with a contributor agreement.
+  - The packages live in the monorepo. Per-package publication repos
+    are promised but not yet present.
+
+  Unit W3.2 owns the pins and the toolchain-compat checks, and W3.3
+  lands the facade routes. A primitive falls back to the
+  `crypto/backend` shim for the interim when its pin does not build or
+  its archive breaks the executables that link it. The package plan
+  records the fallback. SHA-256 is on that fallback today, because the
+  `LeanHazmatSha256` archive replaces glibc's `__libc_csu_init`
+  (etheorem/etheorem#152). Keccak-256 is the one exception. No own shim
+  exists for it, so a pin that does not build blocks W6.1. The block
+  holds until the pin builds or the owner records a re-vendor.
 
 The spike rules stay:
 
@@ -693,9 +703,11 @@ The spike rules stay:
 - Binding types follow §3.6: pure for deterministic primitives, `IO`
   for randomness. Callers import the `Crypto` facade only.
 - Verifiers enforce the **key type and size**: P-256 SPKI only, RSA
-  2048 to 8192 bits only, secp256k1 low-S only. The libsecp256k1
-  default already rejects high-S, so the etheorem binding and the
-  rule agree.
+  2048 to 8192 bits only, secp256k1 low-S only. The etheorem
+  secp256k1 verifier turns a high S low before it verifies, because
+  the execution layer has no low-S rule. So it accepts what this rule
+  rejects. secp256k1 verification therefore stays on the
+  `crypto/backend` shim, and the etheorem package serves key recovery.
 - X.509 validation checks the validity time and rejects unknown
   critical extensions.
 - The libp2p key *marshalings* (the SEC1/PKCS#8/SPKI/PKCS#1 choices,
@@ -908,7 +920,7 @@ The build order, one `packages/<group>/<pkg>` per step:
 | 4 | `codec/proto` | `Crypto/Pb.lean` | `Fields`, `encodeFields(B)`, `decodeFields(B?)`, `get{Varint,Bytes,Sub,Str}?` (last-wins), `getAll*`, `hasField` | round-trip theorem, message-vector suite (field tables stay in libp2p) | deterministic encoding by construction |
 | 5 | `codec/multiformats` | `Crypto/{Multihash,Multibase,Base58,Cid}.lean`, `Net/Multiaddr.lean` | as named, plus `Multiaddr.parse?/toString/toByteArray/ofByteArray?`, operations API | RFC/multiformats vector suites + go/js CSVs + fuzz corpora + proved round-trips | the strictness rules carry over (leading `/`, no empty segments, percent = UTF-8 bytes) |
 | 6 | `crypto/pure` | `Crypto/{Sha256,Sha512,Sha1,Hmac,Hkdf}.lean` | digests, HMAC, HKDF | RFC vector suites + cross-checks against the production path | cross-checked against the production path at the IO edge |
-| 7 | `crypto/backend` | `Crypto/OpenSsl.lean`, `c/p2pcrypto.c` | Ed25519/X25519/RSA sign+verify, SHA-1/SHA-512/HMAC/HKDF, ChaCha20-Poly1305 seal/open, X.509 helpers, randomness and key generation, plus the interim fallback bindings (SHA-256, secp256k1, ECDSA P-256) and the pins for LeanHazmatSecp256k1/P256/Sha256/Keccak with the v4.34 build checks; every `ByteArray` argument **borrowed** (`@&`) | fixture suites + verifier-strictness regressions (key type, RSA 2048-8192, low-S, X.509 validity + critical exts) | key *marshalings* go to `libp2p/identity` (§4.6); secp256k1, P-256, SHA-256, and keccak-256 route to the etheorem hazmat packages (§4.6) |
+| 7 | `crypto/backend` | `Crypto/OpenSsl.lean`, `c/p2pcrypto.c` | Ed25519/X25519/RSA sign+verify, SHA-1/SHA-512/HMAC/HKDF, ChaCha20-Poly1305 seal/open, X.509 helpers, randomness and key generation, plus secp256k1, ECDSA P-256 signing and derivation, the interim fallback bindings (SHA-256, P-256 verification), and the pins for LeanHazmatSecp256k1/P256/Sha256/Keccak with the v4.34 build checks; every `ByteArray` argument **borrowed** (`@&`) | fixture suites + verifier-strictness regressions (key type, RSA 2048-8192, low-S, X.509 validity + critical exts) | key *marshalings* go to `libp2p/identity` (§4.6); P-256 verification and keccak-256 route to the etheorem hazmat packages, secp256k1 verification stays on the shim for low-S, and SHA-256 stays on the interim fallback while its pin is out (§4.6) |
 | 8 | `net/streams` | `Net/{Transport,Tcp}.lean`, `Conn/{Reader,Frame,Stream}.lean`, `Sim.lean` | `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` (+`prependBytes`), sim harness | TCP suite (dial/listen, mss over TCP, noise over TCP, muxers over TCP), silent-peer teardown | contracts: libuv close-wakes discipline; failed write = teardown; no reader strand (each stage hands its leftover on as data, §4.7) |
 | 9 | `net/yamux` | `Conn/Yamux.lean` | header codec, session, muxer entry | yamux suite + hostile-frame regressions + interop prereqs | depends only on `Connection` from `net/streams`; caps, window enforcement, SYN-only creation, stream retirement, and wake hand-off carry over as contracts |
 | 10 | `libp2p/*` | everything else in the spike (`Host.lean`, `Conn/{Upgrade,Security,Noise,TlsExt,Mplex}.lean`, `Crypto/{Keys,PeerId,Messages}.lean`, `Protocol/*`, `Peer/*`) | see §4.9 | node suite + noise suite + keys suite + interop prereqs | build order inside: identity → core → security/noise ∥ mux (yamux) → negotiate → host → protocols; mplex last (deferred for consensus, §8) |

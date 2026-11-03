@@ -1,4 +1,5 @@
 import Lean.Data.Json
+import Bytes
 
 /-!
 # Shared test-runner support (VECTOR_TEST_PLAN.md phase 0 step 3)
@@ -109,14 +110,29 @@ def vectorsDir : IO System.FilePath := do
   | some d => pure ⟨d⟩
   | none => pure ⟨"Tests/vectors"⟩
 
-/-- Read and parse a vector file out of `vectorsDir`; a parse error names
-the file. -/
-def loadJson (name : String) : IO Json := do
-  let path := (← vectorsDir).join ⟨name⟩
-  let s ← IO.FS.readFile path
-  match Json.parse s with
+/-- Read and parse one JSON file. A parse error names the file. -/
+private def readJson (path : System.FilePath) : IO Json := do
+  match Json.parse (← IO.FS.readFile path) with
   | .ok j => pure j
   | .error e => throw <| IO.userError s!"{path}: {e}"
+
+/-- Read and parse a vector file out of `vectorsDir`. -/
+def loadJson (name : String) : IO Json := do
+  readJson ((← vectorsDir).join ⟨name⟩)
+
+/-- Read and parse a generated fixture out of `Tests/fixtures`. Fixtures
+hold random material (keys, certificates) that no rerun reproduces. So
+they live outside the provenance-gated vector corpus, and each file
+records the script and the tool that made it. -/
+def loadFixture (name : String) : IO Json :=
+  readJson (System.FilePath.mk "Tests/fixtures" / name)
+
+/-- The bytes a hex string spells. Malformed hex fails the run, and the
+message names `where_`, the file or the vector the string came from. -/
+def unhex (where_ hex : String) : IO ByteArray :=
+  match Bytes.ofHex? hex with
+  | some b => pure b
+  | none => throw <| IO.userError s!"{where_}: no hex text: {hex}"
 
 private def asIO (file : String) (e : Except String α) : IO α :=
   match e with

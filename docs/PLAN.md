@@ -35,7 +35,7 @@ This plan is the companion to `docs/ARCHITECTURE.md`, and both live in
 W0 scaffold
  ├── track A (codecs):      W1.2 → W2.1 → {W2.2, W2.3}
  ├── track B (crypto):      W1.2 → {W3.1, W3.2} → W3.3
- └── track C (net):         W1.1 (+W1.2) → W4.1 → {W4.2, W4.3}
+ └── track C (net):         W1.1 (+W1.2, W2.1, W2.3) → W4.1 → {W4.2, W4.3}
 W5 joins all three tracks (identity needs A+B, security needs B+C, mux/negotiate need C)
  └── W5.1 → W5.2 → {W5.3, W5.4} → W5.5 → W5.6 → W5.7 → W5.8 → W5.9
       (mplex, P2, can follow W5.4 at any time)
@@ -82,14 +82,14 @@ vendor verify included.
 | Unit | Pkg | P | deps | Deliverable |
 |---|---|---|---|---|
 | W3.1 | `crypto/pure` | P0 | W1.2 | pure SHA-256/512, SHA-1, HMAC, HKDF with theorems |
-| W3.2 | `crypto/backend` | P0 | W1.2 | own OpenSSL 3 bindings for what no etheorem package covers: Ed25519, X25519, RSA, SHA-1, SHA-512, HMAC, HKDF, ChaCha20-Poly1305, X.509, plus randomness and key generation; all `ByteArray` args **borrowed** (`@&`); pure bindings for deterministic primitives, `IO` for randomness (ARCHITECTURE §3.6); the etheorem hazmat integration: pins for `LeanHazmatSecp256k1`, `LeanHazmatP256`, `LeanHazmatSha256`, `LeanHazmatKeccak`, with the v4.34 build checks; verifier strictness (key type, RSA 2048–8192, low-S, validity + critical exts) |
+| W3.2 | `crypto/backend` | P0 | W1.2 | own OpenSSL 3 bindings for what no etheorem package covers: Ed25519, X25519, RSA, SHA-1, SHA-512, HMAC, HKDF, ChaCha20-Poly1305, X.509, plus randomness and key generation; all `ByteArray` args **borrowed** (`@&`); pure bindings for deterministic primitives, `IO` for randomness (ARCHITECTURE §3.6); the etheorem hazmat integration: the v4.34 build checks for `LeanHazmatSecp256k1`, `LeanHazmatP256`, `LeanHazmatSha256`, `LeanHazmatKeccak`, a pin for each family that passes them, and the interim fallback for one that fails (ARCHITECTURE §4.6); verifier strictness (key type, RSA 2048–8192, low-S, validity + critical exts) |
 | W3.3 | `Crypto` facade + cross-check | P0 | W3.1, W3.2 | the `Crypto` facade library (ARCHITECTURE §3.6; callers import only the facade) and the `Rng` seam; the pure package and the production path agree property-wise at the IO edge (RFC vectors both ways) |
 
 ## W4: networking (parallel after W4.1)
 
 | Unit | Pkg | P | deps | Deliverable |
 |---|---|---|---|---|
-| W4.1 | `net/streams` core | P0 | W1.1, W1.2 | `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` (+`prependBytes`) as the seam over a loop (ARCHITECTURE §3.3), the in-memory sim as the second `Transport` value |
+| W4.1 | `net/streams` core | P0 | W1.1, W1.2, W2.1, W2.3 | `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` (+`prependBytes`) as the seam over a loop (ARCHITECTURE §3.3), the in-memory sim as the second `Transport` value; W2.1 gives `Framing` its `uvarint` prefix, and W2.3 gives the seam its `Multiaddr` |
 | W4.2 | `net/streams` tcp | P0 | W4.1, W1.1 | libuv transport with the close-wakes discipline, failed-write teardown, deadline wiring for §5.4 |
 | W4.3 | `net/yamux` | P0 | W4.1 | header codec (a proved `LawfulCodec`), session as a pure `step` + one loop task (ARCHITECTURE §3.3), flow control, hostile-frame rules (caps, SYN-only + parity, stream retirement, wake hand-off, capped control queue) |
 
