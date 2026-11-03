@@ -17,21 +17,42 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Run lake build and lake test
-        # lean-action runs the first two gates: lake
-        # build, then lake test. The remaining three appear as explicit
-        # steps below, so each command runs exactly once. The toolchain
-        # version needs no input; elan reads it from lean-toolchain.
+      - name: Install just
+        # The etheorem vendor recipes use the `[group]` attribute. The
+        # `just` of the Ubuntu archive (1.21) rejects it. etheorem's own
+        # CI uses this installer.
+        uses: extractions/setup-just@v3
+
+      - name: Install elan and the toolchain
+        # This step installs the toolchain and nothing else. The gates
+        # run as plain steps below, so the pin fetch comes between the
+        # toolchain and the build. elan reads the version from
+        # lean-toolchain.
         uses: leanprover/lean-action@v1
         with:
-          build: true
-          test: true
+          auto-config: false
+
+      - name: Fetch the etheorem pins and their native sources
+        # Any Lake command loads the workspace and clones the pinned
+        # packages. `lake env true` does that and nothing else. The
+        # script then runs the monorepo's own vendor recipes in each
+        # clone (packages/crypto/backend/docs/PLAN.md, milestones for
+        # 1a). The OpenSSL 3 headers of the backend shim come from
+        # libssl-dev, which the runner image carries.
+        run: |
+          lake env true
+          scripts/hazmat-vendor.sh
+
+      - name: Run lake build
+        run: lake build
+
+      - name: Run lake test
+        run: lake test
 
       - name: Run lake test -- +RTS -N1 -RTS
         # The suite must keep passing under +RTS -N1, the starvation
         # criterion (docs/ARCHITECTURE.md §6). One capability must
-        # leave no test starved. lean-action already ran the suite;
-        # this run repeats it under one capability.
+        # leave no test starved.
         run: lake test -- +RTS -N1 -RTS
 
       - name: Run the import lint

@@ -27,15 +27,15 @@ Unit 0 is done. Sub-units 1a and 1b close root W3.1 together.
 ## Consumers
 
 W3.3 builds the `Crypto` facade and names the production
-implementation of the surface (§3.6, §4.6 as amended): the backend for
-SHA-512, SHA-1, HMAC, and HKDF, and `LeanHazmatSha256` for SHA-256.
-The package architecture records that choice under
-"Decisions". The pure copies are the audited implementations and the
-oracles.
-The same unit runs the cross-check: it compares the pure copies with
-the production path, the backend bindings, and the etheorem packages
-for the four routed primitives, at the IO edge (§4.6). The cross-check
-covers SHA-1
+implementation of the surface (§3.6, §4.6): the backend for SHA-512,
+SHA-1, HMAC, and HKDF. SHA-256 goes to `LeanHazmatSha256` while that
+pin holds, and to the backend binding while it is out, as it is today.
+The package architecture records that choice under "Decisions". The
+pure copies are the audited implementations and the oracles.
+The same unit runs the cross-check. It compares the pure copies with
+the production path at the IO edge (§4.6). The production path is the
+backend bindings and the etheorem packages for the routed primitives.
+The cross-check covers SHA-1
 too, through the SHA-1 binding that W3.2 lands. This package's suite
 feeds that check and stays the oracle's own conformance suite.
 The RFC and multihash vectors pin the pure side on every run, and
@@ -97,8 +97,9 @@ provenance field names the sources, RFC 4231, RFC 5869, and the FIPS
 against the production path at runtime. SHA-256 and SHA-1 have no RFC
 file of their own in `Tests/vectors/`. SHA-256 is anchored through the
 inline NIST examples, the multihash spec vectors in
-`multihash-examples.json`, and the W3.3 cross-check, whose production
-side routes to `LeanHazmatSha256`. SHA-1 is
+`multihash-examples.json`, and the W3.3 cross-check. Its production
+side is `LeanHazmatSha256` while that pin holds, and the backend
+binding while it is out (root §4.6). SHA-1 is
 anchored through the multihash spec vectors, and the backend SHA-1
 binding that root W3.2 lands brings it into the W3.3 cross-check;
 the family is no longer closed by vectors alone. All files arrive
