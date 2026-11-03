@@ -4,6 +4,7 @@ import Tests.Concurrency
 import Tests.Protobuf
 import Tests.Bytes
 import Tests.Varint
+import Tests.Streams
 
 /-!
 # Test entry point
@@ -23,4 +24,5 @@ def main : IO UInt32 := do
   Tests.Protobuf.run r
   Bytes.runTests r
   Tests.Varint.run r
+  Tests.Streams.run r
   r.summary
