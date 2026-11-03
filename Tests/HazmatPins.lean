@@ -9,26 +9,25 @@ import LeanHazmatSecp256k1
 /-!
 # The etheorem pin checks (unit W3.2, sub-unit 1a)
 
-The etheorem hazmat families that the facade routes to (root
-ARCHITECTURE §4.6) build on this repo's toolchain, link, and answer.
-`LeanHazmatSha256` is not pinned; SHA-256 falls back to the backend
-binding (the backend PLAN, "Pin outcomes"), and the hashes below come
-from it.
+The pinned etheorem hazmat families (root ARCHITECTURE §4.6) build on
+this repo's toolchain, link, and answer. `LeanHazmatSha256` is not
+pinned. SHA-256 falls back to the backend binding (the backend PLAN,
+"Pin outcomes"), and the hashes below come from it.
 
 * `LeanHazmatKeccak`: the well-known keccak-256 digests of the empty
-  string and of `abc`, two named fixed cases. The package's own suite is
-  the family's main anchor; the W6.1 record fixture pins the end-to-end
-  path through the facade.
+  string and of `abc`, two named fixed cases. The package's own suite
+  is the family's main anchor. The W6.1 record fixture pins the
+  end-to-end path through the facade.
 * `LeanHazmatP256`: the go ECDSA fixture of `keys-go-libp2p.json`,
   verified through the family's raw `(r, s, qx, qy)` interface.
-* `LeanHazmatSecp256k1`: the go secp256k1 fixture, its key recovered
-  through `ecdsaRecover` and checked against the fixture's compressed
-  point, then verified.
+* `LeanHazmatSecp256k1`: the go secp256k1 fixture. The check recovers
+  its key through `ecdsaRecover`, compares it with the fixture's
+  compressed point, then verifies the signature.
 
-The last check records why the facade keeps the backend's secp256k1
-verifier: the family normalizes a high S before it verifies, so it
-accepts the high-S twin of a valid signature, and the low-S rule of
-§4.6 rejects it. The backend verifier rejects the same twin.
+The last check records why secp256k1 verification stays on the
+backend. The family normalizes a high S before it verifies, so it
+accepts the high-S twin of a valid signature. The low-S rule of §4.6
+rejects that twin, and so does the backend verifier.
 -/
 
 set_option autoImplicit false
@@ -40,7 +39,7 @@ open Bytes
 def HazmatPins.run (r : Runner) : IO Unit := do
   r.section "etheorem hazmat pins" "etheorem/etheorem packages/hazmat at the pinned rev"
 
-  -- Keccak-256 (the pre-standard padding, not SHA3-256).
+  -- Keccak-256 uses the pre-standard padding, which SHA3-256 changed.
   r.check "LeanHazmatKeccak: keccak-256 of the empty string"
     (toHex (LeanHazmat.Keccak.keccak256 .empty) ==
       "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470")
@@ -61,7 +60,7 @@ def HazmatPins.run (r : Runner) : IO Unit := do
   let otherHash ← sha256 (ofString "abc")
   for c in ← jArr file j "cases" do
     let name ← jStr file c "name"
-    -- RSA has no routed family; only the two ECDSA cases parse a DER
+    -- RSA has no etheorem family. Only the two ECDSA cases parse a DER
     -- signature.
     unless name == "ecdsa" || name == "secp256k1" do continue
     let pub ← unhex file (← jStr file c "pubRawHex")
@@ -78,7 +77,7 @@ def HazmatPins.run (r : Runner) : IO Unit := do
       r.check "LeanHazmatP256: a wrong hash fails"
         (!LeanHazmat.P256.p256Verify otherHash sr ss qx qy)
     | "secp256k1" =>
-      -- Recover the 64-byte `x ‖ y` key; the right recovery id gives
+      -- Recover the 64-byte `x ‖ y` key. The right recovery id gives
       -- the fixture's compressed point (prefix 0x02 | parity of y).
       let compress (k : ByteArray) : ByteArray :=
         (ByteArray.mk #[0x02 ||| (k.get! 63 &&& 1)]) ++ k.extract 0 32
@@ -92,7 +91,7 @@ def HazmatPins.run (r : Runner) : IO Unit := do
         -- The evidence for root §4.6: the etheorem verifier accepts a
         -- high S, so secp256k1 verification stays on the backend shim.
         let highS := Ecdsa.bytesOfNat 32 (Ecdsa.secp256k1Order - s')
-        r.check "LeanHazmatSecp256k1 accepts the high-S twin (so the facade keeps the backend verifier)"
+        r.check "LeanHazmatSecp256k1 accepts the high-S twin (so verification stays on the backend)"
           (LeanHazmat.Secp256k1.ecdsaVerify hash sr highS full)
     | _ => pure ()
 

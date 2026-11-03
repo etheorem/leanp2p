@@ -7,9 +7,13 @@ The Lean side checks the size once, where the bytes enter, and the shim
 reads the bytes without a second check (contract 2 of the package
 ARCHITECTURE).
 
-`Key32` serves every 32-byte secret or public key the shim takes: the
-ChaCha20-Poly1305 key, the Ed25519 seed, the X25519 private and public
-keys, and the raw secp256k1 scalar. `Nonce12` is the RFC 8439 nonce.
+`Key32` serves every 32-byte secret or public key the shim takes:
+- the ChaCha20-Poly1305 key,
+- the Ed25519 seed,
+- the X25519 private and public keys,
+- the raw secp256k1 scalar.
+
+`Nonce12` is the RFC 8439 nonce.
 Lean erases the proof field at runtime, so a newtype costs nothing.
 -/
 

@@ -5,17 +5,17 @@
  * ARCHITECTURE.md, contract 3). The conventions, binding for every
  * function below:
  *
- * - Every exported symbol carries the `leanp2p_` prefix and is reached
- *   from exactly one `@[extern]` declaration in `Backend/Sym.lean`,
- *   `Backend/Sign.lean`, or `Backend/X509.lean`.
- * - Every `ByteArray` argument is borrowed (`b_lean_obj_arg`). The shim
- *   never takes a reference to an argument and never frees one. An owned
- *   parameter leaks one reference per call (contract 1).
- * - Sizes that the Lean side checks (a 32-byte key, a 12-byte nonce, a
- *   tag-sized ciphertext, the `int` range of the AEAD lengths) cross
- *   unchecked. The shim checks only what the parse alone knows: the
- *   DER-derived facts of a parsed key, and that a DER input fits the
- *   `int` length of its OpenSSL parser (contract 2).
+ * - Every exported symbol carries the `leanp2p_` prefix. Exactly one
+ *   `@[extern]` declaration in `Backend/Sym.lean`, `Backend/Sign.lean`,
+ *   or `Backend/X509.lean` reaches it.
+ * - The shim borrows every `ByteArray` argument (`b_lean_obj_arg`). It
+ *   never takes a reference to an argument and never frees one. An
+ *   owned parameter leaks one reference per call (contract 1).
+ * - Sizes that the Lean side checks cross unchecked: a 32-byte key, a
+ *   12-byte nonce, a tag-sized ciphertext, the `int` range of the AEAD
+ *   lengths. The shim checks only what the parse alone knows (contract
+ *   2). That is the DER-derived facts of a parsed key, and that a DER
+ *   input fits the `int` length of its OpenSSL parser.
  * - A pure binding returns `Option ByteArray`: `none` is a failure, and
  *   the Lean wrapper lifts it once into `Except CryptoError`. A verifier
  *   returns `uint8_t` (Lean `Bool`), and every malformed input or
@@ -57,7 +57,8 @@ static lean_object *mk_bytes(const uint8_t *p, size_t n) {
     return r;
 }
 
-/* Shrink a `ByteArray` whose real length is known only after the call. */
+/* Shrink a `ByteArray` to `n` bytes, for a call that reports its real
+   output length only after it runs. */
 static lean_object *set_len(lean_object *b, size_t n) {
     lean_to_sarray(b)->m_size = n;
     return b;
@@ -176,8 +177,8 @@ LEAN_EXPORT lean_obj_res leanp2p_chacha_seal(b_lean_obj_arg key, b_lean_obj_arg 
 }
 
 /* Open: `none` on a tag mismatch. The Lean side checks that `ct` holds at
-   least the tag and that `ct` and `ad` fit an `int`, and it maps `none`
-   to the authentication-failure arm. */
+   least the tag and that `ct` and `ad` fit an `int`. It maps `none` to
+   the authentication-failure arm. */
 LEAN_EXPORT lean_obj_res leanp2p_chacha_open(b_lean_obj_arg key, b_lean_obj_arg nonce,
                                              b_lean_obj_arg ad, b_lean_obj_arg ct) {
     size_t n = blen(ct) - TAG_LEN;
@@ -284,12 +285,14 @@ LEAN_EXPORT lean_obj_res leanp2p_x25519_dh(b_lean_obj_arg priv, b_lean_obj_arg p
 /* ------------------------------------------------------------------ */
 
 /* The verifier strictness rules (root ARCHITECTURE §4.6) live in this
-   section: a key loads only as the type it claims, an RSA key has 2048
-   to 8192 bits, and a secp256k1 signature has a low S in strict DER. */
+   section:
+   - a key loads only as the type it claims,
+   - an RSA key has 2048 to 8192 bits,
+   - a secp256k1 signature has a low S in strict DER. */
 
-/* The one home of the RSA modulus range: the Lean side reads it through
-   the two getters below (`Backend.rsaMinBits`, `Backend.rsaMaxBits`), so
-   the generator's check and the verifiers' check cannot drift. */
+/* The one home of the RSA modulus range. The Lean side reads it through
+   the two getters below (`Backend.rsaMinBits`, `Backend.rsaMaxBits`).
+   So the generator's check and the verifiers' check cannot drift. */
 #define RSA_MIN_BITS 2048
 #define RSA_MAX_BITS 8192
 
@@ -343,10 +346,10 @@ static EVP_PKEY *load_spki(b_lean_obj_arg der) {
     return k;
 }
 
-/* The SPKI DER encoding of the public half of `k`. An EC key encodes its
-   point in the form it was loaded with, and a SEC1 key may carry a
-   compressed point, so the EC case sets the uncompressed form first: it
-   is the one form the P-256 verifiers accept. */
+/* The SPKI DER encoding of the public half of `k`. OpenSSL encodes an EC
+   point in the form the key came in, and a SEC1 key may carry a
+   compressed point. So the EC case sets the uncompressed form first,
+   the one form the P-256 verifiers accept. */
 static lean_object *spki_of(EVP_PKEY *k) {
     if (EVP_PKEY_is_a(k, "EC")
         && EVP_PKEY_set_utf8_string_param(k, OSSL_PKEY_PARAM_EC_POINT_CONVERSION_FORMAT,
@@ -360,8 +363,8 @@ static lean_object *spki_of(EVP_PKEY *k) {
 }
 
 /* The type-specific DER of a private key: PKCS#1 for RSA, SEC1 for EC,
-   whatever form the key was loaded from. The scratch copy holds key
-   material, so it is cleared before it is freed. */
+   whatever form the key came in. The scratch copy holds key material,
+   so `OPENSSL_clear_free` clears it before it frees it. */
 static lean_object *private_der_of(EVP_PKEY *k) {
     unsigned char *der = NULL;
     int n = k != NULL ? i2d_PrivateKey(k, &der) : -1;
@@ -371,7 +374,7 @@ static lean_object *private_der_of(EVP_PKEY *k) {
 }
 
 /* A SHA-256 signature by `k` over `msg`, `none` on failure. For RSA the
-   default padding is PKCS#1 v1.5; for EC the output is a DER
+   default padding is PKCS#1 v1.5. For EC the output is a DER
    ECDSA-Sig-Value. */
 static lean_object *sign_sha256(EVP_PKEY *k, b_lean_obj_arg msg) {
     EVP_MD_CTX *m = EVP_MD_CTX_new();
@@ -399,7 +402,7 @@ static int verify_sha256(EVP_PKEY *k, b_lean_obj_arg msg, b_lean_obj_arg sig) {
     return ok;
 }
 
-/* -- RSA, RSASSA-PKCS1-v1_5 with SHA-256 -- */
+/* RSA, RSASSA-PKCS1-v1_5 with SHA-256. */
 
 LEAN_EXPORT lean_obj_res leanp2p_rsa_public(b_lean_obj_arg priv) {
     EVP_PKEY *k = load_private_der(EVP_PKEY_RSA, priv);
@@ -433,7 +436,8 @@ LEAN_EXPORT uint8_t leanp2p_rsa_verify(b_lean_obj_arg spki, b_lean_obj_arg msg,
     return ok;
 }
 
-/* -- ECDSA P-256 with SHA-256, the interim fallback -- */
+/* ECDSA P-256 with SHA-256. Verification is the interim fallback until
+   the facade routes it to the etheorem package. */
 
 LEAN_EXPORT lean_obj_res leanp2p_p256_public(b_lean_obj_arg priv) {
     EVP_PKEY *k = load_private_der(EVP_PKEY_EC, priv);
@@ -461,9 +465,9 @@ LEAN_EXPORT lean_obj_res leanp2p_p256_sign(b_lean_obj_arg priv, b_lean_obj_arg m
     return lean_io_result_mk_ok(r);
 }
 
-/* The Lean wrapper `Backend.p256Verify` admits the 91-byte SPKI of an
-   uncompressed point only (Go's form), so the key reaches this function
-   in that form; the curve check stays here, on the parsed key. */
+/* The Lean wrapper `Backend.p256Verify` admits only the 91-byte SPKI of
+   an uncompressed point (Go's form), so the key reaches this function in
+   that form. The curve check stays here, on the parsed key. */
 LEAN_EXPORT uint8_t leanp2p_p256_verify(b_lean_obj_arg spki, b_lean_obj_arg msg,
                                         b_lean_obj_arg sig) {
     EVP_PKEY *k = load_spki(spki);
@@ -472,12 +476,13 @@ LEAN_EXPORT uint8_t leanp2p_p256_verify(b_lean_obj_arg spki, b_lean_obj_arg msg,
     return ok;
 }
 
-/* -- secp256k1 ECDSA with SHA-256, the interim fallback -- */
+/* secp256k1 ECDSA with SHA-256. The etheorem verifier accepts a high S,
+   so all of secp256k1 stays here (root ARCHITECTURE §4.6). */
 
 /* The private key crosses as the raw 32-byte scalar. The shim wraps it
    in a fixed SEC1 ECPrivateKey (RFC 5915) with the secp256k1 OID
-   1.3.132.0.10 and no public key; OpenSSL computes the public point on
-   load. */
+   1.3.132.0.10 and no public key. OpenSSL computes the public point
+   when it loads the key. */
 static const uint8_t SEC1_K1_HEAD[7] = {0x30, 0x2e, 0x02, 0x01, 0x01, 0x04, 0x20};
 static const uint8_t SEC1_K1_TAIL[9] = {0xa0, 0x07, 0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x0a};
 
@@ -538,9 +543,9 @@ static int ec_half_order(EVP_PKEY *k, BIGNUM **order, BIGNUM **half) {
 }
 
 /* The compressed SEC1 point (SEC 1 §2.3.3): 0x02 or 0x03 by the parity
-   of y, then x. OpenSSL hands out the uncompressed form of a key loaded
-   from DER and ignores a conversion-format request on it, so the shim
-   compresses the 65-byte `04 ‖ x ‖ y` form itself. */
+   of y, then x. For a key loaded from DER, OpenSSL gives the
+   uncompressed form and ignores a conversion-format request. So the
+   shim compresses the 65-byte `04 ‖ x ‖ y` form itself. */
 LEAN_EXPORT lean_obj_res leanp2p_secp256k1_public(b_lean_obj_arg scalar) {
     EVP_PKEY *k = k1_private(scalar);
     uint8_t full[65];
@@ -693,12 +698,14 @@ LEAN_EXPORT lean_obj_res leanp2p_rsa_generate(size_t bits, lean_obj_arg w) {
 /* X.509 (RFC 5280)                                                    */
 /* ------------------------------------------------------------------ */
 
-/* The X.509 rules (root ARCHITECTURE §4.6): the extension the caller
-   names must be present, no extension may appear twice, and a critical
-   extension must be the named one or one OpenSSL understands (see
-   `required_extension`). The shim reports the validity times and does not judge them, so a
-   pure binding never reads the clock; the caller compares them with its
-   `Clock`. */
+/* The X.509 rules (root ARCHITECTURE §4.6, see `required_extension`):
+   - the extension the caller names must be present,
+   - no extension may appear twice,
+   - a critical extension must be the named one or one OpenSSL
+     understands.
+   The shim reports the validity times and does not judge them, so a
+   pure binding never reads the clock. The caller compares the times
+   with its `Clock`. */
 
 /* A DER certificate with no trailing bytes, or NULL. */
 static X509 *load_cert(b_lean_obj_arg der) {
@@ -722,11 +729,14 @@ static int posix_of(const ASN1_TIME *t, int64_t *out) {
     return ok;
 }
 
-/* The extension `oid` (dotted text) of `x`, or NULL when it is missing,
-   when any extension appears twice (RFC 5280 §4.2; Go's parser rejects
-   it too), or when a critical extension is neither `oid` nor one that
-   OpenSSL understands. tls.md asks an endpoint to abort only on the
-   critical extensions it does not understand, and go-libp2p leaves the
+/* The extension `oid` (dotted text) of `x`. NULL in three cases:
+   - the extension is missing,
+   - any extension appears twice (RFC 5280 §4.2, and Go's parser rejects
+     it too),
+   - a critical extension is neither `oid` nor one that OpenSSL
+     understands.
+   The TLS spec asks an endpoint to abort only on the critical
+   extensions it does not understand. The Go implementation leaves the
    known ones (basicConstraints, keyUsage, ...) to crypto/x509
    (vendor/go-libp2p/p2p/security/tls/crypto.go, lines 171 to 184). */
 static X509_EXTENSION *required_extension(X509 *x, const char *oid) {
@@ -751,8 +761,9 @@ static X509_EXTENSION *required_extension(X509 *x, const char *oid) {
 /* Inspect a certificate: the subject key as SPKI DER, the value of the
    required extension `oid`, and the NotBefore and NotAfter times. The
    Lean structure `Backend.CertificateRaw` has two object fields and two
-   `UInt64` scalars, which Lean lays out after the objects in declaration
-   order; the times cross as the two's-complement bits of an int64_t. */
+   `UInt64` scalars. Lean lays the scalars out after the objects, in
+   declaration order. The times cross as the two's-complement bits of an
+   int64_t. */
 LEAN_EXPORT lean_obj_res leanp2p_x509_inspect(b_lean_obj_arg der, b_lean_obj_arg oid) {
     X509 *x = load_cert(der);
     X509_EXTENSION *e = x != NULL ? required_extension(x, lean_string_cstr(oid)) : NULL;
@@ -788,9 +799,11 @@ static int signature_algorithm_ok(const X509 *x) {
     return md == NID_sha256 || md == NID_sha384 || md == NID_sha512;
 }
 
-/* True when the certificate's signature verifies under its own subject
-   key, the algorithm passes `signature_algorithm_ok`, and an RSA subject
-   key has 2048 to 8192 bits (§4.6). A parse failure gives 0. */
+/* 1 when all three hold (§4.6):
+   - the certificate's signature verifies under its own subject key,
+   - the algorithm passes `signature_algorithm_ok`,
+   - an RSA subject key has 2048 to 8192 bits.
+   A parse failure gives 0. */
 LEAN_EXPORT uint8_t leanp2p_x509_self_signed(b_lean_obj_arg der) {
     X509 *x = load_cert(der);
     EVP_PKEY *k = x != NULL ? X509_get0_pubkey(x) : NULL;

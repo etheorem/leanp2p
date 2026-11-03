@@ -10,7 +10,7 @@ import Backend.X509
 The OpenSSL 3 shim behind the crypto interface (root ARCHITECTURE
 §4.6): one C file, `c/p2pcrypto.c`, and the `@[extern]` bindings over
 it. Production callers import the `Crypto` facade, never this root
-(§3.6); this package's own suite imports it directly. The package docs
+(§3.6). This package's own suite imports it directly. The package docs
 live under `docs/` beside this file.
 
 This directory is a nested Lake package with its own `lakefile.lean`,

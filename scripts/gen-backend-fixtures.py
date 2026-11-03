@@ -3,24 +3,26 @@
 
 The backend plan's vector stance: a family with no captured vector
 closes through "a generated fixture whose provenance the file records"
-(packages/crypto/backend/docs/PLAN.md). The TLS spec's four certificates
-hold no expired one and no unknown critical extension, and no captured
-file holds an RSA key outside 2048 to 8192 bits, so this script makes
-them with the openssl CLI.
+(packages/crypto/backend/docs/PLAN.md). No captured file holds these
+cases:
+- an expired certificate,
+- a certificate with an unknown critical extension,
+- an RSA key outside 2048 to 8192 bits.
+So this script makes them with the openssl CLI.
 
 The keys are random, so a rerun gives new bytes. The output therefore
 lives in Tests/fixtures/, outside the provenance-gated Tests/vectors/
 corpus, and the file records the tool, its version, and the date.
 
-Each certificate breaks one rule and keeps every other one: a P-256
-self-signed certificate with the required extension, valid far into the
-future, except where its case says otherwise. A minimal openssl config
-keeps the default extensions out, so each case adds only what it tests;
-`knownCritical` adds a critical `basicConstraints` on purpose. Two
-cases need a weak self-signature (SHA-1, a 1024-bit RSA key), one needs
-a duplicate extension, which openssl refuses to write, so the script
-splices a second copy into the DER, and one SEC1 P-256 key stores its
-public point compressed.
+Each certificate breaks one rule and keeps every other one. The base is
+a P-256 self-signed certificate with the required extension, valid far
+into the future. Each case changes only what it tests. A minimal
+openssl config keeps the default extensions out, and `knownCritical`
+adds a critical `basicConstraints` on purpose. Some cases need more:
+- Two cases need a weak self-signature (SHA-1, a 1024-bit RSA key).
+- One case needs a duplicate extension. openssl refuses to write one,
+  so the script inserts a second copy into the DER.
+- One SEC1 P-256 key stores its public point compressed.
 
 Usage: scripts/gen-backend-fixtures.py   (writes Tests/fixtures/backend-strictness.json)
 """
@@ -34,8 +36,8 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "Tests" / "fixtures" / "backend-strictness.json"
 
-# The OID of the TLS spec's key extension (tls.md); any OID would do, and
-# this one matches the certificates the fixtures stand beside.
+# The OID of the TLS spec's key extension (tls.md). Any OID would do.
+# This one matches the certificates the fixtures stand beside.
 REQUIRED_OID = "1.3.6.1.4.1.53594.1.1"
 # An OID under the IANA example arc (RFC 7229), which no verifier knows.
 UNKNOWN_OID = "1.3.6.1.4.1.32473.1.1"
@@ -186,7 +188,7 @@ def main() -> None:
         certs.append({**next(c for c in certs if c["name"] == "unknownNonCritical"),
                       "name": "duplicateExtension", "certHex": dup.hex(), "expect": "reject",
                       "why": "an extension that appears twice (RFC 5280 §4.2)"})
-        # A SEC1 P-256 key whose public point is stored compressed.
+        # A SEC1 P-256 key that stores its public point compressed.
         compressed = run("openssl", "ec", "-in", "cert.pem", "-conv_form", "compressed",
                          "-outform", "DER", cwd=d)
         rsa = [rsa_case(1024, d), rsa_case(9216, d)]

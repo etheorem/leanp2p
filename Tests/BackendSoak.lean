@@ -6,22 +6,26 @@ import Backend
 
 The borrowed-argument regression of `packages/crypto/backend/docs/PLAN.md`
 (contract 1). An owned `ByteArray` parameter that the shim never
-releases leaks the whole argument on every call; the spike's review
-measured 200,000 SHA-256 calls growing RSS from 14 MB to 526 MB, and
+releases leaks the whole argument on every call. The spike's review
+measured 200,000 SHA-256 calls: RSS grew from 14 MB to 526 MB, and to
 9.5 MB after the fix (PRINCIPLES 4.1).
 
 The soak drives 200,000 calls through six borrowed bindings in turn,
-each on a freshly allocated 4 KiB input: SHA-256, HMAC-SHA-256,
-ChaCha20-Poly1305 seal, P-256 verify (the input is the message), and the
-two X.509 helpers (the input is no certificate, so they fail at the
-parse, after the shim has read the argument). A binding whose argument
-leaks costs 4 KiB on each of its calls, about 130 MiB over the run. The
-pass condition is RSS growth below 32 MiB. A reused input would hide the
-leak, because a leaked reference to one object costs no memory, so
-every call gets a new one.
+each on a freshly allocated 4 KiB input:
+- SHA-256
+- HMAC-SHA-256
+- ChaCha20-Poly1305 seal
+- P-256 verify (the input is the message)
+- the two X.509 helpers (the input is no certificate, so they fail at
+  the parse, after the shim reads the argument)
 
-RSS comes from `/proc/self/status`, so the check runs on Linux only and
-is skipped elsewhere with the reason printed.
+A binding whose argument leaks costs 4 KiB on each of its calls, about
+130 MiB over the run. The check passes when RSS grows by less than
+32 MiB. A reused input would hide the leak, because a leaked reference
+to one object costs no memory. So every call gets a new input.
+
+RSS comes from `/proc/self/status`, so the check runs on Linux only.
+Elsewhere the runner skips it and prints the reason.
 -/
 
 set_option autoImplicit false

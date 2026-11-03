@@ -5,54 +5,60 @@ import Backend.Sized
 # Key agreement and signatures
 
 The bindings of `c/p2pcrypto.c` for X25519 (RFC 7748), Ed25519
-(RFC 8032), RSA (RSASSA-PKCS1-v1_5 with SHA-256, RFC 8017 §8.2), and
-the interim fallbacks for ECDSA P-256 and secp256k1 (ECDSA with SHA-256,
-SEC 1). Root ARCHITECTURE §4.6 routes P-256 and secp256k1 to the
-etheorem packages `LeanHazmatP256` and `LeanHazmatSecp256k1`. Those
-packages bind verification only, so signing and public-key derivation
-come from here. The secp256k1 verifier stays here as well: the etheorem
-verifier accepts a high S, and §4.6 requires low-S (the package PLAN,
-"Pin outcomes").
+(RFC 8032), RSA (RSASSA-PKCS1-v1_5 with SHA-256, RFC 8017 §8.2),
+secp256k1, and ECDSA P-256 (both ECDSA with SHA-256, SEC 1). Root ARCHITECTURE §4.6 routes P-256 verification to the
+etheorem package `LeanHazmatP256`. That package binds verification
+only, so P-256 signing and public-key derivation come from here. All
+of secp256k1 stays here. The etheorem verifier accepts a high S, and
+§4.6 requires a low S (the package PLAN, "Pin outcomes").
 
-**Key forms.** A key crosses as opaque bytes. Ed25519 and X25519 take
-the raw 32-byte keys, and secp256k1 takes the raw 32-byte scalar and
-gives the 33-byte compressed SEC1 point. RSA and P-256 take the private
-key in its type-specific DER form (PKCS#1 `RSAPrivateKey`, SEC1
-`ECPrivateKey`) and give the public key as SubjectPublicKeyInfo DER.
-Which form a protocol stores is the caller's choice; this package
-exposes no marshaling of its own (package ARCHITECTURE, "Decisions").
+**Key forms.** A key crosses as opaque bytes.
+- Ed25519 and X25519 take the raw 32-byte keys.
+- secp256k1 takes the raw 32-byte scalar and gives the 33-byte
+  compressed SEC1 point.
+- RSA and P-256 take the private key in its type-specific DER form
+  (PKCS#1 `RSAPrivateKey`, SEC1 `ECPrivateKey`). They give the public
+  key as SubjectPublicKeyInfo DER.
+
+The caller chooses which form a protocol stores. This package exposes
+no marshaling of its own (package ARCHITECTURE, "Decisions").
 
 **Binding types (§3.6).** Ed25519 and RSASSA-PKCS1-v1_5 sign
 deterministically, and every derivation and verifier is deterministic,
-so those bindings are pure. That is a promise the shim keeps: the same
-input gives the same output, and the call reads no global state and
-has no side effect. ECDSA draws a random nonce, so the P-256 and
-secp256k1 signers take the world, as do the key generators.
+so those bindings are pure. The shim keeps that promise. The same input
+gives the same output, and the call reads no global state and has no
+side effect. ECDSA draws a random nonce, so the P-256 and secp256k1
+signers take the world. The key generators take it too.
 
-**The ownership rule.** Every `ByteArray` argument of an `@[extern]`
-declaration below is borrowed (`@&`), and the shim declares it
-`b_lean_obj_arg` and never takes a reference (contract 1).
+**The ownership rule.** The shim borrows every `ByteArray` argument of
+an `@[extern]` declaration below. The declaration marks it `@&`, and
+the shim declares it `b_lean_obj_arg` and never takes a reference
+(contract 1).
 
 **Verifier strictness (§4.6).** A verifier accepts only the key type
-and size it claims. The RSA verifier rejects a non-RSA key and a key
-outside 2048 to 8192 bits; the P-256 verifier rejects any key off the
-P-256 curve; the secp256k1 verifier rejects a high S and a non-canonical
-DER signature. The checks read the parsed key, so they live in the C
-verifier (contract 2).
+and size it claims.
+- The RSA verifier rejects a non-RSA key and a key outside 2048 to 8192
+  bits.
+- The P-256 verifier rejects any key off the P-256 curve.
+- The secp256k1 verifier rejects a high S and a non-canonical DER
+  signature.
 
-**The verifier fold.** A verifier returns `Bool`, and `false` covers a
+The checks read the parsed key, so they live in the C verifier
+(contract 2).
+
+**The verifier fold.** A verifier returns `Bool`. `false` covers a
 signature that does not verify, every malformed input, and every
-library fault, fail-closed. No fault channel exists on the `Bool`
-(§3.6).
+library fault, fail-closed. The `Bool` has no fault channel (§3.6).
 
-**Trust boundary.** The declarations are `opaque`, and `#axioms` lists
-the assumption at every use. The library is the toolchain's bundled
-static OpenSSL 3, pinned by `lean-toolchain`, as in `Backend.Sym`.
-`Tests/Backend.lean` pins the bindings by the RFC 8032 and RFC 7748
-vectors and the captured go key fixtures. `Tests/BackendStrict.lean`
-pins the verifier strictness, the determinism, and key generation.
-The raw declarations are `private`, because the shim trusts the sizes
-the wrappers prove, so this docstring is their trust note.
+**Trust boundary.** The declarations are `opaque`. `#print axioms` does
+not list an `opaque` constant, so this docstring is the record of the
+assumption. The library is the toolchain's bundled static OpenSSL 3,
+which `lean-toolchain` pins, as in `Backend.Sym`. `Tests/Backend.lean`
+pins the bindings by the RFC 8032 and RFC 7748 vectors and the captured
+go key fixtures. `Tests/BackendStrict.lean` pins the verifier
+strictness, the determinism, and key generation. The raw declarations
+are `private`, because the shim trusts the sizes the wrappers check.
+This docstring is their trust note.
 -/
 
 set_option autoImplicit false
@@ -60,7 +66,7 @@ set_option autoImplicit false
 namespace Backend
 
 /-- A shim answer that must be exactly 32 bytes, as a `Key32`. A wrong
-size is a library fault; the shim checks the length it writes. -/
+size is a library fault. The shim checks the length it writes. -/
 private def toKey32 (b : ByteArray) : Except CryptoError Key32 :=
   match Key32.ofByteArray? b with
   | some k => .ok k
@@ -81,7 +87,7 @@ def x25519PublicKey (priv : Key32) : Except CryptoError Key32 :=
 
 /-- The X25519 shared secret of a private key and a peer's public key.
 A peer key of small order gives the all-zero secret, which RFC 7748
-§6.1 lets a protocol reject; OpenSSL rejects it, and the binding
+§6.1 lets a protocol reject. OpenSSL rejects it, and the binding
 reports `invalidKey`. -/
 def x25519 (priv peer : Key32) : Except CryptoError Key32 :=
   liftShim .invalidKey (x25519Raw priv.bytes peer.bytes) >>= toKey32
@@ -116,9 +122,9 @@ deterministic, so the binding is pure. -/
 def ed25519Sign (seed : Key32) (msg : ByteArray) : Except CryptoError ByteArray :=
   liftShim .fault (ed25519SignRaw seed.bytes msg)
 
-/-- Verify an Ed25519 signature (RFC 8032 §5.1.7). A public key of the
-wrong size, a signature of the wrong size, a point that does not decode,
-and a signature that does not verify all give `false`. -/
+/-- Verify an Ed25519 signature (RFC 8032 §5.1.7). These inputs give
+`false`: a public key or a signature of the wrong size, a point that
+does not decode, and a signature that does not verify. -/
 def ed25519Verify (pub msg sig : ByteArray) : Bool :=
   match Key32.ofByteArray? pub with
   | some k => sig.size == ed25519SigLen && ed25519VerifyRaw k.bytes msg sig
@@ -162,7 +168,11 @@ public key. A non-RSA key and an RSA key outside 2048 to 8192 bits give
 `false`, as does every malformed input. -/
 def rsaVerify (spki msg sig : ByteArray) : Bool := rsaVerifyRaw spki msg sig
 
-/-! ## ECDSA P-256, the interim fallback -/
+/-! ## ECDSA P-256
+
+Signing and public-key derivation stay here. Verification here is the
+interim fallback until the facade routes it to `LeanHazmatP256`
+(root ARCHITECTURE §4.6). -/
 
 @[extern "leanp2p_p256_public"]
 private opaque p256PublicRaw (priv : @& ByteArray) : Option ByteArray
@@ -198,7 +208,7 @@ def p256Sign (priv msg : ByteArray) : ExceptT CryptoError IO ByteArray := do
 (RFC 5480 §2): `SEQUENCE(89) { SEQUENCE(19) { OID id-ecPublicKey, OID
 prime256v1 }, BIT STRING(66) 0x00 0x04 … }`. The `0x00` counts the
 unused bits of the BIT STRING, and `0x04` tags the point as
-uncompressed (SEC 1 §2.3.3). This is the one home of the layout; the
+uncompressed (SEC 1 §2.3.3). This is the one home of the layout. The
 facade's P-256 route (unit 2 of the package PLAN) reads it from here. -/
 def p256SpkiHead : ByteArray := ByteArray.mk #[
   0x30, 0x59, 0x30, 0x13,
@@ -221,13 +231,16 @@ def p256SpkiUncompressed (spki : ByteArray) : Bool :=
   spki.size == p256SpkiSize && spki.extract 0 p256SpkiHead.size == p256SpkiHead
 
 /-- Verify a DER ECDSA signature over SHA-256(`msg`) under an SPKI DER
-public key. The key must pass `p256SpkiUncompressed`; a compressed or
-hybrid point, and a key off the P-256 curve, give `false`, as does every
-malformed input. -/
+public key. The key must pass `p256SpkiUncompressed`. A compressed or
+hybrid point, a key off the P-256 curve, and every malformed input give
+`false`. -/
 def p256Verify (spki msg sig : ByteArray) : Bool :=
   p256SpkiUncompressed spki && p256VerifyRaw spki msg sig
 
-/-! ## secp256k1, the interim fallback -/
+/-! ## secp256k1
+
+The etheorem verifier accepts a high S, so all of secp256k1 stays on
+this shim (root ARCHITECTURE §4.6). -/
 
 @[extern "leanp2p_secp256k1_public"]
 private opaque secp256k1PublicRaw (scalar : @& ByteArray) : Option ByteArray
@@ -242,8 +255,8 @@ private opaque secp256k1VerifyRaw (point : @& ByteArray) (msg : @& ByteArray)
 
 /-- `true` when `point` is a SEC1 point on secp256k1, compressed or
 uncompressed. `false` for a point off the curve and every malformed
-input, fail-closed. Trust: OpenSSL 3 of the toolchain loads and checks
-the point; `Tests/Backend.lean` pins it with the go fixture key. -/
+input, fail-closed. Trust: the toolchain's OpenSSL 3 loads and checks
+the point. `Tests/Backend.lean` pins it with the go fixture key. -/
 @[extern "leanp2p_secp256k1_check"]
 opaque secp256k1PointValid (point : @& ByteArray) : Bool
 
@@ -254,14 +267,14 @@ def secp256k1PublicKey (scalar : Key32) : Except CryptoError ByteArray :=
 
 /-- The DER ECDSA signature of SHA-256(`msg`), with S in its low form,
 so the signature passes the low-S rule of `secp256k1Verify`. OpenSSL
-draws a random nonce, where some implementations use RFC 6979, so the
-signature bytes are not reproducible. -/
+draws a random nonce, so the signature bytes are not reproducible. Some
+implementations derive the nonce by RFC 6979 instead. -/
 def secp256k1Sign (scalar : Key32) (msg : ByteArray) : ExceptT CryptoError IO ByteArray := do
   ExceptT.mk (liftShim .invalidKey <$> secp256k1SignRaw scalar.bytes msg)
 
 /-- Verify a DER ECDSA signature over SHA-256(`msg`) under a SEC1 point,
-compressed or uncompressed. A high S, a non-canonical DER encoding, and
-a point off the curve give `false`, as does every malformed input. -/
+compressed or uncompressed. A high S, a non-canonical DER encoding, a
+point off the curve, and every malformed input give `false`. -/
 def secp256k1Verify (point msg sig : ByteArray) : Bool := secp256k1VerifyRaw point msg sig
 
 /-! ## Key generation
@@ -311,9 +324,9 @@ private opaque rsaMinBitsRaw : Unit → UInt32
 private opaque rsaMaxBitsRaw : Unit → UInt32
 
 /-- The smallest RSA modulus this package accepts, in bits (§4.6). The C
-verifier checks a parsed key, where this side cannot see the size, so
-the shim's `RSA_MIN_BITS` is the one home of the number and this name
-reads it. -/
+verifier checks the size of a parsed key, which this side cannot see.
+So the shim's `RSA_MIN_BITS` is the one home of the number, and this
+name reads it. -/
 def rsaMinBits : Nat := (rsaMinBitsRaw ()).toNat
 
 /-- The largest RSA modulus this package accepts, in bits (§4.6), read

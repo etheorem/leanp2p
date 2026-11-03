@@ -10,32 +10,38 @@ for 1b.
 
 **`tls-ext.json`, the four certificates of the TLS spec (tls.md, "Test
 vectors").** All four parse with the key extension
-`1.3.6.1.4.1.53594.1.1`, pass the self-signature check, and give the
-validity times their DER fields encode: NotBefore `750101130000Z`
-(UTCTime, 1975-01-01 13:00:00 UTC, 157813200) and NotAfter
-`40960101130000Z` (GeneralizedTime, 4096-01-01 13:00:00 UTC,
-67090165200). The file carries no expected times, so the literals here
-come from those fields.
+`1.3.6.1.4.1.53594.1.1` and pass the self-signature check. Each gives
+the validity times its DER fields encode:
+- NotBefore `750101130000Z` (UTCTime, 1975-01-01 13:00:00 UTC,
+  157813200)
+- NotAfter `40960101130000Z` (GeneralizedTime, 4096-01-01 13:00:00 UTC,
+  67090165200)
 
-Certificate 4 is invalid in a way X.509 cannot see: it is a well-formed
+The file carries no expected times, so the literals here come from
+those fields.
+
+Certificate 4 is invalid in a way X.509 cannot see. It is a well-formed
 self-signed certificate, and the host-key signature inside the
-extension does not verify. Checking that needs the extension's
-`SignedKey` structure, the key protobuf, and the signing prefix, all
-knowledge above the backend. The suite composes the backend helpers the
-way the TLS handshake will (root §8 defers that layer): it reads the
+extension does not verify. That check needs the extension's `SignedKey`
+structure, the key protobuf, and the signing prefix, which all belong
+above the backend. So the suite composes the backend helpers the way
+the TLS handshake will (root §8 defers that layer). It reads the
 `SignedKey`, picks the verifier by the key type, and checks the
 signature over `libp2p-tls-handshake:` and the certificate's SPKI.
-Certificates 1 to 3 pass; certificate 4 fails.
+Certificates 1 to 3 pass, and certificate 4 fails.
 
 **`Tests/fixtures/backend-strictness.json`, generated certificates.**
-Each breaks one rule (`scripts/gen-backend-fixtures.py`): an unknown
-critical extension, a missing required extension, and an extension that
-appears twice are rejected; a critical required extension, a critical
-`basicConstraints`, and an unknown non-critical extension are accepted;
-an expired certificate parses, and `validAt` rejects it against a
-literal time; a SHA-1 signature and a 1024-bit RSA key parse and fail
-the self-signature check. The comparison is pure; the production caller
-owns the clock.
+Each certificate breaks one rule (`scripts/gen-backend-fixtures.py`).
+- `inspect` rejects an unknown critical extension, a missing required
+  extension, and an extension that appears twice.
+- `inspect` accepts a critical required extension, a critical
+  `basicConstraints`, and an unknown non-critical extension.
+- An expired certificate parses, and `validAt` rejects it against a
+  literal time.
+- A SHA-1 signature and a 1024-bit RSA key parse and fail the
+  self-signature check.
+
+The time comparison is pure. The production caller owns the clock.
 -/
 
 set_option autoImplicit false
@@ -45,8 +51,8 @@ namespace Tests
 open Bytes Backend
 
 /-- One DER element at `at_`: its tag and the bounds of its contents.
-Short lengths and the one- and two-byte long forms (X.690 §8.1.3); the
-spec certificates need no more. -/
+The parser reads short lengths and the one- and two-byte long forms
+(X.690 §8.1.3). The spec certificates need no more. -/
 private def tlv (where_ : String) (b : ByteArray) (at_ : Nat) : IO (UInt8 × Nat × Nat) := do
   let l0 := (b.get! (at_ + 1)).toNat
   let (len, start) :=
@@ -59,9 +65,9 @@ private def tlv (where_ : String) (b : ByteArray) (at_ : Nat) : IO (UInt8 × Nat
   pure (b.get! at_, start, start + len)
 
 /-- The key type and key data of the `SignedKey` in an extension value,
-and its signature (tls.md: `SignedKey ::= SEQUENCE { publicKey OCTET
-STRING, signature OCTET STRING }`; the public key is the protobuf
-`PublicKey { Type = 1; Data = 2 }`). -/
+and its signature. tls.md defines `SignedKey ::= SEQUENCE { publicKey
+OCTET STRING, signature OCTET STRING }`. The public key is the protobuf
+`PublicKey { Type = 1, Data = 2 }`. -/
 private def signedKey (where_ : String) (ext : ByteArray) : IO (Nat × ByteArray × ByteArray) := do
   let (t0, s0, _) ← tlv where_ ext 0
   let (t1, s1, e1) ← tlv where_ ext s0
@@ -77,8 +83,8 @@ private def signedKey (where_ : String) (ext : ByteArray) : IO (Nat × ByteArray
   pure ((pk.get! 1).toNat, pk.extract start (start + len), ext.extract s2 e2)
 
 /-- The host-key signature check of the TLS handshake, composed from the
-backend verifiers: the key type picks the verifier (1 Ed25519, 2
-secp256k1, 3 ECDSA), and the message is the prefix and the SPKI. -/
+backend verifiers. The key type picks the verifier (1 Ed25519, 2
+secp256k1, 3 ECDSA). The message is the prefix, then the SPKI. -/
 private def hostKeySignatureVerifies (where_ : String) (c : Certificate) : IO Bool := do
   let (kind, key, sig) ← signedKey where_ c.extension
   let msg := ofString "libp2p-tls-handshake:" ++ c.spki

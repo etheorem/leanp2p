@@ -912,11 +912,12 @@ def _read_varint(b: bytes, i: int) -> tuple[int, int]:
 
 
 def _key_envelope_data(envelope: bytes) -> bytes:
-    """The raw key bytes inside a peer-ids key envelope: field 1 is the
-    key type (varint), field 2 the key data (bytes), and nothing else
-    (vendor/specs/peer-ids/peer-ids.md, "Keys"). The crypto/backend
-    suites consume these raw fields, so they never unwrap the envelope
-    (packages/crypto/backend/docs/PLAN.md, "Vector stance")."""
+    """The raw key bytes inside a peer-ids key envelope. The envelope
+    holds field 1, the key type (varint), and field 2, the key data
+    (bytes), and nothing else (vendor/specs/peer-ids/peer-ids.md,
+    "Keys"). The crypto/backend suites consume these raw fields, so they
+    never unwrap the envelope (packages/crypto/backend/docs/PLAN.md,
+    "Vector stance")."""
     assert envelope[0] == 0x08, envelope.hex()
     _, i = _read_varint(envelope, 1)
     assert envelope[i] == 0x12, envelope.hex()

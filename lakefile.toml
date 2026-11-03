@@ -28,25 +28,24 @@ defaultTargets = [
 ]
 # `lake test` builds and runs the executable named here.
 testDriver = "tests"
-# `crypto/backend` is a nested Lake package: its `lakefile.lean` builds
+# `crypto/backend` is a nested Lake package. Its `lakefile.lean` builds
 # the C shim, which the declarative form cannot express (CLAUDE.md,
 # "Configure, don't integrate"). It provides the `Backend` library. The
-# `Tests` library imports it, so `lake build` builds it. The executables
-# need no link
-# argument for it: the toolchain links its own static OpenSSL 3
-# `libcrypto.a` into every executable, and the shim archive resolves
-# against that copy.
+# `Tests` library imports it, so `lake build` builds it.
+# The executables need no link argument for the shim. The toolchain
+# links its own static OpenSSL 3 `libcrypto.a` into every executable,
+# and the shim archive resolves against that copy.
 [[require]]
 name = "Backend"
 path = "packages/crypto/backend"
 
-# The etheorem hazmat pins (root ARCHITECTURE §4.6, PLAN W3.2): one
-# single-family package each, never the `LeanHazmat` umbrella, so the
-# build compiles only the families the facade routes to. All sit at one
-# monorepo rev. Two need their native sources fetched before `lake
-# build`: run `scripts/hazmat-vendor.sh` once after Lake clones them.
-# `LeanHazmatSha256` is not pinned: at this rev its archive replaces the
-# startup hook that runs static constructors, and an executable that
+# The etheorem hazmat pins (root ARCHITECTURE §4.6, PLAN W3.2). Each is
+# one single-family package, never the `LeanHazmat` umbrella, so the
+# build compiles only the families it uses. All sit at one monorepo
+# rev. Two need their native sources before `lake build`: run
+# `scripts/hazmat-vendor.sh` once after Lake clones them.
+# `LeanHazmatSha256` is not pinned. At this rev its archive replaces the
+# startup hook that runs the static constructors. An executable that
 # links it crashes on its first error print. SHA-256 falls back to the
 # backend binding (packages/crypto/backend/docs/PLAN.md, "Pin outcomes").
 [[require]]

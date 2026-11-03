@@ -110,7 +110,7 @@ def vectorsDir : IO System.FilePath := do
   | some d => pure ⟨d⟩
   | none => pure ⟨"Tests/vectors"⟩
 
-/-- Read and parse one JSON file; a parse error names the file. -/
+/-- Read and parse one JSON file. A parse error names the file. -/
 private def readJson (path : System.FilePath) : IO Json := do
   match Json.parse (← IO.FS.readFile path) with
   | .ok j => pure j
@@ -121,9 +121,9 @@ def loadJson (name : String) : IO Json := do
   readJson ((← vectorsDir).join ⟨name⟩)
 
 /-- Read and parse a generated fixture out of `Tests/fixtures`. Fixtures
-hold random material (keys, certificates) that no rerun reproduces, so
-they live outside the provenance-gated vector corpus; each file records
-the script and the tool that made it. -/
+hold random material (keys, certificates) that no rerun reproduces. So
+they live outside the provenance-gated vector corpus, and each file
+records the script and the tool that made it. -/
 def loadFixture (name : String) : IO Json :=
   readJson (System.FilePath.mk "Tests/fixtures" / name)
 

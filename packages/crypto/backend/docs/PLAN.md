@@ -17,11 +17,11 @@ further C dependencies follow the FFI-first rule (CLAUDE.md,
 Unit 1 splits into two sub-units: 1a closes on the fixture suites, and
 1b closes on the verifier-strictness regressions and the X.509 suite.
 `crypto/pure` set the pattern. Unit 1 also lands the etheorem pins of
-§4.6: it runs the build checks for the four families, pins each family
-that passes them, and keeps this package's shim as the interim fallback
-for one that fails. Keccak-256 is the exception: no own shim exists
-for it, so a failed pin blocks W6.1 (§4.6). The per-primitive outcome
-is recorded under the milestones.
+§4.6. It runs the build checks for the four families and pins each
+family that passes them. For a family that fails, this package's shim
+is the interim fallback. Keccak-256 is the exception: no own shim
+exists for it, so a failed pin blocks W6.1 (§4.6). The milestones
+record the outcome for each primitive.
 
 | Unit | Root deps | Deliverable | Done when |
 |---|---|---|---|
@@ -66,8 +66,8 @@ Milestones for 1a:
 - The build prerequisites: the CI runs the monorepo's `just`
   vendor-fetch recipes for the pinned families that need one,
   `LeanHazmatSecp256k1` and `LeanHazmatKeccak`, before `lake build`.
-  When `LeanHazmatSha256` is pinned again, its ISA-L unit joins them
-  on x86_64 Linux (it needs `nasm`). A pkg-config check finds the
+  When this repo pins `LeanHazmatSha256` again, its ISA-L unit joins
+  them on x86_64 Linux (it needs `nasm`). A pkg-config check finds the
   system `libcrypto` for the OpenSSL families. An actionable failure
   hint fires when either check fails.
 - Ed25519: the RFC 8032 vectors of `keys-rfc8032.json`, the file's four
@@ -95,18 +95,17 @@ Milestones for 1a:
   named fixed case. The binding enters the unit 2 cross-check, so
   the family is no longer closed by vectors alone.
 - Keccak-256: the production path is `LeanHazmatKeccak` (§4.6). The
-  pin's build check runs here, and a pin that does not build blocks
-  W6.1, because this package carries no keccak fallback shim. The
-  suite reproduces the well-known digests of the empty string and of
-  `abc`, stated as two named fixed cases; the etheorem package's own
-  suite is the family's main anchor. The EIP-778 record fixture of
-  the identity package (W6.1) pins the end-to-end path through the
-  facade.
+  pin's build check runs here. A pin that does not build blocks W6.1,
+  because this package carries no keccak fallback shim. The suite
+  reproduces the well-known digests of the empty string and of `abc`
+  as two named fixed cases. The etheorem package's own suite is the
+  family's main anchor. The EIP-778 record fixture of the identity
+  package (W6.1) pins the end-to-end path through the facade.
 
 ### Pin outcomes
 
 The per-primitive record that unit 1 promises, at etheorem rev
-`169cf718` (`main`, Lean v4.34.1; this repo is on v4.34.0). The suite
+`169cf718` (`main`, Lean v4.34.1). This repo is on v4.34.0.
 `Tests/HazmatPins.lean` holds the checks.
 
 - `LeanHazmatKeccak`: pinned. It builds on v4.34.0 and gives the empty
@@ -114,43 +113,52 @@ The per-primitive record that unit 1 promises, at etheorem rev
 - `LeanHazmatP256`: pinned. It builds and verifies the go ECDSA fixture
   through its raw interface (a 32-byte hash, `r`, `s`, `qx`, `qy`). A
   facade route must split the DER signature and the SPKI key into those
-  parts. Unit 2 owns that adapter, and `Backend.p256SpkiHead` is the
-  one home of the SPKI layout it reads.
+  parts. Unit 2 owns that adapter. `Backend.p256SpkiHead` is the one
+  home of the SPKI layout it reads.
 - `LeanHazmatSecp256k1`: pinned. It builds, recovers the go fixture's
-  key, and verifies the fixture. Its verifier normalizes a high S before
-  it verifies, so it accepts the high-S twin of a valid signature; the
-  suite pins that behavior. The low-S rule of §4.6 rejects the twin, so
-  secp256k1 verification stays on this package's verifier. The
-  etheorem verifier also takes a 64-byte uncompressed key, while the
-  keys here cross as 33-byte compressed points. The normalization is
-  deliberate: the execution layer has no low-S rule. Root §4.6 records
-  the split.
-- `LeanHazmatSha256`: not pinned; the interim fallback is in force. Its
-  archive defines empty `__libc_csu_init` and `__libc_csu_fini` stubs,
-  which win over the real ones in the toolchain's `libc_nonshared.a`.
-  The toolchain's `Scrt1.o` calls `__libc_csu_init` to run the static
-  constructors, so none run, libc++ never builds `std::cerr`, and an
-  executable segfaults on its first uncaught-error print. Lake links
-  every required package's archive whether or not a module imports it,
-  so the pin cannot stay in the build. SHA-256 routes to the backend
-  binding until etheorem drops the stubs; the stubs exist to work
-  around a system `-L` that the same lakefile puts ahead of the
-  toolchain's libraries. Reported as etheorem/etheorem#152; the fix is
+  key, and verifies the fixture. Its verifier normalizes a high S
+  before it verifies, so it accepts the high-S twin of a valid
+  signature. The suite pins that behavior. The low-S rule of §4.6
+  rejects the twin, so secp256k1 verification stays on this package's
+  verifier. The etheorem verifier also takes a 64-byte uncompressed
+  key, and the keys here cross as 33-byte compressed points. The
+  normalization is deliberate, because the execution layer has no
+  low-S rule. Root §4.6 records the split.
+- `LeanHazmatSha256`: not pinned, and the interim fallback is in force.
+  - Its archive defines empty `__libc_csu_init` and `__libc_csu_fini`
+    stubs. They win over the real ones in the toolchain's
+    `libc_nonshared.a`.
+  - The toolchain's `Scrt1.o` calls `__libc_csu_init` to run the static
+    constructors. With the stub, none run. libc++ never builds
+    `std::cerr`, and an executable segfaults on its first
+    uncaught-error print.
+  - Lake links every required package's archive into every executable
+    of the workspace, whether or not a module imports it. So the pin
+    cannot stay in the build.
+  - The stubs work around a system `-L` that the same lakefile puts
+    ahead of the toolchain's libraries.
+
+  SHA-256 routes to the backend binding until etheorem drops the stubs.
+  The report is etheorem/etheorem#152, and the fix is
   etheorem/etheorem#153.
 
 Milestones for 1b:
 
-- Verifier strictness, one regression per rule: a P-256 key under the
-  RSA entry point fails; an RSA signature under the ECDSA entry point
-  fails; a compressed and a hybrid P-256 key fail, since Go's
-  `crypto/x509` accepts the uncompressed point only, while OpenSSL
-  loads all three forms; a 1024-bit RSA key
-  fails; a 9216-bit RSA key fails; a high-S
-  secp256k1 signature fails; an expired certificate fails; a certificate
-  with an unknown critical extension fails. The spike carried the
-  1024-bit case and the two cross-entry cases. The 9216-bit, high-S,
-  expired, and critical-extension cases are new tests over rules the
-  spike's shim already enforced in C without a committed regression.
+- Verifier strictness, one regression per rule. Each of these fails:
+  - a P-256 key under the RSA entry point
+  - an RSA signature under the ECDSA entry point
+  - a compressed and a hybrid P-256 key, since Go's `crypto/x509`
+    accepts the uncompressed point only, and OpenSSL loads all three
+    forms
+  - a 1024-bit RSA key, and a 9216-bit RSA key
+  - a high-S secp256k1 signature
+  - an expired certificate
+  - a certificate with an unknown critical extension
+
+  The spike carried the 1024-bit case and the two cross-entry cases.
+  The 9216-bit, high-S, expired, and critical-extension cases are new
+  tests. The spike's shim already enforced those rules in C, with no
+  committed regression.
 - X.509: `tls-ext.json`. The three valid certificates parse and yield
   their extension values, the self-signed check passes, and the invalid
   certificate is rejected. The returned NotBefore and NotAfter times
@@ -162,37 +170,39 @@ Milestones for 1b:
   As met (`Tests/BackendX509.lean`): the file carries no expected
   times, so the suite states the literals its DER fields encode
   (`750101130000Z`, `40960101130000Z`). Certificate 4 is a well-formed
-  self-signed certificate whose host-key signature inside the extension
-  does not verify; X.509 cannot see that, and this package must not
-  know the `SignedKey` and its prefix. The suite therefore composes the
-  backend helpers and verifiers the way the TLS handshake will:
-  certificates 1 to 3 pass, and certificate 4 fails.
+  self-signed certificate, and the host-key signature inside its
+  extension does not verify. X.509 cannot see that, and this package
+  must not know the `SignedKey` and its prefix. So the suite composes
+  the backend helpers and verifiers the way the TLS handshake will.
+  Certificates 1 to 3 pass, and certificate 4 fails.
 - Pure-binding determinism: Ed25519 sign, RSA sign, and a
   ChaCha20-Poly1305 seal give the same output twice on the same input.
   A randomized sign gives two different outputs across two draws, and
   verification accepts both.
 - Key generation: a fresh key of each type, Ed25519, X25519, secp256k1,
   ECDSA P-256, and RSA, derives its public key, signs, and verifies.
-- The borrowed-argument regression: a soak test that drives 200,000
-  calls through the borrowed path, and the pass condition is that the
-  process RSS grows by less than a fixed budget over its start. The
-  spike has no committed test of this kind; the 14 MB to 526 MB numbers
-  of PRINCIPLES 4.1 were review measurements, and the after-fix
-  footprint is the size the budget sits near. As met
-  (`Tests/BackendSoak.lean`): fresh 4 KiB inputs through six bindings,
-  under a 32 MiB budget. At that input size, the leak of any one
-  binding alone exceeds the budget. With the `inspect` argument made
-  owned on purpose, the run grew 167.9 MiB and failed.
+- The borrowed-argument regression: a soak test drives 200,000 calls
+  through the borrowed path. It passes when the process RSS grows by
+  less than a fixed budget over its start. The spike has no committed
+  test of this kind. The 14 MB to 526 MB numbers of PRINCIPLES 4.1 were
+  review measurements, and the budget sits near the after-fix
+  footprint. As met (`Tests/BackendSoak.lean`): fresh 4 KiB inputs
+  through six bindings, under a 32 MiB budget. At that input size, the
+  leak of any one binding alone exceeds the budget. With the `inspect`
+  argument made owned on purpose, the run grew 167.9 MiB and failed.
 
-The generated fixtures of 1b (the out-of-range RSA keys, a secp256k1
-SPKI key, a P-256 SEC1 key with a compressed public point, and the
-certificates that each break one rule: among them a critical
-`basicConstraints` that must pass, a duplicated extension, a
-SHA-1 self-signature, and a 1024-bit RSA subject key) live in
-`Tests/fixtures/backend-strictness.json`, written by
-`scripts/gen-backend-fixtures.py`. The keys are random, so a rerun gives
-new bytes; the fixtures therefore stay outside the provenance-gated
-`Tests/vectors/` corpus, and the file records the tool and the date.
+`Tests/fixtures/backend-strictness.json` holds the generated fixtures
+of 1b, and `scripts/gen-backend-fixtures.py` writes them:
+- the out-of-range RSA keys
+- a secp256k1 SPKI key
+- a P-256 SEC1 key with a compressed public point
+- the certificates that each break one rule, among them a critical
+  `basicConstraints` that must pass, a duplicated extension, a SHA-1
+  self-signature, and a 1024-bit RSA subject key
+
+The keys are random, so a rerun gives new bytes. The fixtures
+therefore stay outside the provenance-gated `Tests/vectors/` corpus,
+and the file records the tool and the date.
 
 Milestones for unit 2:
 

@@ -18,14 +18,16 @@ milestones", over the OpenSSL shim:
   fields the extractor emits beside the envelopes. Each derives the
   fixture's public key, verifies the fixture's signature, and verifies
   a fresh signature of its own. The RSA re-sign is byte-identical
-  (`sigDeterministic`); the two ECDSA types sign with a random nonce.
-* Random bytes: the length comes back, two draws differ, and a draw
-  past the 1 MiB cap is `invalidInput`.
+  (`sigDeterministic`). The two ECDSA types sign with a random nonce.
+  The secp256k1 fixture point passes `secp256k1PointValid`, and a point
+  with an unknown prefix fails it.
+* Random bytes: a draw returns the requested length, two draws differ,
+  and a draw past the 1 MiB cap is `invalidInput`.
 * One smoke call each for SHA-1, SHA-256 (interim), SHA-512, HMAC, and
-  HKDF; their real closure is the W3.3 cross-check. SHA-1 also
-  reproduces the multihash spec vector and the empty-input digest.
+  HKDF. The W3.3 cross-check closes them. SHA-1 also reproduces the
+  multihash spec vector and the empty-input digest.
 
-X25519 has no captured file; the Noise transcripts anchor it (W5.3).
+X25519 has no captured file. The Noise transcripts anchor it (W5.3).
 The suite adds the RFC 7748 §6.1 key-agreement example as a named
 fixed case, and the small-order rejection.
 -/
@@ -36,7 +38,7 @@ namespace Tests
 
 open Bytes Backend
 
-/-- A 32-byte key from hex; any other size fails the run. -/
+/-- A 32-byte key from hex. Any other size fails the run. -/
 private def key32 (where_ hex : String) : IO Key32 := do
   match Key32.ofByteArray? (← unhex where_ hex) with
   | some k => pure k
@@ -80,9 +82,10 @@ def derSig (where_ : String) (sig : ByteArray) : IO (Nat × Nat) := do
 def secp256k1Order : Nat :=
   0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
-/-- The minimal DER INTEGER of a nonnegative `n` below 2^256: big-endian
-bytes without leading zeros, plus one zero byte when the top bit is set,
-so the value reads as positive (X.690 §8.3). -/
+/-- The minimal DER INTEGER of a nonnegative `n` below 2^256: the
+big-endian bytes without leading zeros. When the top bit of the first
+byte is 1, one zero byte goes in front, so the value reads as positive
+(X.690 §8.3). -/
 def derInt (n : Nat) : ByteArray :=
   let raw := (bytesOfNat 32 n).toList.dropWhile (· == 0)
   let body := if raw.isEmpty then [0] else if raw.head! ≥ 0x80 then 0 :: raw else raw
@@ -95,7 +98,8 @@ def derSigOf (r s : Nat) : ByteArray :=
 
 end Ecdsa
 
-/-- `b` with its first byte flipped; empty stays empty. -/
+/-- `b` with the low bit of its first byte flipped. An empty `b` stays
+empty. -/
 private def tamper (b : ByteArray) : ByteArray :=
   if b.isEmpty then b else b.set! 0 (b.get! 0 ^^^ 1)
 
@@ -200,9 +204,9 @@ private def goKeys (r : Runner) : IO Unit := do
       r.check "secp256k1: a point with prefix 0x05 is invalid"
         (!secp256k1PointValid (ByteArray.mk #[0x05] ++ pub.extract 1 pub.size))
       -- OpenSSL draws a random nonce, so about half its raw signatures
-      -- carry a high S, which the shim must flip to n - S. Sixteen draws
-      -- reach the flip with probability 1 - 2^-16; every result must be
-      -- low and must verify.
+      -- carry a high S, and the shim must replace S with n minus S.
+      -- Sixteen draws reach that path with probability 1 minus 2^-16.
+      -- Every result must be low-S and must verify.
       let draws := 16
       let mut good := 0
       for _ in [0:draws] do
@@ -226,7 +230,7 @@ private def goKeys (r : Runner) : IO Unit := do
 private def random (r : Runner) : IO Unit := do
   let a ← (randomBytes 32).run
   let b ← (randomBytes 32).run
-  r.check "random bytes: the requested length comes back"
+  r.check "random bytes: a draw has the requested length"
     (match a with | .ok x => x.size == 32 | .error _ => false)
   r.check "random bytes: two draws differ"
     (match a, b with | .ok x, .ok y => x != y | _, _ => false)
@@ -281,8 +285,8 @@ private def digests (r : Runner) : IO Unit := do
      | .ok b => b.size == hkdfSha256MaxLen | .error _ => false)
   r.check "HKDF-SHA-256 past the 255-block limit is invalidInput"
     (failsWith .invalidInput (hkdfSha256 .empty (ofString "k") .empty (hkdfSha256MaxLen + 1)))
-  -- RFC 5869 §2.3 allows L = 0, and OpenSSL refuses it; the wrapper
-  -- answers first.
+  -- RFC 5869 §2.3 allows L = 0, and OpenSSL refuses it. The wrapper
+  -- answers before the shim runs.
   r.check "HKDF-SHA-256 with a zero length gives the empty output"
     (succeedsWith ByteArray.empty (hkdfSha256 .empty (ofString "k") .empty 0))
 

@@ -33,8 +33,8 @@ pre-squash review. Applied in commit `ae1b5d9`:
   the skew constraint above once it lands. The W3.2 build checks and
   the fallback rules stay in force until then.
   Closed by W3.2: etheorem `169cf718` pins v4.34.1, and the three
-  pinned families build on this repo's v4.34.0 (root §4.6; the backend
-  PLAN, "Pin outcomes").
+  pinned families build on this repo's v4.34.0 (root §4.6, and the
+  backend PLAN, "Pin outcomes").
 
 ## Pre-squash review: FFI-first and prior-art audit (stage close-out)
 

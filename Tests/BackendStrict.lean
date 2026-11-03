@@ -9,12 +9,17 @@ import Backend
 The 1b milestones of `packages/crypto/backend/docs/PLAN.md` other than
 X.509 (`Tests.BackendX509`) and the soak (`Tests.BackendSoak`).
 
-**Verifier strictness, one regression per rule of root §4.6.** A P-256
-key under the RSA verifier fails, and an RSA signature under the P-256
-verifier fails (the go fixtures of `keys-go-libp2p.json`). A 1024-bit
-and a 9216-bit RSA key fail at every entry point (generated fixtures).
-A high-S secp256k1 signature fails, built from a fresh low-S one by
-replacing S with n - S. A secp256k1 key under the P-256 verifier fails.
+**Verifier strictness, one regression per rule of root §4.6.** Each of
+these fails:
+- a P-256 key under the RSA verifier, and an RSA signature under the
+  P-256 verifier (the go fixtures of `keys-go-libp2p.json`)
+- a compressed and a hybrid P-256 key
+- a 1024-bit and a 9216-bit RSA key, at every entry point (generated
+  fixtures)
+- a high-S secp256k1 signature, built from a fresh low-S one by
+  replacing S with n minus S
+- a secp256k1 key under the P-256 verifier
+
 The X.509 rules live in `Tests.BackendX509`.
 
 **Determinism.** Ed25519 signing, RSA signing, and a ChaCha20-Poly1305
@@ -22,8 +27,8 @@ seal give the same bytes twice. The two ECDSA signers give different
 signatures on two draws, and both verify.
 
 **Key generation.** A fresh key of each type derives its public key and
-round-trips through sign and verify; for X25519, two fresh keys agree on
-the shared secret. An RSA size outside 2048 to 8192 bits is
+passes a sign and verify round trip. Two fresh X25519 keys agree on the
+shared secret. An RSA size outside 2048 to 8192 bits is
 `invalidInput`.
 -/
 
@@ -31,8 +36,8 @@ set_option autoImplicit false
 
 namespace Tests
 
--- `_root_`: inside `namespace Tests`, a bare `Backend` names the suite
--- namespace `Tests.Backend`, not the library.
+-- Inside `namespace Tests`, a bare `Backend` names the suite namespace
+-- `Tests.Backend`. `_root_.Backend` names the library.
 open Bytes _root_.Backend
 
 /-- The `ok` value of an IO computation, or a failed check and `none`. -/
@@ -98,7 +103,8 @@ private def strictness (r : Runner) : IO Unit := do
   r.check "strictness: a secp256k1 SPKI key under the P-256 verifier fails"
     (!p256Verify (← unhex fx (← jStr fx k1 "spkiHex")) fmsg (← unhex fx (← jStr fx k1 "sigHex")))
 
-  -- High S: a fresh low-S signature, then its twin with S replaced by n - S.
+  -- High S: a fresh low-S signature, then its twin with S replaced by
+  -- n minus S.
   let some scalar ← okOr r "strictness: secp256k1 generate" secp256k1Generate | return
   let some point := (secp256k1PublicKey scalar).toOption
     | r.check "strictness: secp256k1 derive" false

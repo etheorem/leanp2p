@@ -18,22 +18,23 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Install just
-        # The etheorem vendor recipes need `[group]` support, which the
-        # `just` of the Ubuntu archive (1.21) lacks. This is the
-        # installer etheorem's own CI uses.
+        # The etheorem vendor recipes use the `[group]` attribute. The
+        # `just` of the Ubuntu archive (1.21) rejects it. etheorem's own
+        # CI uses this installer.
         uses: extractions/setup-just@v3
 
       - name: Install elan and the toolchain
-        # The toolchain only; the gates run as plain steps below, so
-        # the pin fetch can sit between the toolchain and the build.
-        # elan reads the version from lean-toolchain.
+        # This step installs the toolchain and nothing else. The gates
+        # run as plain steps below, so the pin fetch comes between the
+        # toolchain and the build. elan reads the version from
+        # lean-toolchain.
         uses: leanprover/lean-action@v1
         with:
           auto-config: false
 
       - name: Fetch the etheorem pins and their native sources
         # Any Lake command loads the workspace and clones the pinned
-        # packages; `lake env true` does that and nothing else. The
+        # packages. `lake env true` does that and nothing else. The
         # script then runs the monorepo's own vendor recipes in each
         # clone (packages/crypto/backend/docs/PLAN.md, milestones for
         # 1a). The OpenSSL 3 headers of the backend shim come from
