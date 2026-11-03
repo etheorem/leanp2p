@@ -24,8 +24,10 @@ exposes no marshaling of its own (package ARCHITECTURE, "Decisions").
 
 **Binding types (§3.6).** Ed25519 and RSASSA-PKCS1-v1_5 sign
 deterministically, and every derivation and verifier is deterministic,
-so those bindings are pure. ECDSA draws a random nonce, so the P-256
-and secp256k1 signers take the world.
+so those bindings are pure. That is a promise the shim keeps: the same
+input gives the same output, and the call reads no global state and
+has no side effect. ECDSA draws a random nonce, so the P-256 and
+secp256k1 signers take the world, as do the key generators.
 
 **The ownership rule.** Every `ByteArray` argument of an `@[extern]`
 declaration below is borrowed (`@&`), and the shim declares it
@@ -45,11 +47,12 @@ library fault, fail-closed. No fault channel exists on the `Bool`
 
 **Trust boundary.** The declarations are `opaque`, and `#axioms` lists
 the assumption at every use. The library is the toolchain's bundled
-static OpenSSL 3, pinned by `lean-toolchain`, as in `Backend.Sym`. The
-suite
-`Tests/Backend.lean` pins the bindings by the RFC 8032 vectors and the
-captured go key fixtures, which the suite names. The raw declarations are
-`private`, because the shim trusts the sizes the wrappers prove.
+static OpenSSL 3, pinned by `lean-toolchain`, as in `Backend.Sym`.
+`Tests/Backend.lean` pins the bindings by the RFC 8032 and RFC 7748
+vectors and the captured go key fixtures. `Tests/BackendStrict.lean`
+pins the verifier strictness, the determinism, and key generation.
+The raw declarations are `private`, because the shim trusts the sizes
+the wrappers prove, so this docstring is their trust note.
 -/
 
 set_option autoImplicit false

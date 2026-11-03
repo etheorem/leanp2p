@@ -6,8 +6,8 @@
  * function below:
  *
  * - Every exported symbol carries the `leanp2p_` prefix and is reached
- *   from exactly one `@[extern]` declaration in `Backend/Sym.lean` or
- *   `Backend/Sign.lean`.
+ *   from exactly one `@[extern]` declaration in `Backend/Sym.lean`,
+ *   `Backend/Sign.lean`, or `Backend/X509.lean`.
  * - Every `ByteArray` argument is borrowed (`b_lean_obj_arg`). The shim
  *   never takes a reference to an argument and never frees one. An owned
  *   parameter leaks one reference per call (contract 1).
@@ -673,9 +673,10 @@ LEAN_EXPORT lean_obj_res leanp2p_rsa_generate(size_t bits, lean_obj_arg w) {
 /* X.509 (RFC 5280)                                                    */
 /* ------------------------------------------------------------------ */
 
-/* The X.509 rules (root ARCHITECTURE §4.6): only the one extension the
-   caller names may be critical, and it must be present exactly once.
-   The shim reports the validity times and does not judge them, so a
+/* The X.509 rules (root ARCHITECTURE §4.6): the extension the caller
+   names must be present, no extension may appear twice, and a critical
+   extension must be the named one or one OpenSSL understands (see
+   `required_extension`). The shim reports the validity times and does not judge them, so a
    pure binding never reads the clock; the caller compares them with its
    `Clock`. */
 

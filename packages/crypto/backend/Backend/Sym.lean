@@ -35,7 +35,8 @@ compares the digests, HMAC, and HKDF with the pure copies of
 
 The raw declarations are `private`. The shim trusts the sizes the Lean
 side proves, so a raw call with a short key would read past the buffer.
-Callers reach the shim only through the checked wrappers.
+Callers reach the shim only through the checked wrappers, and this
+docstring is the trust note for every raw declaration below.
 -/
 
 set_option autoImplicit false

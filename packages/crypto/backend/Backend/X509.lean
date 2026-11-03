@@ -8,11 +8,17 @@ The bindings of `c/p2pcrypto.c` for one self-signed X.509 certificate
 extension by its OID; the helpers know no protocol of their own.
 
 **The rules (root ARCHITECTURE §4.6).** `inspect` rejects a certificate
-when the named extension is missing or appears twice, and when any other
-extension is marked critical: the caller understands only its own
-extension, so every other critical one is unknown to it. A non-critical
-extension with another OID is ignored. `selfSigned` checks the
-certificate's signature under its own subject key.
+when the named extension is missing, when any extension appears twice
+(RFC 5280 §4.2), and when an extension is critical and unknown. A
+critical extension is known when it is the named one or one that
+OpenSSL understands (`X509_supported_extension`), such as
+`basicConstraints`. The TLS spec asks an endpoint to abort only on the
+critical extensions it does not understand, and the Go implementation
+leaves the known ones to Go's `crypto/x509`. A non-critical extension with another
+OID is ignored. `selfSigned` checks the certificate's signature under
+its own subject key. It accepts SHA-256, SHA-384, SHA-512, and Ed25519
+signatures, the set Go accepts, and an RSA subject key of 2048 to 8192
+bits only.
 
 **Validity is the caller's comparison.** `inspect` returns the NotBefore
 and NotAfter times as seconds since the Unix epoch and does not judge
@@ -20,10 +26,13 @@ them, so the pure binding never reads the clock. The caller compares
 them with `Certificate.validAt` against its `Clock` seam (§3.1).
 
 **Ownership and trust.** Every argument of the `@[extern]` declarations
-below is borrowed (`@&`), as in `Backend.Sym`. The library is the
-toolchain's bundled OpenSSL 3; `Tests/Backend.lean` pins the helpers by
-the four certificates of the TLS spec and by generated fixtures whose
-file records their provenance.
+below is borrowed (`@&`), as in `Backend.Sym`. Both are pure bindings:
+one certificate gives the same answer every time, and the shim reads
+no global state. The library is the toolchain's bundled OpenSSL 3,
+pinned by `lean-toolchain`. `Tests/BackendX509.lean` pins the helpers
+by the four certificates of the TLS spec and by generated fixtures
+whose file records their provenance; `Tests/BackendSoak.lean` pins
+their borrowed arguments.
 -/
 
 set_option autoImplicit false
@@ -62,15 +71,16 @@ private opaque selfSignedRaw (der : @& ByteArray) : Bool
 
 /-- Read a DER certificate whose required extension has the dotted OID
 `requiredOid`. A certificate that does not parse, has trailing bytes,
-lacks the extension, carries it twice, or marks another extension
-critical is `invalidCertificate`. -/
+lacks the extension, carries any extension twice, or marks an unknown
+extension critical is `invalidCertificate`. -/
 def inspect (der : ByteArray) (requiredOid : String) : Except CryptoError Certificate :=
   match inspectRaw der requiredOid with
   | some c => .ok ⟨c.spki, c.extension, signed64 c.notBefore, signed64 c.notAfter⟩
   | none => .error .invalidCertificate
 
 /-- True when the certificate's signature verifies under its own subject
-key. `false` covers a parse failure too, fail-closed. -/
+key, with an accepted signature algorithm and, for an RSA key, 2048 to
+8192 bits. `false` covers a parse failure too, fail-closed. -/
 def selfSigned (der : ByteArray) : Bool := selfSignedRaw der
 
 /-- True when `now` (seconds since the Unix epoch) lies in the validity
