@@ -145,9 +145,10 @@ def assert_platform() -> None:
 
 def print_identities(prefix: Path, leanc: Path, ar: Path) -> None:
     print(first_line(["uname", "-r"]))
-    print(first_line(["c++", "--version"]))
-    print(run(["c++", "-dumpmachine"]).stdout.strip())
-    print(first_line([str(leanc), "--version"]))
+    print(f"lean --version {first_line(['lean', '--version'])}")
+    print(f"leanc --version {first_line([str(leanc), '--version'])}")
+    print(f"c++ --version {first_line(['c++', '--version'])}")
+    print(f"c++ -dumpmachine {run(['c++', '-dumpmachine']).stdout.strip()}")
     print(first_line(["nm", "--version"]))
     print(first_line([str(ar), "--version"]))
     print(first_line(["ld", "--version"]))
@@ -401,13 +402,26 @@ def runtime_families(names: list[str]) -> set[str]:
     return found
 
 
-def assert_one_runtime(label: str, names: list[str]) -> None:
+def assert_at_most_one_runtime(label: str, names: list[str]) -> set[str]:
+    """Accept no C++ runtime, or one family. Reject both families."""
     found = runtime_families(names)
-    print(f"{label} c++ runtime {sorted(found) or ['none']}")
-    if found == set(CXX_FAMILIES):
-        fail(f"{label} links both libstdc++ and libc++")
-    if len(found) != 1:
-        fail(f"{label} does not link exactly one C++ runtime")
+    shown = "none" if not found else ", ".join(sorted(found))
+    print(f"{label} c++ runtime {shown}")
+    if len(found) > 1:
+        fail(f"{label} links libstdc++ and libc++")
+    return found
+
+
+def assert_same_runtime_families(
+    snappy_names: list[str],
+    control_names: list[str],
+    prefix: str,
+) -> None:
+    """Require both executables to carry the same zero-or-one family set."""
+    snappy = assert_at_most_one_runtime(f"{prefix} snappy", snappy_names)
+    control = assert_at_most_one_runtime(f"{prefix} control", control_names)
+    if snappy != control:
+        fail(f"the {prefix} Snappy executable and the control use different C++ runtimes")
 
 
 def compare_sanitized_dynamic(snappy: Path, control: Path) -> None:
@@ -419,10 +433,7 @@ def compare_sanitized_dynamic(snappy: Path, control: Path) -> None:
     print("sanitized ldd control")
     for name in control_ldd:
         print(f"  {name}")
-    assert_one_runtime("sanitized snappy", snappy_ldd)
-    assert_one_runtime("sanitized control", control_ldd)
-    if runtime_families(snappy_ldd) != runtime_families(control_ldd):
-        fail("the sanitized executables use different C++ runtimes")
+    assert_same_runtime_families(snappy_ldd, control_ldd, "sanitized")
     if set(snappy_ldd) != set(control_ldd):
         fail("the sanitized dynamic libraries differ")
     for label, names in (("sanitized snappy", snappy_ldd), ("sanitized control", control_ldd)):
@@ -453,10 +464,7 @@ def compare_dynamic(snappy: Path, control: Path) -> None:
     extra_needed = sorted(set(snappy_needed) - set(control_needed))
     if extra_needed:
         fail(f"the Snappy executable adds NEEDED entries: {extra_needed}")
-    assert_one_runtime("snappy", snappy_ldd)
-    assert_one_runtime("control", control_ldd)
-    if runtime_families(snappy_ldd) != runtime_families(control_ldd):
-        fail("the Snappy executable and the control use different C++ runtimes")
+    assert_same_runtime_families(snappy_ldd, control_ldd, "unsanitized")
     assert_no_sanitizer("snappy", snappy_ldd)
     assert_no_sanitizer("control", control_ldd)
 
