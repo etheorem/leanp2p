@@ -47,9 +47,10 @@ it takes no module line and lives with the test support.
 - **Identify.** `Identify.protocolId` and `Identify.pushId` are the
   `ProtocolId` constants (§3.4 names `Identify.protocolId` as the root
   example; the literals live only in `Constants.lean`).
-  `Identify.validate` checks a received message: the peer id derived
-  from the `publicKey` field matches the connected peer, and the size
-  is at most the cap. The client (the spike's `requestR` shape) reads
+  When the caller supplies the connected peer id, `Identify.validate`
+  checks that the id derived from `publicKey` matches it. The function
+  also checks that the message size is at most the cap. The client (the
+  spike's `requestR` shape) reads
   one response, validates it, and returns the metadata for the
   peerstore. The client reads one frame per stream and drops the bytes
   after it. Go merges up to 10 frames; this is a recorded delta. The
