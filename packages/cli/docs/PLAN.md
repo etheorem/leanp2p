@@ -89,13 +89,18 @@ runs beside Lean on the host. The driver starts Lean before building
 Go, so an unavailable dependency fails before Docker is invoked. It
 uses ephemeral ports, checks readiness, bounds child lifetimes, closes
 stdin and joins both servers. It reports success only after both
-dial directions pass and both servers exit cleanly.
+dial directions pass and both servers exit cleanly. Readiness must
+name loopback TCP with no unexpected components and a matching peer
+suffix when present. Ping results must contain a nonnegative decimal
+RTT and the exact `ms` suffix; a success prefix alone cannot pass.
 
 The current validation passes 123 orchestration checks inside the
-full suite, plus eight Python driver checks. The Go helper compiles
+full suite, plus ten Python driver checks. The Go helper compiles
 with CGO disabled for macOS and Linux using read-only module
-resolution. The two live gates remain unrun and are explicit skips;
-successful helper compilation does not close either gate.
+resolution. A local Go-only smoke run checks both servers' readiness,
+ping results and clean EOF shutdown through the same driver. The two
+Lean live gates remain unrun and are explicit skips; helper compilation
+and Go-only checks do not close either gate.
 
 - The demo runs end to end over loopback: two hosts dial, complete the
   upgrade, identify, and exchange pings and an echo. The spike's

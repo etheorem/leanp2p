@@ -25,6 +25,8 @@ GO_MODULE = ROOT / "scripts/ping-peer"
 GO_VERSION = re.search(r"github\.com/libp2p/go-libp2p\s+(v[^\s]+)",
                        (GO_MODULE / "go.mod").read_text()).group(1)
 GO_IMAGE = "golang:1.26-alpine"
+READY_ADDRESS = re.compile(r"/ip4/127\.0\.0\.1/tcp/([0-9]+)(?:/p2p/([^/\s]+))?")
+PING_RESULT = re.compile(r"PING OK rtt=[0-9]+ms")
 
 
 def peer_address(line: str) -> str:
@@ -33,14 +35,14 @@ def peer_address(line: str) -> str:
     if len(fields) != 3 or fields[0] != "ADDR":
         raise ValueError("invalid ADDR line")
     address, peer = fields[1:]
-    prefix = "/ip4/127.0.0.1/tcp/"
-    if not address.startswith(prefix):
-        raise ValueError("the peer must listen on IPv4 loopback")
-    port = address[len(prefix):].split("/", 1)[0]
-    if not port.isascii() or not port.isdigit() or not 0 < int(port) < 65536 or not peer:
+    parsed = READY_ADDRESS.fullmatch(address)
+    if parsed is None or "/" in peer:
+        raise ValueError("expected IPv4 loopback TCP with an optional peer suffix")
+    port, suffix = parsed.groups()
+    if not 0 < int(port) < 65536:
         raise ValueError("invalid bound port or peer")
-    if "/p2p/" in address:
-        if not address.endswith("/p2p/" + peer):
+    if suffix is not None:
+        if suffix != peer:
             raise ValueError("address suffix disagrees with the announced peer")
         return address
     return address + "/p2p/" + peer
@@ -105,7 +107,7 @@ def server(command: list[str], log: Path):
 def require_ping(command: list[str]) -> None:
     """Only a successful dial process with the expected result passes a leg."""
     result = subprocess.run(command, capture_output=True, text=True, timeout=40)
-    if result.returncode != 0 or not any(line.startswith("PING OK rtt=") for line in result.stdout.splitlines()):
+    if result.returncode != 0 or not any(PING_RESULT.fullmatch(line) for line in result.stdout.splitlines()):
         raise RuntimeError(f"ping failed: {result.stdout}\n{result.stderr}")
     print(result.stdout.strip(), flush=True)
 

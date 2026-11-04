@@ -25,6 +25,17 @@ class DriverTests(unittest.TestCase):
             with self.subTest(line=line), self.assertRaises(ValueError):
                 GATE.peer_address(line)
 
+    def test_readiness_rejects_unexpected_address_components(self):
+        for address in ["/ip4/127.0.0.1/tcp/80/garbage",
+                        "/ip4/127.0.0.1/tcp/80/p2p/peer/extra",
+                        "/ip4/127.0.0.1/tcp/80/p2p/other/p2p/peer",
+                        "/ip4/127.0.0.1/tcp/80/p2p/",
+                        "/ip4/127.0.0.1/tcp/８０"]:
+            with self.subTest(address=address), self.assertRaises(ValueError):
+                GATE.peer_address(f"ADDR {address} peer")
+        with self.assertRaises(ValueError):
+            GATE.peer_address("ADDR /ip4/127.0.0.1/tcp/80 invalid/peer")
+
     def test_early_exit_does_not_announce_success(self):
         with tempfile.TemporaryDirectory() as directory:
             with GATE.server([sys.executable, "-c", "raise SystemExit(1)"], Path(directory) / "stderr") as process:
@@ -57,6 +68,12 @@ class DriverTests(unittest.TestCase):
     def test_zero_exit_without_ping_result_never_passes(self):
         with self.assertRaises(RuntimeError):
             GATE.require_ping([sys.executable, "-c", "print('not a ping result')"])
+
+    def test_malformed_ping_results_never_pass(self):
+        for result in ["PING OK rtt=", "PING OK rtt=7", "PING OK rtt=-1ms",
+                       "PING OK rtt=NaNms", "PING OK rtt=7ms failed", "PING OK rtt=７ms"]:
+            with self.subTest(result=result), self.assertRaises(RuntimeError):
+                GATE.require_ping([sys.executable, "-c", f"print({result!r})"])
 
     def test_default_mock_binary_never_announces_a_live_address(self):
         if not (GATE.ROOT / "packages/cli/CliApp/Mock/Stack.lean").exists():
