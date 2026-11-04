@@ -5,12 +5,10 @@ import Streams
 /-!
 # Core seam mock
 
-`Libp2p.Core` (issue #15, PR #37 draft) is not merged. This mock
-declares the frozen seam shapes from
-`packages/libp2p/core/docs/ARCHITECTURE.md`: the `ProtocolId` of
-sub-unit 1a, and the coarse `Error` and the `StreamHandler` of
-sub-unit 1b. The real core package replaces this module at
-integration.
+`Libp2p.Core` (issue #15, PR #37) is not merged. This mock declares
+the frozen seam shapes from `packages/libp2p/core/docs/ARCHITECTURE.md`:
+`ProtocolId`, the coarse `Error`, and `StreamHandler`. The real core
+package replaces this module at integration.
 -/
 
 set_option autoImplicit false
@@ -37,7 +35,7 @@ structure StreamHandler where
   id : ProtocolId
   handle : Streams.Stream → ExceptT Error Conc.Async Unit
 
-/-- One map from a stream answer to the coarse error, shared by every
+/-- One map from a stream error to the coarse error, shared by every
 handler of this package. `closed` stays closed, `reset` is a protocol
 fault, and `timeout` stays timeout. -/
 def mapStreamError : Streams.Error → Error

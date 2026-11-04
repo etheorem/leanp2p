@@ -11,7 +11,7 @@ import Libp2p.Protocols.Mock.Core
 import Libp2p.Protocols.Mock.Host
 
 /-!
-# Identify and ping suite (unit W5.7, sub-units 1a and 1b)
+# Identify and ping suite
 
 Mirrors `vendor/specs/ping/ping.md` (32-byte echo, protocol id
 `/ipfs/ping/1.0.0`) and the captured go-libp2p Identify protobuf
@@ -20,11 +20,12 @@ pure `Identify.validate` and `Ping.checkEcho` checks. The mock key
 and multiaddr stand-ins run their executable bodies here, so every
 mock outcome of the validate appears in a check.
 
-Sub-unit 1b adds the exchange cases: the identify client against the
-responder handler, the push handler against the in-memory peerstore
-double, the client deadline on the test clock, and the ping echo in
-both directions. The exchanges run over a private pair of `Conc.Pipe`
-values spliced into two `Streams.Stream` ends.
+The exchange cases cover the identify client against the responder
+handler, the push handler against the in-memory peerstore double, the
+client deadline on the test clock, and the ping echo, with the
+initiator on end `a` and the handler on end `b`. The exchanges run over
+a private pair of `Conc.Pipe` values, wired as two `Streams.Stream`
+ends.
 -/
 
 set_option autoImplicit false
@@ -50,9 +51,9 @@ private def emptyIdentify : Identify := âŸ¨none, [], [], none, none, none, noneâ
 private def msgPayload (m : Identify) : List Nat :=
   Pb.encodeMessage m
 
-/-! ## The private stream pair (sub-unit 1b)
+/-! ## The private stream pair
 
-Two `Conc.Pipe` values spliced like the spike's `mkSplit`
+Two `Conc.Pipe` values wired like the spike's `mkSplit`
 (`Tests/PingId.lean`): end `a` reads `ba` and writes `ab`, end `b`
 reads `ab` and writes `ba`. The adapter's `close` is a no-op, so one
 pair serves the swapped-role exchange; the cases that need an end
@@ -114,7 +115,7 @@ private def runHandler (h : Libp2p.Protocols.Mock.Core.StreamHandler)
   | .error e => throw (IO.userError s!"the handler answered {repr e}")
   | .ok () => pure ()
 
-/-- The 1b exchange cases, on the test clock and the private pair. -/
+/-- The exchange cases, on the test clock and the private pair. -/
 private def asyncChecks (r : Runner) : Conc.Async Unit := do
   -- identify: the responder round trip
   do
@@ -427,14 +428,13 @@ def run (r : Runner) : IO Unit := do
               -- Multiaddr text codec is unmerged
               r.check "identify vector listenAddrs has one entry, the binary form of JSON listenAddrs[0]"
                 (m.listenAddrs == [[4, 127, 0, 0, 1, 6, 138, 43]])
-              -- the full captured bytes, prefix and payload, through the
-              -- pure client core: the wire decision path of sub-unit 1b
+              -- the full captured bytes, prefix and payload, through `clientCore`
               r.check "identify vector through the client core"
                 (match Identify.clientCore (Bytes.toNatList respBytes) none with
                  | .ok (some (m2, _)) => m2 == m
                  | _ => false)
               -- the wire carries the empty string, the JSON says
-              -- /ipfs/1.0.0; the wire is the truth
+              -- /ipfs/1.0.0; the suite asserts the wire value
               r.check "identify vector protocolVersion wire delta recorded"
                 (m.protocolVersion == some "" && jsonVersion == "/ipfs/1.0.0")
               r.skip "identify vector peer id derivation skipped"

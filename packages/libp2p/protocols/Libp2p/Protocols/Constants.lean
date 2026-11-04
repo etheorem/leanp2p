@@ -4,8 +4,9 @@ import Libp2p.Protocols.Mock.Core
 # Protocol constants
 
 One home per literal (DRY). The module holds the protocol ids of
-identify, identify push, and ping, the identify message cap, and the
-ping payload size. Gossipsub and req/resp ids wait for their units.
+identify, identify push, and ping, the identify message cap, the ping
+payload size, and the protocol version that the identify responder
+writes. Gossipsub and req/resp ids wait for their units.
 -/
 
 set_option autoImplicit false
