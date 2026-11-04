@@ -15,8 +15,8 @@ sub-split below, with the reasons.
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
 | 1 | W5.6 | identify (+ push) and ping: the message and its `ProtoMessage` instance, the validate, the handlers, and `Constants.lean` (root W5.7) | the root W5.7 row holds, and the unit 1 milestones pass |
-| 2a | W6.2 | the `/eth2/.../ssz_sn` framing codec: uvarint length over a snappy chunk, as a `LawfulCodec` over the model, pinned to the `ByteArray` path (root W6.3, first half) | the framing milestones pass at the model level |
-| 2b | 2a, W5.6 | the response-chunk core, `State`, `Event`, `Action`, the error inductive, and a total `step`, plus the exchange: client, handler, deadlines, and the caps (root W6.3, second half) | the root W6.3 row holds, and the unit 2 milestones pass |
+| 2a | W6.2 | the `/eth2/.../ssz_snappy` framing: CRC-32C, the snappy chunk codec as a `LawfulCodec` over the model pinned to the `ByteArray` path, and the protobuf varint length prefix with its round-trip theorem (root W6.3, first half) | the framing milestones pass at the model level |
+| 2b | 2a, W5.6 | the reader core, `State`, `Event`, `Action`, and a total `step` for the request and the response chunks, plus the exchange: requester, responder, handler, deadlines, the caps, and the `MAX_CONCURRENT_REQUESTS` limit (root W6.3, second half) | the root W6.3 row holds, and the unit 2 milestones pass |
 | 3a | W5.7 | the gossipsub RPC message with its instance, and the router core skeleton: `State`, `Event`, `Action`, a total `step` (root W6.4, first half) | the RPC milestones pass |
 | 3b | 3a, W1.1 | mesh, scoring, and heartbeat inside the `step`; the signing-policy decision recorded; the loop and the publish/subscribe surface (root W6.4, second half) | the router milestones pass |
 | 3c | 3b, W5.6 | the gate: the gossipsub interop suite against go and rust with no behavior difference (root W6.4's gate) | the gate passes, and the root W6.4 row holds |
@@ -70,19 +70,46 @@ in the codec group wrapping upstream `google/snappy`.
 
 ## Test milestones (unit 2)
 
-- A request and its response round-trip through uvarint + snappy at the
-  model level, with the `LawfulCodec` instance, once the binding exists.
-- Transcript tests replay chunked responses with no clock and no task:
-  a response split across snappy chunks drives the core, and the
-  decompression context carries across chunks (§3.3).
+- The checksum: CRC-32C gives the four examples of RFC 3720, appendix
+  B.4, on the model and on the table path, and the two paths agree.
+- The chunk codec round-trips on the model with the `LawfulCodec`
+  instance, and the `ByteArray` read agrees with the model.
+- The length prefix round-trips for every `Uint64` value (a theorem),
+  takes a non-minimal prefix, and refuses 11 bytes and `2 ^ 64`.
+- Transcript tests replay requests and responses with no clock and no
+  task: a payload split across snappy chunks, read whole, in pieces,
+  and one byte at a time, gives the same chunks (§3.3). The output so
+  far and the budget spent carry from chunk to chunk.
+- The framing rules, one rejection each: a chunk before the stream
+  identifier, a wrong identifier, an unskippable chunk, a wrong
+  checksum, a short data chunk, a data chunk over 65536 bytes, a broken
+  block, and data past `n`. Padding, the skippable range, and a
+  repeated identifier are skipped.
+- The go fixtures: payloads that go's snappy writes at prysm's pin read
+  back, as a request and as a response chunk, and the empty payload is
+  the prefix alone.
+- The writer: with a block that shrinks, it writes compressed chunks,
+  and they read back, alone and beside a raw chunk.
+- The concurrency limit: two requests with one id take a slot each, a
+  third is refused, another id has its own slots, and a request gives
+  its slot back when it ends (the bound of `Table.take` is a theorem).
+- Over the sim transport, through the mock muxer and the host stream
+  mock (PRINCIPLES 1.4): a request through the host gets its chunks,
+  with whole and with split writes; an id the peer does not serve
+  resets the stream; a silent peer fails the request at its deadline;
+  a connection closed under a parked read ends the request.
 - The error/EOF distinction: a framing failure returns the protocol
-  error, and a clean stream end returns `none`, through different
-  channels (§5.2).
-- The deadline: a slow response fails at its deadline, and the test
-  `Clock` of `base/conc` advances it, so the suite waits on no wall
-  clock.
-- The caps: an over-long uvarint length is a protocol error, and no
-  allocation of that size happens (§5.1).
+  error, and a clean stream end returns `finished`, through different
+  channels (§5.2). An end inside a chunk is an early EOF.
+- The response: context bytes on success, none on an error chunk; an
+  error chunk ends the response; the reader stops at `maxChunks`.
+- The deadline: a silent responder fails the request at its deadline,
+  and a silent requester fails the responder's read. The test `Clock`
+  of `base/conc` advances both, so the suite waits on no wall clock.
+- The caps: a length outside the method's bounds or past
+  `MAX_PAYLOAD_SIZE` is refused, an error message over 256 bytes is
+  refused, and a chunk header past `max_compressed_len(n)` is refused
+  before its body arrives (§5.1).
 - SSZ payloads pass through as opaque bytes: a payload of arbitrary
   bytes survives the framing unchanged, and no module inspects it.
 - The suite passes under `+RTS -N1`.
@@ -113,10 +140,19 @@ in the codec group wrapping upstream `google/snappy`.
   ping by behavior tests over the sim plus a live go interop script
   (`scripts/ping-interop.sh` on the spike branch). The behavior tests
   close the family.
-- **Req/resp has no vectors, and none are scheduled.** W0.3 carries the
-  spike's directory only, and the spike captured no eth2 traffic. The
-  framing family closes with the round-trip proof, the fuzz pin to the
-  byte model, and the fixed-message tests of unit 2.
+- **Req/resp has fixtures and no vector file.** The spike captured no
+  eth2 traffic, and the consensus spec tests carry no req/resp case:
+  their `networking` format covers gossip validation and the
+  custody-group functions (`tests/formats/networking` of
+  consensus-specs).
+  `scripts/reqresp-fixtures` writes `Tests/fixtures/reqresp-snappy-go.json`
+  with go's snappy at the version prysm's `go.mod` pins, in the shape of
+  prysm's `EncodeWithMaxLength` (both vendored under `vendor/prysm`).
+  RFC 3720, appendix B.4, gives the checksum examples. The spec texts
+  are vendored under `vendor/consensus-specs` and `vendor/snappy`. The
+  framing family closes with these, the
+  round-trip proofs, the pin to the byte model, and the fixed-message
+  tests of unit 2.
 - **Gossipsub has no vectors.** The vendored gossipsub spec carries no
   captured examples. Fixed-message tests close the RPC codec family.
   The W6.4 gate is a live interop suite against go and rust; no vector

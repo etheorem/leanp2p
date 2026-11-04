@@ -3,7 +3,7 @@
 A Lean 4 implementation of libp2p. The target in priority order is the
 Ethereum consensus layer: a node speaks `tcp + /noise + /yamux`,
 negotiates with multistream-select, answers identify, and carries the
-consensus traffic (req/resp in `ssz_sn` framing, gossipsub v1.1). The
+consensus traffic (req/resp in `ssz_snappy` framing, gossipsub v1.1). The
 stack is built from small packages under strict dependency rules, and
 each package owns contracts that the spike proved out. Crypto and other
 mature foreign implementations are consumed FFI first, through small C
@@ -279,7 +279,7 @@ over it.
 
 In scope for v1 (P0 in ARCHITECTURE.md §8): tcp transport, Noise XX,
 yamux, multistream-select, identity (keys, peer id), identify, host and
-upgrader, req/resp (`ssz_sn`), gossipsub v1.1, and the ENR codec.
+upgrader, req/resp (`ssz_snappy`), gossipsub v1.1, and the ENR codec.
 Deferred to seams only: TLS and the X.509 extension, mplex beyond the
 interface, QUIC/WebTransport, kad-dht, mDNS, relay and circuit, hole
 punching, WebSockets, WebRTC, pnet, peer records.
