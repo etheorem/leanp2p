@@ -18,6 +18,55 @@ W5.9 gate runs live, outside the suite runner.
 
 Unit 0 is done.
 
+Unit 1 has the executable composition, parser and workflow tests.
+It is ahead of its dependencies under RULES.md. The mock-backed build
+is reviewable; unit 1 remains open until the mocks are replaced and
+the real loopback and bidirectional Go ping gates pass.
+
+The opaque mock bodies fail at program entry. A passing `Tests.Cli`
+run is an orchestration result, not evidence of a Noise handshake,
+yamux negotiation, identity derivation or a live ping.
+
+Build and inspect the commands with:
+
+```sh
+lake build demo pingnode
+./.lake/build/bin/demo --help
+./.lake/build/bin/pingnode --help
+lake test
+lake test -- +RTS -N1 -RTS
+python3 -m unittest discover -s scripts -p test_ping_interop.py
+```
+
+The two live gates are explicit skips while the dependencies are
+mocked. After substitution, run the demo over loopback and run
+`scripts/ping-interop.sh` on Linux with Docker available. The Go helper
+uses the committed `scripts/ping-peer/go.mod` and `go.sum`, with
+read-only module resolution.
+
+The dependency connections are:
+
+- W2.3: replace the address type, parser, printer and component view
+  with the canonical `Multiformats.Multiaddr` API.
+- W3.3 and W5.1: generate fresh Ed25519 identities and Noise static
+  keys through the real crypto and identity APIs. Replace the mock
+  peer-id display. Keep randomness errors fatal; there is no fallback.
+- W4.2, W5.3 and W5.4: replace TCP, Noise and yamux seam values.
+  Muxer negotiation stays on the wire, with no advertised Noise muxer
+  extension and no implicit mplex choice.
+- W5.6: adapt the CLI-side host view to the concrete configuration,
+  binding, peerstore, stream-opening and close/join API. Confirm that
+  `startListening` exposes the actual bound address for port zero.
+- W5.7: replace ping and identify adapters and the demo echo support
+  with their protocol implementations. The binaries match only on
+  `Host.Error` after this mapping.
+
+Drop these mocks within the RULES.md window after the dependencies
+merge. Rerun the build, both scheduler modes, the import lint, the
+workflow checks and both live gates. This PR must not merge while its
+dependency mocks remain. Update tracking issue #25 when the real
+connections are complete.
+
 ## Consumers
 
 None below. `cli/` is the end of the chain (§2), and nothing imports
@@ -27,6 +76,26 @@ verification plan (§6, layer 6). The W6.4 gate is a later consumer of
 the same pattern, a live run against foreign nodes.
 
 ## Test milestones (unit 1)
+
+`Tests.Cli` checks strict argument arity, decimal port boundaries,
+help without host creation, parsed peer suffixes, exact readiness and
+ping output, stdout flushing, stream cleanup, both host lifetimes,
+and injected IO faults. These checks run in `lake test` and under
+`+RTS -N1`.
+
+`scripts/ping-interop.sh` runs the live gate through the bounded Python
+driver. It requires Linux because Docker builds a Linux Go peer that
+runs beside Lean on the host. The driver starts Lean before building
+Go, so an unavailable dependency fails before Docker is invoked. It
+uses ephemeral ports, checks readiness, bounds child lifetimes, closes
+stdin and joins both servers. It reports success only after both
+dial directions pass and both servers exit cleanly.
+
+The current validation passes 123 orchestration checks inside the
+full suite, plus eight Python driver checks. The Go helper compiles
+with CGO disabled for macOS and Linux using read-only module
+resolution. The two live gates remain unrun and are explicit skips;
+successful helper compilation does not close either gate.
 
 - The demo runs end to end over loopback: two hosts dial, complete the
   upgrade, identify, and exchange pings and an echo. The spike's
