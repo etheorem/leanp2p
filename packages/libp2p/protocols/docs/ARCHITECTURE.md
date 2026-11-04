@@ -58,14 +58,22 @@ it takes no module line and lives with the test support.
   ids. The responder builds the message from the host's identity,
   addresses, protocol list, observed address, and agent version, as the
   spike's `respond` does. The push sender is deferred. A received push
-  updates the peerstore through the host. A push must carry the public
-  key. The identify spec lets a peer send a partial update and says to
-  ignore missing fields. `push` runs `validate`, so a push with no
-  `publicKey` field fails with `.missingKey`. This is a recorded delta.
+  updates the peerstore through the host. The push stores the
+  addresses. The peerstore surface of the host doc holds addresses
+  only, so a push's protocols list has no store yet. This is a recorded
+  delta from go, whose push handler updates both. A push must carry the
+  public key. The identify spec lets a peer send a partial update and
+  says to ignore missing fields. `push` runs `validate`, so a push with
+  no `publicKey` field fails with `.missingKey`. This is a recorded
+  delta.
 - **Ping.** `Ping.protocolId` is the constant. The handler echoes each
   32-byte payload until the stream closes (the spike's `handle`). The
   initiator sends 32 bytes, awaits the echo, and checks the length;
-  the spike's `Ping.ping` is the shape.
+  the spike's `Ping.ping` is the shape. The initiator's echo read
+  carries no deadline yet. The deadline rule of §5.4 binds the
+  unauthenticated phase only. A silent peer parks the initiator until
+  the stream closes. This deferral is a recorded delta from the
+  spike.
 - **Req/resp.** The framing codec feeds the core. The client side dials
   a stream through the host, sends one request under the framing, and
   awaits the response chunks under a deadline. The handler side serves
