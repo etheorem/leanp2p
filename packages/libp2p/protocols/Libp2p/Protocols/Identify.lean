@@ -310,9 +310,8 @@ theorem validateKeyMismatch (payload : List Nat) (m : Identify) (kb : List Nat)
 
 /-- Soundness. A passing validate carries the cap bound, the key
 facts, the derivation match, and the address validity. The statement
-does not tie `m` to the decode of `payload`. The stronger conjunct
-`∃ rest, Pb.decodeMessage? (α := Identify) payload = .ok (m, rest)` is
-not proved, because `checkAddrs` is private. -/
+does not tie `m` to the decode of `payload`; it omits the conjunct
+`∃ rest, Pb.decodeMessage? (α := Identify) payload = .ok (m, rest)`. -/
 theorem validateSound (payload : List Nat) (expected : Option Mock.Identity.PeerId)
     (m : Identify) (pid : Mock.Identity.PeerId)
     (h : validate payload expected = .ok (m, pid)) :
@@ -543,9 +542,9 @@ def respondHandler (key : Mock.Identity.PubKey) (addrs : List (List Nat))
 `clientCoreFrame` pins the frame that `clientCore` validates.
 `clientCoreOverCap` pins the cap check before the body.
 `clientCoreEmptyFrame` pins the zero-length rule. Each consumes a law of
-`Streams.Framing`, and that law rests on the axiom
-`Streams.Mock.Varint.decodeEncodeSuffix`. No proof here reads a result
-of this package's mocks. -/
+`Streams.Framing`, which inherits the axiom
+`Streams.Mock.Varint.decodeEncodeSuffix`. None takes a result of this
+package's mocks as a premise. -/
 
 /-- The frame step reads a whole frame back from its encoding, with
 any rest after it. -/
