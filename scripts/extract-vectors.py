@@ -1285,9 +1285,9 @@ def extract_enr_text() -> None:
     """The enr: text forms sigp/enr refuses: its test
     test_read_enr_base64url_decoding_enforce_no_pad_no_extra_trailingbits.
     Each case is the EIP-778 example with one change to the base64url body.
-    go-ethereum's enode.Parse (base64.RawURLEncoding, not Strict) refuses
-    the padded case and accepts the trailing-bits case; the identity pair
-    records the decision (contract 7)."""
+    go-ethereum's enode.Parse (base64.RawURLEncoding) refuses the padded
+    case and accepts the trailing-bits case; the identity pair records
+    the decision (contract 7)."""
     d = "vendor/sigp-enr"
     test = "test_read_enr_base64url_decoding_enforce_no_pad_no_extra_trailingbits"
     src = read(d, "src/lib.rs")

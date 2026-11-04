@@ -1,4 +1,5 @@
 import Tests.Support
+import Tests.Backend
 import Libp2p.Identity
 
 /-!
@@ -29,9 +30,6 @@ open Bytes
 open Lean (Json)
 open Libp2p.Identity
 open Libp2p.Identity.Mock.Multiformats (Multiaddr)
-
-/-- The order of the secp256k1 group. -/
-private def secpOrder : Nat := 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
 /-- The go-libp2p peer id of the EIP-778 key. -/
 private def examplePeerId : String := "16Uiu2HAmSH2XVgZqYHWucap5kuPzLnt2TsNQkoppVxB5eJGvaXwm"
@@ -105,6 +103,11 @@ def Enr.run (r : Runner) : IO Unit := do
       | r.check "a 32-byte zero key" false; return
     r.check "the signer refuses the zero scalar"
       (failsWith .privateKey (Enr.sign zero seq others))
+    r.check "the signer refuses a seq past 64 bits"
+      (failsWith .seq (Enr.sign priv (2 ^ 64) others))
+    let big : Enr.Pair := ⟨.other (toNatList (ofString "z")), .bytes (List.replicate 250 0)⟩
+    r.check "the signer refuses a record over 300 bytes"
+      (failsWith .tooLarge (Enr.sign priv seq (others ++ [big])))
 
     -- The text form: the example prints to its text and reads back.
     r.check s!"{file}: the record prints to the example text" (rec.toText == text)
@@ -129,6 +132,24 @@ def Enr.run (r : Runner) : IO Unit := do
       r.check s!"{file}: the multiaddrs map back to the address pairs"
         (succeedsWith rec.addressPairs (Enr.pairsOfMultiaddrs addrs))
 
+    -- The forward map of a dual-stack record: the IPv6 address takes
+    -- `tcp6`, and `udp` where the record has no `udp6`.
+    let v6 := List.replicate 15 0 ++ [1]
+    let port (p : Nat) : List Nat := [p / 256, p % 256]
+    let dual : List Enr.Pair := [⟨.ip, .bytes [1, 2, 3, 4]⟩, ⟨.ip6, .bytes v6⟩,
+      ⟨.tcp, .bytes (Rlp.ofScalar 9000)⟩, ⟨.tcp6, .bytes (Rlp.ofScalar 9100)⟩,
+      ⟨.udp, .bytes (Rlp.ofScalar 9001)⟩]
+    match Enr.sign priv 1 dual with
+    | .error e => r.check s!"the dual-stack record signs ({repr e})" false
+    | .ok drec =>
+      r.check "dual stack: four multiaddrs, the IPv6 ones over tcp6 and udp"
+        (succeedsWith
+          [[0x04, 1, 2, 3, 4, 0x06] ++ port 9000, [0x04, 1, 2, 3, 4, 0x91, 0x02] ++ port 9001,
+            (0x29 :: v6) ++ [0x06] ++ port 9100, (0x29 :: v6) ++ [0x91, 0x02] ++ port 9001]
+          (drec.multiaddrs.map bytesOfAddrs))
+      r.check "dual stack: the multiaddrs map back to the address pairs"
+        (succeedsWith drec.addressPairs (drec.multiaddrs >>= Enr.pairsOfMultiaddrs))
+
   -- One rejection per decode rule. Each mutation starts from the
   -- example's items: `[signature, seq, id, v4, ip, …, udp, 765f]`.
   let items := itemsOf wire
@@ -136,7 +157,7 @@ def Enr.run (r : Runner) : IO Unit := do
   r.check "a tampered udp value fails the signature, so no pair is read"
     (refuses .signature (wireOf (swapAt 9 (.bytes [0x76, 0x60]))))
   let s := Rlp.beNat ((toNatList sig).drop 32)
-  let highS := (toNatList sig).take 32 ++ Rlp.beBytes (secpOrder - s)
+  let highS := (toNatList sig).take 32 ++ Rlp.beBytes (Ecdsa.secp256k1Order - s)
   r.check "the high-S twin of the signature fails"
     (refuses .signature (wireOf (swapAt 0 (.bytes highS))))
   r.check "a 63-byte signature fails"

@@ -35,7 +35,8 @@ trailing bits each fail.
 `Multiformats` in place of this module and open `Multiformats` in
 place of `Mock.Multiformats`. The names above are the frozen ones of
 the multiformats ARCHITECTURE, and the integration deletes this
-module.
+module. The real `Base` holds the whole registry, so the match in
+`Enr.ofText?` gains an arm that refuses any base but `base64url`.
 -/
 
 set_option autoImplicit false

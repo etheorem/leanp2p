@@ -77,8 +77,10 @@ def ofData? (t : KeyType) (data : ByteArray) : Option PubKey :=
   | .secp256k1 => if data.size = 33 then some ⟨t, data⟩ else none
   | _ => some ⟨t, data⟩
 
-/-- The `Keys` protobuf of a key with a `Data` under 128 bytes, then
-the identity multihash when it fits 42 bytes. -/
+/-- The `Keys` protobuf of a key with a `Data` under 128 bytes, inlined
+as an identity multihash. The mock has no sha2-256 branch for a key
+over 42 bytes: the mapping passes only the 33-byte secp256k1 key, whose
+protobuf is 37 bytes. W5.1 lands the threshold. -/
 def ofPubKey (k : PubKey) : PeerId :=
   let pb := ByteArray.mk #[0x08, k.keyType.toCode.toUInt8, 0x12, k.data.size.toUInt8] ++ k.data
   ⟨ByteArray.mk #[0x00, pb.size.toUInt8] ++ pb⟩
