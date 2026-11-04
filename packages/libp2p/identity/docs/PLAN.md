@@ -87,7 +87,8 @@ Milestones for unit 2:
 - The signer: the example's private key, `seq`, and pairs re-sign to
   the record's own bytes, since the backend signer and go-ethereum
   both take the RFC 6979 nonce. A stale `id` or `secp256k1` pair is
-  replaced, a repeated key is refused, and the zero scalar is refused.
+  replaced. The signer refuses a repeated key, the zero scalar, a
+  `seq` past 64 bits, and a record over 300 bytes.
 - The text form (ARCHITECTURE, contract 7): the record prints to the
   example's text, and the text reads back to the record. A text
   without the `enr:` prefix is refused, and so is each case of
@@ -95,9 +96,10 @@ Milestones for unit 2:
 - The mappings: the `secp256k1` entry derives the peer id the record
   belongs to, and go-libp2p derives the same id from the same key.
   The `ip`, `tcp`, and `udp` entries build the `Multiaddr`. Mapping
-  a record to an address and back returns the same entries. The
-  reverse map of a dual-stack node keeps an IPv6 port that equals the
-  general port general, and writes a different one as `tcp6`.
+  a record to an address and back returns the same entries. A
+  dual-stack record maps its IPv6 address with `tcp6`, or with `tcp`
+  when it has no `tcp6`. In the reverse map, an IPv6 port equal to
+  the `tcp` port stays in `tcp`, and a different one becomes `tcp6`.
 
 ## Vector stance
 

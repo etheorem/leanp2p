@@ -23,10 +23,10 @@ leading zero, and a long length below 56. The ethereum/tests
 
 This module is the recorded fallback of the package ARCHITECTURE: the
 etheorem `LeanRlp` package has its item codec on `main`, and its
-vector runner and round-trip theorems have not landed. The module holds
-the item tree, the model codec over `List Nat`, the proof of the
-`LawfulCodec` law, and the `ByteArray` decoder that the harness pins to
-the model.
+vector runner and round-trip theorems have not landed. This module is
+the model: the item tree, the codec over `List Nat`, and the proof of
+the `LawfulCodec` law. `Rlp/Bytes.lean` holds the `ByteArray` decoder
+that the harness pins to it.
 
 **Why a fuel argument.** The decoder of a list payload decodes an item,
 then the rest of the payload. Each step consumes bytes, but Lean cannot
@@ -723,96 +723,6 @@ theorem scalarOfScalar {n k : Nat} (h : n < 256 ^ k) : scalar? k (ofScalar n) = 
     simp only [List.all_eq_true, decide_eq_true_eq]
     intro x hx; exact ltOfMemBeBytes hx
   simp [scalar?, ofScalar, hz, show ¬k < (beBytes n).length by omega, hall, beNatBeBytes]
-
-/-! ## The `ByteArray` decoder
-
-The production path walks the input by position, and `lim` marks the
-end of the enclosing payload. It mirrors the model step for step, so
-the errors agree as well as the values. `Tests/Rlp.lean` pins it to the
-model with the harness of `base/bytes`. -/
-
-namespace Wire
-
-/-- The byte at `i`, as a model value. Callers check `i < lim ≤ size`. -/
-@[inline] def byteAt (b : ByteArray) (i : Nat) : Nat := (b.get! i).toNat
-
-/-- The bytes `[i, j)` as the model list. -/
-def slice (b : ByteArray) (i j : Nat) : List Nat := toNatList (b.extract i j)
-
-end Wire
-
-open Wire in
-/-- The long-form length: `k` bytes at `pos`, before `lim`. -/
-def longLengthB (b : ByteArray) (k pos lim : Nat) : Except DecodeError (Nat × Nat) :=
-  if lim - pos < k then .error .truncated
-  else
-    let lb := slice b pos (pos + k)
-    if lb.head? = some 0 then .error .malformed
-    else if beNat lb < 56 then .error .malformed
-    else .ok (beNat lb, pos + k)
-
-open Wire in
-/-- The header at `pos`, before `lim`, and the position after it. -/
-def decodeHeadB (b : ByteArray) (pos lim : Nat) : Except DecodeError (Head × Nat) :=
-  if lim ≤ pos then .error .truncated
-  else
-    let c := byteAt b pos
-    if c < 0x80 then .ok (.single c, pos + 1)
-    else if c < 0xb8 then .ok (.str (c - 0x80), pos + 1)
-    else if c < 0xc0 then
-      match longLengthB b (c - 0xb7) (pos + 1) lim with
-      | .error e => .error e
-      | .ok (n, q) => .ok (.str n, q)
-    else if c < 0xf8 then .ok (.list (c - 0xc0), pos + 1)
-    else
-      match longLengthB b (c - 0xf7) (pos + 1) lim with
-      | .error e => .error e
-      | .ok (n, q) => .ok (.list n, q)
-
-mutual
-/-- One item at `pos`, before `lim`, and the position after it. -/
-def decodeItemB (b : ByteArray) : Nat → Nat → Nat → Except DecodeError (Item × Nat)
-  | 0, _, _ => .error .malformed
-  | n + 1, pos, lim =>
-    match decodeHeadB b pos lim with
-    | .error e => .error e
-    | .ok (.single c, q) => .ok (.bytes [c], q)
-    | .ok (.str len, q) =>
-      if lim - q < len then .error .truncated
-      else
-        let p := Wire.slice b q (q + len)
-        if isSingleLow p then .error .malformed else .ok (.bytes p, q + len)
-    | .ok (.list len, q) =>
-      if lim - q < len then .error .truncated
-      else
-        match decodeSeqB b n q (q + len) with
-        | .error _ => .error .malformed
-        | .ok is => .ok (.list is, q + len)
-
-/-- Every item from `pos` to exactly `lim`. -/
-def decodeSeqB (b : ByteArray) : Nat → Nat → Nat → Except DecodeError (List Item)
-  | n, pos, lim =>
-    if lim ≤ pos then .ok []
-    else match n with
-      | 0 => .error .malformed
-      | n + 1 =>
-        match decodeItemB b n pos lim with
-        | .error e => .error e
-        | .ok (i, q) =>
-          match decodeSeqB b n q lim with
-          | .error e => .error e
-          | .ok is => .ok (i :: is)
-end
-
-/-- One valid item at the front of `b`, and the number of bytes it
-took. The fuel is the model's, `fuel (toNatList b)`. -/
-def decodeB? (b : ByteArray) : Except DecodeError (Value × Nat) :=
-  match decodeItemB b (2 * b.size + 2) 0 b.size with
-  | .error e => .error e
-  | .ok (i, q) => if h : i.valid = true then .ok (⟨i, h⟩, q) else .error .malformed
-
-/-- The wire bytes of a value. -/
-def encodeB (v : Value) : ByteArray := ofNatList (encode v.item)
 
 /-! ## Item helpers -/
 
