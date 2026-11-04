@@ -2,6 +2,7 @@ import Libp2p.Identity.Marshal
 import Libp2p.Identity.Unmarshal
 import Bytes
 import Proto
+import Crypto
 
 /-!
 # Public and private keys
@@ -84,6 +85,42 @@ def PubKey.backendData (key : PubKey) : ByteArray :=
 /-- Seed, scalar, or DER for the backend signer, without repeated validation. -/
 def PrivKey.backendData (key : PrivKey) : ByteArray :=
   Marshal.privateBackendData key.keyType key.raw
+
+private theorem ed25519BackendDataSize (key : PrivKey) (h : key.keyType = .ed25519) :
+    key.backendData.size = ed25519KeySize := by
+  have valid := key.valid.1
+  simp only [privKeyDataValid, h] at valid
+  have enough : ed25519KeySize ≤ key.raw.size := by
+    rcases valid with size | size | ⟨size, _⟩
+    · omega
+    · simp only [ed25519PrivateSize] at size
+      omega
+    · simp only [ed25519LegacyPrivateSize] at size
+      omega
+  simp [PrivKey.backendData, Marshal.privateBackendData, h,
+    ByteArray.size_extract, Nat.min_eq_left enough]
+
+/-- Derive the public key through the crypto facade for the private key's type.
+The checked private key supplies the seed/scalar size proofs. The returned
+public Data crosses its own checked boundary; an unexpected shape is a fault.
+-/
+def derivePubKey (key : PrivKey) : Except Crypto.CryptoError PubKey := do
+  let raw : ByteArray ← match h : key.keyType with
+    | .ed25519 =>
+        let seed : Crypto.Key32 := ⟨key.backendData, by
+          simpa only [ed25519KeySize] using ed25519BackendDataSize key h⟩
+        (Crypto.ed25519PublicKey seed).map (·.bytes)
+    | .secp256k1 =>
+        let scalar : Crypto.Key32 := ⟨key.backendData, by
+          have valid := key.valid.1
+          simpa only [privKeyDataValid, h, secp256k1PrivateSize,
+            PrivKey.backendData, Marshal.privateBackendData] using valid⟩
+        Crypto.secp256k1PublicKey scalar
+    | .rsa => Crypto.rsaPublicKey key.backendData
+    | .ecdsa => Crypto.p256PublicKey key.backendData
+  match PubKey.ofData? key.keyType raw with
+  | some publicKey => return publicKey
+  | none => throw .fault
 
 /-- Serialize a checked public key with the fixed Type/Data field order. -/
 def marshalPubKey (key : PubKey) : ByteArray :=

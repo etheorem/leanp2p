@@ -3,6 +3,7 @@ import Libp2p.Identity.Constants
 import Libp2p.Identity.Marshal
 import Libp2p.Identity.Unmarshal
 import Libp2p.Identity.Keys
+import Libp2p.Identity.PeerId
 
 /-!
 # Libp2p.Identity

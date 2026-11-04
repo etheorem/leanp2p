@@ -48,6 +48,13 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   sign over the digest: secp256k1 with BIP-62 low-S, ECDSA P-256, and
   RSA RSASSA-PKCS1-v1_5. Which schemes draw a random nonce is the
   backend's binding table (§3.6).
+- `derivePubKey : PrivKey → Except Crypto.CryptoError PubKey` selects
+  `Crypto.ed25519PublicKey`, `Crypto.secp256k1PublicKey`,
+  `Crypto.rsaPublicKey`, or `Crypto.p256PublicKey`. Ed25519 passes the
+  seed and secp256k1 passes the scalar, each as `Key32` with a size
+  proof from the private key. RSA and P-256 pass their stored DER.
+  The returned bytes enter through `PubKey.ofData?`; an unexpected
+  public shape is a crypto fault.
 - The `Keys` protobuf message has the field table of the peer-ids
   spec: field 1 `Type`, a varint, and field 2 `Data`, bytes. The
   `ProtoMessage` instances live here, next to the message types
@@ -79,9 +86,11 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   `12D3KooW...` id; a larger key hashes with sha2-256. The text forms
   are the legacy base58btc multihash (`Qm...`) and the CIDv1
   `libp2p-key` multibase form (`bafz...`); parsing accepts both, and
-  base36 is accepted beside base32. The standard classes derive,
-  except `ToString`, which prints the recorded form (§3.2; the
-  decision below).
+  base36 is accepted beside base32. `BEq`, `Hashable`, and `Ord` use
+  the multihash alone, so different text forms name the same runtime
+  key (§3.2's exception for spec behavior). `DecidableEq` and `Repr`
+  derive over the stored representation. `ToString` prints the
+  recorded form (the decision below).
 - The ENR surface (PLAN W6.1): `Rlp` encodes and decodes through the
   imported library, behind a `Codec` instance and its law. `Enr`
   holds the record as a sequence number and typed pairs; the known
@@ -145,6 +154,10 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
    the parsed form and prints it back (PRINCIPLES 2.1), so parsing a
    string twice round-trips to the same string. A derived `PeerId`
    records the base58btc form, the go form, so `ToString` is total.
+   Runtime equality, hashing, and ordering ignore that presentation
+   metadata, so a peerstore lookup succeeds across text forms.
+   Propositional equality still includes the stored representation;
+   the type therefore makes no `LawfulBEq` claim.
    `codec/multiformats` fixes the same rule for its `p2p` component
    and hands the peer-id side to this package.
 

@@ -15,6 +15,15 @@ def secp256k1PublicSize : Nat := 33
 def secp256k1PrivateSize : Nat := 32
 def minDerSize : Nat := 8
 
+/-- The complete public-key protobuf inlines through this inclusive boundary. -/
+def maxInlineKeySize : Nat := 42
+
+/-- SHA-256's output length, used by the peer-multihash validity rule. -/
+def peerIdDigestSize : Nat := 32
+
+/-- Bound text before base conversion allocates or constructs a large integer. -/
+def maxPeerIdTextSize : Nat := 4096
+
 /-- DER AlgorithmIdentifier for rsaEncryption, including its NULL parameter. -/
 def rsaAlgorithmIdentifier : ByteArray := ByteArray.mk #[
   0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00]
