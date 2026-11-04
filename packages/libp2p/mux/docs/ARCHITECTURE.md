@@ -18,47 +18,59 @@ same node code ran under both muxers in-process and over loopback TCP
 | Module | Holds, and why |
 |---|---|
 | `Libp2p/Mux.lean` | the root module; one import line per public submodule |
-| `Libp2p/Mux/Constants.lean` | `Mux.yamuxId` (`/yamux/1.0.0`), `Mux.mplexId` (`/mplex/6.7.0`), `Mux.testId`, and the 1 MiB mplex message cap; the named ids of §3.4 and the cap of §5.1, one home per fact (§3.8) |
-| `Libp2p/Mux/Yamux.lean` | `Mux.yamux`, the yamux value over the session of `net/yamux` |
+| `Libp2p/Mux/Constants.lean` | `Mux.yamuxId` (`/yamux/1.0.0`), `Mux.mplexId` (`/mplex/6.7.0`), `Mux.testId` (`/leanp2p/test-mux/1.0.0`), and `Mux.mplexMessageCap` (1 MiB); the named ids of §3.4 and the cap of §5.1, one home per fact (§3.8) |
+| `Libp2p/Mux/Yamux.lean` | `Mux.yamux`, the yamux value over the session of `net/yamux`; the `Role` conversion below |
 | `Libp2p/Mux/Mplex.lean` | the mplex message codec and `Mux.mplex` (P2, §8); the spike reference is `Conn/Mplex.lean` (§10 row 15, §7 row 10) |
-| `Libp2p/Mux/Test.lean` | the `Muxer` test value under the fixed id `Mux.testId` (§3.1) |
+| `Libp2p/Mux/Test.lean` | `Mux.test : Muxer`, the test value under `Mux.testId` (§3.1) |
 
 All declarations live in the `Libp2p.Mux` namespace, and the root
 module re-exports the public submodules.
 
-The test value needs no wire format. Its `id` is the fixed
-`Mux.testId` of `Constants.lean`, and its `open` builds a session over
-any `Connection`, streams and all, with ids handed out from a fixed
-sequence. A suite above the transport dials itself over the sim pair
-and predicts every id (§3.1, PRINCIPLES 1.4).
+The test value needs no wire format. Its name is `Mux.test : Muxer`,
+and its home is `Libp2p/Mux/Test.lean`. Its `id` is `Mux.testId`.
+`Mux.testId.toString = "/leanp2p/test-mux/1.0.0"`. This
+repository-local protocol id is used only by test suites.
+
+`open` builds a session over any `Connection`. An `initiator` session
+issues `1`, then `3`, then `5`, and so on. A `responder` session
+issues `2`, then `4`, then `6`, and so on. Each new session starts
+again at the first id of its role. The sequences are disjoint, so the
+two ends of one sim pair can open at the same time and still receive
+different ids. Stream id `0` stays unused. This role partition is a
+test-local rule for predictable, collision-free ids. It does not
+define Yamux wire behavior. A suite above the transport dials itself
+over the sim pair and predicts every id (§3.1, PRINCIPLES 1.4).
 
 ## Public surface
 
 - `Mux.yamux : Muxer` carries `id := Mux.yamuxId` and the core seam's
   `open : Role → Connection → ByteArray → ExceptT Core.Error Async
-  MuxSession` (§4.9; the core pair, public surface). The `Role` picks
-  the stream-id parity inside the session entry of `net/yamux` (the
-  yamux pair, public surface). The `ByteArray` argument is the
-  negotiation leftover; `open` hands it to the session entry as data,
-  and the session loop turns it into the first `Event` (§4.7).
+  MuxSession` (§4.9; the core pair, public surface). `Yamux.lean`
+  converts `Role` as the decision below records, and the session entry
+  of `net/yamux` then applies that package's parity. The `ByteArray`
+  argument is the negotiation leftover. `open` hands it to the session
+  entry as data, and the session loop turns it into the first `Event`
+  (§4.7).
 - The error mapping happens once, in `Yamux.lean`: the value lifts the
   session failure into `Core.Error` with one `Except.mapError` (§3.5).
   The upgrader and the host match on `Core.Error` alone.
-- The test value of `Test.lean`, per the core pair's assignment (the
-  core pair, public surface, "Test values").
+- `Mux.test : Muxer` is the test value of `Test.lean` (the core pair,
+  public surface, "Test values"). Its id and its stream-id sequences
+  are the fixed id and allocation rule above.
 - `Mux.mplex : Muxer` is the P2 surface: `id := Mux.mplexId`, the pure
   message codec, and a session that keys streams by
-  `(id, initiator)`. The declared message length is capped at 1 MiB
-  (§5.1), with the cap named in `Constants.lean`.
+  `(id, initiator)`. The declared message length is capped at
+  `Mux.mplexMessageCap` (§5.1).
 - `MuxSession.openStream` carries a `ProtocolId`; the decisions below
   record it (the core pair, public surface).
 
 ## Owned contracts and how the package keeps them
 
 1. **The seam carries `id : ProtocolId`, and code compares ids
-   only** (§3.1, §3.4). The string literals `/yamux/1.0.0` and
-   `/mplex/6.7.0` appear in `Constants.lean` and in no production
-   code. The negotiator sees `ProtocolId` values.
+   only** (§3.1, §3.4). The string literals `/yamux/1.0.0`,
+   `/mplex/6.7.0`, and `/leanp2p/test-mux/1.0.0` appear in
+   `Constants.lean` and in no production code. The negotiator sees
+   `ProtocolId` values.
 2. **A seam value holds no protocol decisions** (§3.1). `Mux.yamux`
    moves the role, the connection, and the leftover into the session
    entry of `net/yamux`, and maps the error back. The frames are that
@@ -80,9 +92,10 @@ and predicts every id (§3.1, PRINCIPLES 1.4).
    key it names. The spike validated the rule against the go-mplex
    spec, in-process, and the suite keeps the validation.
 6. **The 1 MiB cap is checked before allocation** (§5.1,
-   PRINCIPLES 2.3). A declared length over the cap is a protocol
-   error, and it tears the session down. The number lives in
-   `Constants.lean`, beside the ids.
+   PRINCIPLES 2.3). `Mux.mplexMessageCap` names that 1 MiB limit.
+   `Constants.lean` owns it, beside the ids. A declared length over
+   the cap is a protocol error, and it tears the session down.
+   `Mux.mplex` rejects that length before allocation.
 
 ## Decisions
 
@@ -91,11 +104,19 @@ and predicts every id (§3.1, PRINCIPLES 1.4).
   consumer can use it, and the id assignment stays a one-line decision
   at the seam (§9, delta 10). A new muxer lands as a new value, with
   no edit to the upgrader (PRINCIPLES 1.3).
-- **One `open` field with a `Role`, following the core pair's fold.**
-  The spike split the directions into two seam entries; the core pair
-  folded them into one field and left the parity rules inside the
-  implementation packages (the core pair, decisions). The yamux value
-  passes the `Role` through, and the session entry picks the parity.
+- **`Libp2p/Mux/Yamux.lean` converts `Role`, and the Yamux session
+  applies parity.** The core pair folded the spike's client and server
+  entries into one `open` field (the core pair, decisions). The
+  adapter then maps the role. `Core.Role.initiator` selects the Yamux
+  client side, which opens odd ids, starting at `1` and advancing by
+  two. `Core.Role.responder` selects the Yamux server side, which
+  opens even ids, starting at `2` and advancing by two. Yamux reserves
+  stream id `0` for session messages. An inbound SYN creates a stream
+  when its id has the remote parity. A SYN whose id has the local
+  parity creates no stream state. `Libp2p/Mux/Yamux.lean` translates
+  `Core.Role` to the side selector that the final W4.3 public API
+  exports. `net/yamux` keeps its own client and server sides and
+  imports no libp2p module.
 - **`MuxSession.openStream` takes a `ProtocolId`.** The spike's
   `MuxHandle.openStream` took the name, mplex put it in its NewStream
   frame, and the other muxers ignored it (§10 row 12; the core pair,

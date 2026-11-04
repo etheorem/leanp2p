@@ -12,13 +12,14 @@ the suite passes under `+RTS -N1`, and the import lint is green.
 | Unit | Root deps | Deliverable | Done when |
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
-| 1 | W4.3, W5.2 | the yamux `Muxer` value over the W4.3 session: `Mux.yamux`, the constants module, the `Except.mapError` into `Core.Error`, and the fixed-ids test value | the root W5.4 row holds, and the unit 1 milestones below pass |
+| 1 | W4.3, W5.2 | the yamux `Muxer` value over the W4.3 session: `Mux.yamux` with the `Role` conversion, the constants module, the `Except.mapError` into `Core.Error`, and `Mux.test` | the root W5.4 row holds, and the unit 1 milestones below pass |
 | 2 | W2.1, W5.2, unit 1 | the mplex value (P2, §8): the message codec, `Mux.mplex`, the go-compatible `(id, initiator)` identity, the half-close rules, and the 1 MiB cap | the mplex half of the root W5.4 deliverable holds, and the unit 2 milestones below pass |
 
 Unit 2's deps are the package's own call. The root graph lets mplex
 follow W5.4 at any time, and the mplex core needs the seam (W5.2) and
 no yamux session. Unit 1 comes first because it lays the constants
-module and the test-value pattern that unit 2 reuses.
+module, including `Mux.mplexMessageCap`, and the test-value pattern
+that unit 2 reuses. Unit 2 checks a declared length against that cap.
 
 Unit 0 is done.
 
@@ -54,6 +55,17 @@ Unit 0 is done.
 - The fixed-ids test value serves a suite above, kept honest: a demo
   registry dials itself over the sim pair and serves one handler
   through the test session (§3.1).
+- The build checks `Mux.test.id = Mux.testId` and
+  `Mux.testId.toString = "/leanp2p/test-mux/1.0.0"`.
+- An initiator session of `Mux.test` allocates `1`, `3`, and `5`.
+  A responder session allocates `2`, `4`, and `6`. A new session
+  starts again at the first id of its role. Opens from opposite roles
+  at the same time receive different ids (the architecture, the test
+  value).
+- `Mux.yamux` maps `initiator` to the Yamux client and `responder` to
+  the Yamux server (the architecture, the `Role` decision).
+- The Yamux wire parity cases belong to the `net/yamux` suite (the
+  yamux pair, plan).
 - The suite passes under `+RTS -N1` (§6, PRINCIPLES 5.3).
 
 ## Test milestones (unit 2)
@@ -64,8 +76,8 @@ Unit 0 is done.
   map holds `(0, initiator)` beside `(0, non-initiator)` with no
   cross-delivery. The flag bit routes every inbound message to the key
   it names.
-- The 1 MiB cap: a declared length one over the cap is a protocol
-  error, rejected before allocation (§5.1, PRINCIPLES 2.3).
+- The 1 MiB cap: a declared length one over `Mux.mplexMessageCap` is a
+  protocol error, rejected before allocation (§5.1, PRINCIPLES 2.3).
 - A header varint that cannot complete within 9 bytes is a protocol
   error, not a request for more bytes; a short prefix stays incomplete
   (§5.2, PRINCIPLES 5.4).
