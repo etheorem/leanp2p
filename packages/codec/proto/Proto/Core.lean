@@ -12,7 +12,6 @@ set_option autoImplicit false
 
 namespace Pb
 
-
 /-- Internal total conversion; valid callers satisfy the bound before encoding. -/
 def boundedVarint (n : Nat) : Varint.UVarint :=
   ⟨n % Varint.limit, Nat.mod_lt _ (by decide)⟩
