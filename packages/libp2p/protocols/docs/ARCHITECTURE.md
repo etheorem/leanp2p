@@ -16,9 +16,10 @@ group is §7, row 10). The spike has no req/resp or gossipsub code.
 | Module | Holds, and why |
 |---|---|
 | `Libp2p/Protocols.lean` | the root module; one import line per public submodule |
-| `Libp2p/Protocols/Constants.lean` | the protocol ids and the caps: `/ipfs/id/1.0.0`, `/ipfs/id/push/1.0.0`, `/ipfs/ping/1.0.0`, the `/eth2/.../ssz_sn` pattern of §8, gossipsub's `/meshsub/1.1.0`, and one message cap per protocol; one home per fact (§3.8, §3.4) |
+| `Libp2p/Protocols/Constants.lean` | the protocol ids and the caps: `/ipfs/id/1.0.0`, `/ipfs/id/push/1.0.0`, `/ipfs/ping/1.0.0`, the `/eth2/.../ssz_sn` pattern of §8, gossipsub's `/meshsub/1.1.0`, one message cap per protocol, and the protocol version that the identify responder writes; one home per fact (§3.8, §3.4) |
 | `Libp2p/Protocols/Identify.lean` | the `Identify` message with its `ProtoMessage` instance (§3.2), `Identify.Error`, the validate, the client that reads and validates one response, and the handler values for identify and push |
 | `Libp2p/Protocols/Ping.lean` | `Ping.Error`, the echo handler, and the initiator that sends 32 bytes and awaits the echo |
+| `Libp2p/Protocols/Mock/{Identity,Multiaddr,Core,Host}.lean` | the mocks of the unmerged dependencies (RULES.md, "Working ahead of the tree"); the integration deletes them |
 | `Libp2p/Protocols/ReqResp/Frame.lean` | the `/eth2/.../ssz_sn` framing, a uvarint length over a snappy-compressed chunk, as a `Codec` with a `LawfulCodec` instance (§3.2); the snappy call goes through the `codec/snappy` binding (root PLAN W6.2); the codec feeds the core |
 | `Libp2p/Protocols/ReqResp/Core.lean` | the response-chunk state machine of §3.3: `State`, `Event`, `Action`, the error inductive, and the total `step`; the snappy decompression context carries across chunks, and the chunk count and the error/EOF distinction live in the state |
 | `Libp2p/Protocols/ReqResp/Exchange.lean` | the client and handler seam over the loop: the client function, the handler value the registry stores, and the deadlines |
@@ -48,14 +49,18 @@ it takes no module line and lives with the test support.
   example; the literals live only in `Constants.lean`).
   `Identify.validate` checks a received message: the peer id derived
   from the `publicKey` field matches the connected peer, and the size
-  stays under the cap. The client (the spike's `requestR` shape) reads
+  is at most the cap. The client (the spike's `requestR` shape) reads
   one response, validates it, and returns the metadata for the
-  peerstore. The two handler values serve inbound streams and register
-  under their ids. The responder builds the message from the host's
-  identity, addresses, protocol list, observed address, and agent
-  version, as the spike's `respond` does. The push sender sends the
-  message under `Identify.pushId` (root W5.7 is "identify (+ push)"),
-  and a push updates the peerstore through the host.
+  peerstore. The client reads one frame per stream and drops the bytes
+  after it. Go merges up to 10 frames; this is a recorded delta. The
+  two handler values serve inbound streams and register under their
+  ids. The responder builds the message from the host's identity,
+  addresses, protocol list, observed address, and agent version, as the
+  spike's `respond` does. The push sender is deferred. A received push
+  updates the peerstore through the host. A push must carry the public
+  key. The identify spec lets a peer send a partial update and says to
+  ignore missing fields. `push` runs `validate`, so a push with no
+  `publicKey` field fails with `.missingKey`. This is a recorded delta.
 - **Ping.** `Ping.protocolId` is the constant. The handler echoes each
   32-byte payload until the stream closes (the spike's `handle`). The
   initiator sends 32 bytes, awaits the echo, and checks the length;
@@ -72,7 +77,7 @@ it takes no module line and lives with the test support.
 
 The client sides live in this package. §2 bans protocol logic in
 `cli/`, and the spike's `Main.lean` and `PingNode.lean` call exactly
-these: `Identify.request` (`requestR` over a bare stream), `Ping.ping`,
+these: `Identify.client` (the spike's `requestR` over a bare stream), `Ping.ping`,
 and the echo demo handler.
 
 ## Owned contracts and how the package keeps them
@@ -107,8 +112,9 @@ and the echo demo handler.
    hold in the same `State`, and every timer fires as an event. The
    yamux pair shows the shape. A test replays the core with no clock
    and no task. Each unbounded IO loop in the package, the gossipsub
-   loop, the ping echo, and the response-chunk loop, is a `partial def`
-   with its reason in its module doc.
+   loop, the ping echo, the ping initiator's wait, the identify frame
+   read, and the response-chunk loop, is a `partial def` with its reason
+   in its module doc.
 6. **Signing policies are a recorded decision** (root
    PLAN W6.4 names the space). The vendored pubsub spec fixes two axes,
    signature creation and signature verification. Unit 3 records the

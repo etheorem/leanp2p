@@ -3,13 +3,14 @@ import Std
 /-!
 # Identity mock
 
-`Libp2p.Identity` (issue #11) is not merged. This mock declares the
-frozen key and peer id shapes from
-`packages/libp2p/identity/docs/ARCHITECTURE.md`. The real identity
-package replaces this module at integration.
+`Libp2p.Identity` (issue #11) is not merged. This mock declares the key
+and peer id facts of `packages/libp2p/identity/docs/ARCHITECTURE.md`.
+That doc freezes `KeyType` and what a key and a peer id hold, and it
+leaves the signatures open. This mock fixes minimal signatures.
+`PubKey` and `PeerId` drop their proof fields. The real identity package
+replaces this module at integration.
 
-`PubKey` drops the validity proof field of the real shape. The
-stand-in bodies are executable, so the suite can drive both outcomes
+The stand-in bodies are executable, so the suite can drive both outcomes
 of `unmarshalPubKey?`. The theorems of `Identify` stay true for any
 replacement, because they are conditional on these opaque results.
 -/

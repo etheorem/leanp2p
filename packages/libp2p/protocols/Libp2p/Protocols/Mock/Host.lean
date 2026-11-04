@@ -8,8 +8,8 @@ import Libp2p.Protocols.Mock.Identity
 peerstore surface that the identify push handler updates, from
 `packages/libp2p/host/docs/ARCHITECTURE.md`: `addAddrs`, deduplicated
 at add, and `addrsOf`. The host doc freezes the names and the dedup
-rule, not the signatures. This mock fixes minimal signatures. The real
-host package replaces this module at integration.
+rule, and it leaves the signatures open. This mock fixes minimal
+signatures. The real host package replaces this module at integration.
 -/
 
 set_option autoImplicit false

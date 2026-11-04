@@ -8,12 +8,12 @@ import Libp2p.Protocols.Mock.Host
 import Libp2p.Protocols.Constants
 
 /-!
-# Identify message and validate
+# Identify
 
-The pure half of `/ipfs/id/1.0.0` (sub-unit 1a): the `Identify`
-message with its `ProtoMessage` instance, the strict field table, the
-validate, and the table theorems. Sub-unit 1b adds the IO half: the
-responder, the client, the push handler, and the theorems C1 to C3.
+The pure half of `/ipfs/id/1.0.0`: the `Identify` message with its
+`ProtoMessage` instance, the strict field table, the validate, and the
+table theorems. The IO half: the responder, the client, the push
+handler, and the theorems on `clientCore`.
 
 The wire shape comes from go-libp2p v0.50.0 `identify.pb.go`: fields
 1, 2, 3, 4, 5, 6, and 8. Field 8 is the signed peer record. The emit
@@ -25,14 +25,14 @@ wrong wire type, or a present string field with invalid UTF-8, is
 permissive: entries of another wire type are skipped, and invalid
 UTF-8 entries are dropped, as the Proto accessors already do.
 
-The strings read back through the real `Bytes.toString?`, never
-through `Pb.getStr?`. The latter runs the opaque mock of
-`Pb.Mock.Bytes`, which no theorem can relate to `Bytes.ofString`.
+The strings read back through the real `Bytes.toString?`. `Pb.getStr?`
+runs the opaque mock of `Pb.Mock.Bytes`, which no theorem can relate to
+`Bytes.ofString`.
 
 The private read loop `readFrameFrom` is a `partial def`: a silent
-peer never ends the loop, and the deadline of `client` or `push` is
-what ends it. The unit reads one frame per stream and drops leftover
-bytes after it; go merges chunked identify messages, a recorded delta.
+peer never ends the loop, and the deadline of `client` or `push` ends
+it. `client` and `push` read one frame per stream and drop the bytes
+after it. Go merges chunked identify messages, a recorded delta.
 The read rejects a zero-length frame, the spike's rule.
 -/
 
@@ -42,7 +42,7 @@ namespace Libp2p.Protocols
 
 open Mock
 
-/-- One identify answer. The field numbers are the ones of the
+/-- One identify response. The field numbers are the ones of the
 go-libp2p v0.50.0 identify protobuf. -/
 structure Identify where
   publicKey : Option (List Nat)        -- field 1, the serialized PublicKey protobuf
@@ -64,7 +64,7 @@ def protocolId : Mock.Core.ProtocolId := Constants.identifyId
 /-- The identify push protocol id. -/
 def pushId : Mock.Core.ProtocolId := Constants.identifyPushId
 
-/-- The wire image: one entry per present field, in the ascending
+/-- The wire view: one entry per present field, in the ascending
 order 1, 2, 3, 4, 5, 6, 8. Strings go to bytes with the real
 `Bytes` package. -/
 def entries (m : Identify) : List Pb.Entry :=
@@ -79,7 +79,7 @@ def entries (m : Identify) : List Pb.Entry :=
 /-- Fail closed. A message whose entries do not fit the wire model
 emits no entry; every theorem about the encode takes the validity as
 a premise. A payload of `List Nat` and a `String` carry no bound, so
-the gate cannot be dropped. -/
+`toFields` must keep this check. -/
 def toFields (m : Identify) : Pb.Fields :=
   if h : ∀ e ∈ m.entries, e.Valid then ⟨m.entries, h⟩ else Pb.Fields.empty
 
@@ -121,8 +121,9 @@ instance : Pb.ProtoMessage Identify where
 
 /-! ## The table theorems
 
-I1, the table law, carries the wire-validity premise. The two
-round-trip theorems compose it with the Proto laws. -/
+`ofFieldsToFields`, the table law, carries the wire-validity premise.
+`decodeEncode`, `encodeInjective` and `roundTripRepeated` build on it
+with the Proto laws. -/
 
 /-- A miss lookup through a segment that maps payloads to another
 field number. -/
@@ -140,7 +141,7 @@ private theorem filterMapNone {α β : Type} (l : List α) :
     l.filterMap (fun _ => (none : Option β)) = [] :=
   List.filterMap_eq_nil_iff.mpr fun _ _ => rfl
 
-/-- I1: the table law. Every valid message round-trips through its
+/-- The table law. Every valid message round-trips through its
 own table. -/
 theorem ofFieldsToFields (m : Identify) (h : ∀ e ∈ m.entries, e.Valid) :
     Pb.ProtoMessage.ofFields? (α := Identify) (Pb.ProtoMessage.toFields m) = .ok m := by
@@ -155,13 +156,13 @@ theorem ofFieldsToFields (m : Identify) (h : ∀ e ∈ m.entries, e.Valid) :
       Bytes.toString?OfString, Function.comp_def, List.lookup_cons, filterMapNone,
       lookupMissMap]
 
-/-- I2: an encode decodes back to the message. -/
+/-- An encode decodes back to the message. -/
 theorem decodeEncode (m : Identify) (h : ∀ e ∈ m.entries, e.Valid) :
     Pb.decodeMessage? (Pb.encodeMessage m) = .ok (m, []) := by
   simp only [Pb.decodeMessage?, Pb.encodeMessage, Pb.decodeEncode, ofFieldsToFields m h,
     Bind.bind, Except.bind]
 
-/-- I3: equal encodings imply equal messages. Without the premise
+/-- Equal encodings imply equal messages. Without the premise
 the statement is false: a message with an out-of-range byte and the
 empty message both encode to `[]`. -/
 theorem encodeInjective (a b : Identify) (ha : ∀ e ∈ a.entries, e.Valid)
@@ -174,7 +175,7 @@ theorem encodeInjective (a b : Identify) (ha : ∀ e ∈ a.entries, e.Valid)
   rw [ofFieldsToFields a ha, ofFieldsToFields b hb] at h3
   exact Except.ok.inj h3
 
-/-- I4: the repeated fields survive the round trip in order. -/
+/-- The repeated fields survive the round trip in order. -/
 theorem roundTripRepeated (m : Identify) (h : ∀ e ∈ m.entries, e.Valid) :
     ∃ m' : Identify, Pb.decodeMessage? (Pb.encodeMessage m) = .ok (m', []) ∧
       m'.protocols = m.protocols ∧ m'.listenAddrs = m.listenAddrs :=
@@ -185,10 +186,9 @@ theorem roundTripRepeated (m : Identify) (h : ∀ e ∈ m.entries, e.Valid) :
 The checks run in this order: cap, decode, key presence, key parse,
 expected id, addresses. The cap check runs before any decode. -/
 
-/-- The validate failures of 1a, plus the read-path arms of 1b. The
-zero-length rule lives on the read path, so the pure validate sees an
-empty payload as an empty message, which then fails with
-`missingKey`. -/
+/-- The validate failures, plus the read-path arms. The zero-length
+rule lives on the read path, so the pure validate sees an empty payload
+as an empty message, which then fails with `missingKey`. -/
 inductive Error where
   | overCap
   | badMessage (e : Pb.Error)
@@ -200,7 +200,7 @@ inductive Error where
   | emptyFrame
   /-- The read deadline expired. -/
   | timeout
-  /-- The stream answered a fault. -/
+  /-- The stream returned an error. -/
   | stream (e : Streams.Error)
   deriving DecidableEq, BEq, Repr
 
@@ -215,7 +215,7 @@ private def checkAddrs (m : Identify) (k : Mock.Identity.PubKey) :
   else .error .badAddress
 
 /-- Validate one received response: the derived peer id must match
-the expected id, and the size must stay under the cap. -/
+the expected id, and the size must be at most the cap. -/
 def validate (payload : List Nat) (expected : Option Mock.Identity.PeerId) :
     Except Error (Identify × Mock.Identity.PeerId) :=
   if Constants.identifyCap < payload.length then .error .overCap
@@ -254,20 +254,21 @@ private theorem checkAddrsSound (m : Identify) (k : Mock.Identity.PubKey)
   · rw [ite_eq_right ha] at h
     cases h
 
-/-- I5: an over-cap payload fails before any decode. -/
+/-- An over-cap payload fails before any decode. -/
 theorem validateOverCap (payload : List Nat) (expected : Option Mock.Identity.PeerId)
     (h : Constants.identifyCap < payload.length) :
     validate payload expected = .error .overCap := by
   simp [validate, h]
 
-/-- I6: the empty payload is the empty message, and it has no key. -/
+/-- The empty payload decodes to the empty message. -/
 theorem decodeEmpty :
     Pb.decodeMessage? (α := Identify) [] = .ok (⟨none, [], [], none, none, none, none⟩, []) :=
   rfl
 
+/-- The empty message has no key, so `validate` rejects it. -/
 theorem validateEmptyNoKey : validate [] none = .error .missingKey := rfl
 
-/-- I7: acceptance, conditional on the opaque mock results. -/
+/-- Acceptance, conditional on the opaque mock results. -/
 theorem validateAccepts (payload : List Nat) (m : Identify) (kb : List Nat)
     (k : Mock.Identity.PubKey) (expected : Option Mock.Identity.PeerId)
     (hsize : payload.length ≤ Constants.identifyCap)
@@ -290,7 +291,7 @@ theorem validateAccepts (payload : List Nat) (m : Identify) (kb : List Nat)
     simp only [checkAddrs]
     rw [ite_eq_left haddrs, ite_eq_left hobs]
 
-/-- I8: a derived id that differs from the expected id is rejected. -/
+/-- `validate` rejects a derived id that differs from the expected id. -/
 theorem validateKeyMismatch (payload : List Nat) (m : Identify) (kb : List Nat)
     (k : Mock.Identity.PubKey) (e : Mock.Identity.PeerId)
     (hsize : payload.length ≤ Constants.identifyCap)
@@ -307,9 +308,11 @@ theorem validateKeyMismatch (payload : List Nat) (m : Identify) (kb : List Nat)
     exact absurd hh hne
   · rfl
 
-/-- I9: soundness. A passing validate carries the cap bound, the
-key facts, the derivation match, and the address validity. With I7
-and I8 this pins the acceptance set exactly. -/
+/-- Soundness. A passing validate carries the cap bound, the key
+facts, the derivation match, and the address validity. The statement
+does not tie `m` to the decode of `payload`. The stronger conjunct
+`∃ rest, Pb.decodeMessage? (α := Identify) payload = .ok (m, rest)` is
+not proved, because `checkAddrs` is private. -/
 theorem validateSound (payload : List Nat) (expected : Option Mock.Identity.PeerId)
     (m : Identify) (pid : Mock.Identity.PeerId)
     (h : validate payload expected = .ok (m, pid)) :
@@ -366,7 +369,7 @@ theorem validateSound (payload : List Nat) (expected : Option Mock.Identity.Peer
                     · rw [ite_eq_right hkey] at h
                       cases h
 
-/-! ## The responder (sub-unit 1b)
+/-! ## The responder
 
 The responder builds one message from the host data, writes one
 length-delimited frame, and half-closes. `respond?` fails closed when
@@ -393,10 +396,11 @@ def respond? (key : Mock.Identity.PubKey) (addrs : List (List Nat))
   let m := respond key addrs protocols observed agent spr
   if ∀ e ∈ m.entries, e.Valid then .ok m else .error .badAddress
 
-/-! ## The client and the push handler (sub-unit 1b)
+/-! ## The client and the push handler
 
-One pure frame step serves both the model core and the IO reader, so
-the theorems C1 to C3 pin exactly the decoder that the IO path runs. -/
+One pure frame step, `decodeFrame?`, serves both `clientCore` and the
+IO reader, so the theorems on `clientCore` pin the decoder that the IO
+path runs. -/
 
 /-- The pure frame step over the accumulated bytes.
 
@@ -404,14 +408,13 @@ the theorems C1 to C3 pin exactly the decoder that the IO path runs. -/
   payload; `rest` holds the bytes after it.
 * `.ok none`: the buffer ends inside a frame; more bytes can complete
   it.
-* `.error .emptyFrame`: a zero-length frame, the spike's zero rule.
+* `.error .emptyFrame`: a zero-length frame, the spike's rule.
 * `.error (.badMessage (.framing .malformed))`: a bad prefix, a length
-  over `Constants.identifyCap`, or a payload byte that is not a byte.
+  over `Constants.identifyCap`, or a payload value of 256 or more.
   `Frame.decode?` checks the cap before it takes the body.
 
-The function is total and non-recursive. `clientCore` and `readFrame`
-both call it, so the model theorems and the IO path share every wire
-decision. -/
+`clientCore` and `readFrameFrom` both call it, so the theorems and the
+IO path share every wire decision. -/
 private def decodeFrame? (bytes : List Nat) :
     Except Error (Option (List Nat × List Nat)) :=
   match Streams.Framing.Frame.decode? .uvarint Constants.identifyCap bytes with
@@ -421,11 +424,12 @@ private def decodeFrame? (bytes : List Nat) :
       if frame.payload.isEmpty then .error .emptyFrame
       else .ok (some (frame.payload, rest))
 
-/-- The client's pure core: decode one frame under the cap, reject the
-empty frame, and validate exactly the payload bytes that the frame
-names. A call of the pure core supplies all its bytes, so a buffer
-that ends inside a frame is the `.truncated` framing error, not
-`.ok none`. -/
+/-- The pure half of the client: decode one frame under the cap, reject
+the empty frame, and validate the payload bytes of that frame. The
+caller supplies all the bytes at once, so a buffer that ends inside a
+frame is the `.truncated` framing error. An empty buffer is also
+`.truncated`, and the core never answers `.ok none`, while `client`
+answers `.ok none` on a clean end. -/
 def clientCore (bytes : List Nat) (expected : Option Mock.Identity.PeerId) :
     Except Error (Option (Identify × Mock.Identity.PeerId)) :=
   match decodeFrame? bytes with
@@ -455,15 +459,15 @@ private def readFrame (s : Streams.Stream) :
   readFrameFrom s []
 
 /-- `withinDeadline` needs a `BaseIO` expiry. The stream's `close` is
-the write half-close, so it does not wake a parked `read`. `reset`
-stops both directions, so it reaches the park. This spelling runs the
-reset as a task, the one `Async` to `BaseIO` route the Wrap module
-offers. -/
+the write half-close, so it does not wake a parked `read`. `reset` stops
+both directions, so it wakes the read. The body starts the reset with
+`asTask`, as `Conc.Wrap.spawn` does. No owner joins this task, and the
+code ignores its result. -/
 private def resetQuietly (s : Streams.Stream) : BaseIO Unit :=
   discard (s.reset.asTask.toBaseIO)
 
 /-- Read one response under the cap and the deadline, then validate
-it. `.ok none` is the clean end between frames. -/
+it. `.ok none` means that the stream ended before any byte arrived. -/
 def client (s : Streams.Stream) (clock : Conc.Clock) (timeoutMs : Nat)
     (expected : Option Mock.Identity.PeerId) :
     Conc.Async (Except Error (Option (Identify × Mock.Identity.PeerId))) := do
@@ -474,8 +478,8 @@ def client (s : Streams.Stream) (clock : Conc.Clock) (timeoutMs : Nat)
   | .ok (.ok none) => return .ok none
   | .ok (.ok (some payload)) => return (some <$> validate payload expected)
 
-/-- One map from this protocol's error into the coarse core error,
-used once, at the seam value. -/
+/-- The one map from this protocol's error into the coarse core error.
+`pushHandler` and `respondTo` call it at the seam. -/
 def mapIdentifyError : Error → Mock.Core.Error
   | .stream e => Mock.Core.mapStreamError e
   | .timeout => .timeout "identify: the deadline expired"
@@ -483,7 +487,9 @@ def mapIdentifyError : Error → Mock.Core.Error
   | e => .protocol (toString (repr e))
 
 /-- Handle one pushed message: validate it, then update the peerstore.
-An empty read is a no-op, as in go. -/
+An empty read leaves the peerstore unchanged. This is a delta from go,
+whose `consumeMessage` runs on the empty message and clears the peer's
+protocols. -/
 def push (store : Mock.Host.Peerstore) (expected : Mock.Identity.PeerId)
     (clock : Conc.Clock) (timeoutMs : Nat) (s : Streams.Stream) :
     Conc.Async (Except Error Unit) := do
@@ -532,11 +538,14 @@ def respondHandler (key : Mock.Identity.PubKey) (addrs : List (List Nat))
   { id := protocolId,
     handle := fun s => respondTo key addrs protocols observed agent spr s }
 
-/-! ## The client-core theorems (sub-unit 1b)
+/-! ## The client-core theorems
 
-C1 pins the frame that the core validates. C2 pins the cap check
-before the body. C3 pins the zero-length rule. Each consumes a proved
-law of `Streams.Framing`; none touches a mock result. -/
+`clientCoreFrame` pins the frame that `clientCore` validates.
+`clientCoreOverCap` pins the cap check before the body.
+`clientCoreEmptyFrame` pins the zero-length rule. Each consumes a law of
+`Streams.Framing`, and that law rests on the axiom
+`Streams.Mock.Varint.decodeEncodeSuffix`. No proof here reads a result
+of this package's mocks. -/
 
 /-- The frame step reads a whole frame back from its encoding, with
 any rest after it. -/
@@ -550,8 +559,7 @@ private theorem decodeFrame?Encode
   have hne : f.payload ≠ [] := by intro hnil; rw [hnil] at h; simp at h
   simp [List.isEmpty_iff, hne]
 
-/-- C1: the client validates exactly the payload bytes that the frame
-it read names. The brief theorem 3, first half. -/
+/-- The client validates the payload bytes of the frame that it read. -/
 theorem clientCoreFrame (f : Streams.Framing.Frame .uvarint Constants.identifyCap)
     (rest : List Nat) (expected : Option Mock.Identity.PeerId)
     (h : 0 < f.payload.length) :
@@ -574,8 +582,8 @@ private theorem decodeFrame?OverCap (len : Nat) (rest : List Nat)
       (rest := rest) (len := len)
       (Streams.Framing.decodeLength?EncodeLength .uvarint len rest hlen) hcap]
 
-/-- C2: a length over the cap is rejected before the body is read.
-The statement has no premise about the bytes after the prefix. -/
+/-- `clientCore` rejects a length over the cap before it reads the
+body. The statement has no premise about the bytes after the prefix. -/
 theorem clientCoreOverCap (len : Nat) (rest : List Nat)
     (expected : Option Mock.Identity.PeerId)
     (hlen : len ≤ Streams.Framing.Prefix.maxLen .uvarint)
@@ -594,7 +602,7 @@ private theorem decodeFrame?EncodeLengthZero :
   rw [hd]
   simp [Bytes.take?]
 
-/-- C3: the zero-length rule on the model, the spike's rule. -/
+/-- The zero-length rule on `clientCore`, the spike's rule. -/
 theorem clientCoreEmptyFrame (expected : Option Mock.Identity.PeerId) :
     clientCore (Streams.Framing.encodeLength .uvarint 0) expected =
       .error .emptyFrame := by

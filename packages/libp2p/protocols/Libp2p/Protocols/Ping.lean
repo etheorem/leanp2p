@@ -8,8 +8,8 @@ import Libp2p.Protocols.Constants
 # Ping
 
 The pure half of `/ipfs/ping/1.0.0`: the protocol id, the payload
-size, and the echo check. Sub-unit 1b adds the IO half: the echo
-handler, the initiator, and the theorems P5 and P6.
+size, and the echo check. The IO half: the echo handler and the
+initiator, which share the pure `splitPayloads` and its theorems.
 
 Per `vendor/specs/ping/ping.md`: the initiator sends 32 random
 bytes, and the responder echoes them. A payload of another size, or
@@ -32,16 +32,15 @@ def protocolId : Mock.Core.ProtocolId := Constants.pingId
 /-- The ping payload size of the spec. -/
 def payloadSize : Nat := Constants.pingSize
 
-/-- The failures of the pure echo check, plus the IO arms of 1b:
-`truncated` (a partial payload at end of stream) and `stream` (a
-stream fault). -/
+/-- The failures of the pure echo check, plus the IO arms: `truncated`
+(a partial payload at end of stream) and `stream` (a stream fault). -/
 inductive Error where
   | wrongSize (got : Nat)
   | mismatch
   /-- The stream ended with a partial payload, a recorded delta from
   the spike's responder. -/
   | truncated
-  /-- The stream answered a fault. -/
+  /-- The stream returned an error. -/
   | stream (e : Streams.Error)
   deriving DecidableEq, BEq, Repr
 
@@ -51,22 +50,22 @@ def checkEcho (sent echo : List Nat) : Except Error Unit :=
   else if echo ≠ sent then .error .mismatch
   else .ok ()
 
-/-- P1: an exact echo of a 32-byte payload passes. -/
+/-- An exact echo of a 32-byte payload passes. -/
 theorem checkEchoAccepts (sent : List Nat) (h : sent.length = payloadSize) :
     checkEcho sent sent = .ok () := by
   simp [checkEcho, h]
 
-/-- P2: another size fails before the comparison. -/
+/-- Another size fails before the comparison. -/
 theorem checkEchoWrongSize (sent echo : List Nat) (h : echo.length ≠ payloadSize) :
     checkEcho sent echo = .error (.wrongSize echo.length) := by
   simp [checkEcho, h]
 
-/-- P3: a same-size echo that differs fails. -/
+/-- A same-size echo that differs fails. -/
 theorem checkEchoMismatch (sent echo : List Nat) (hlen : echo.length = payloadSize)
     (hne : echo ≠ sent) : checkEcho sent echo = .error .mismatch := by
   simp [checkEcho, hlen, hne]
 
-/-- P4: a passing echo is the sent payload, of the spec size. -/
+/-- A passing echo is the sent payload, of the spec size. -/
 theorem checkEchoSound (sent echo : List Nat) (h : checkEcho sent echo = .ok ()) :
     echo = sent ∧ sent.length = payloadSize := by
   by_cases hlen : echo.length = payloadSize
@@ -76,7 +75,7 @@ theorem checkEchoSound (sent echo : List Nat) (h : checkEcho sent echo = .ok ())
       exact ⟨heq, heq ▸ hlen⟩
   · simp [checkEcho, hlen] at h
 
-/-! ## The echo handler and the initiator (sub-unit 1b) -/
+/-! ## The echo handler and the initiator -/
 
 /-- Split the accumulated bytes into whole 32-byte payloads and the
 tail. The echo handler writes every whole payload; the tail waits for
@@ -92,14 +91,14 @@ decreasing_by
   have hp : payloadSize = 32 := rfl
   omega
 
-/-- P6: an accumulator below the payload size holds no whole
+/-- An accumulator below the payload size holds no whole
 payload. -/
 theorem splitPayloadsShort (acc : List Nat) (h : acc.length < payloadSize) :
     splitPayloads acc = ([], acc) := by
   rw [splitPayloads]
   rw [ite_eq_right (by omega : ¬ payloadSize ≤ acc.length)]
 
-/-- P5: the splitter takes one whole payload from the front and keeps
+/-- The splitter takes one whole payload from the front and keeps
 the tail. -/
 theorem splitPayloadsWhole (sent tail : List Nat)
     (h : sent.length = payloadSize) (ht : tail.length < payloadSize) :
@@ -120,8 +119,7 @@ private def writeAll (s : Streams.Stream) :
       | .error e => return .error (.stream e)
       | .ok () => writeAll s ps
 
-/-- The echo loop. `partial`: the peer may stay silent, and no measure
-shows a read returns; the module doc records the reason. -/
+/-- The echo loop. The module doc gives the reason for `partial`. -/
 private partial def echoLoop (s : Streams.Stream) (acc : List Nat) :
     Conc.Async (Except Error Unit) := do
   match ← s.read with
@@ -150,9 +148,8 @@ def pingHandler : Mock.Core.StreamHandler :=
   { id := protocolId,
     handle := fun s => ExceptT.mk ((Except.mapError mapPingError) <$> handleCore s) }
 
-/-- Accumulate echo chunks until one whole payload is present.
-`partial`: the peer may stay silent; the module doc records the
-reason. -/
+/-- Accumulate echo chunks until one whole payload is present. The
+module doc gives the reason for `partial`. -/
 private partial def awaitEcho (s : Streams.Stream) (acc : List Nat) :
     Conc.Async (Except Error (List Nat)) := do
   match splitPayloads acc with
@@ -163,10 +160,9 @@ private partial def awaitEcho (s : Streams.Stream) (acc : List Nat) :
       | .ok none => return .error .truncated
       | .ok (some chunk) => awaitEcho s (acc ++ Bytes.toNatList chunk)
 
-/-- Send one 32-byte payload, await the echo, check it with the 1a
-`checkEcho`, and return the round-trip time in milliseconds. `.ok
-none` never occurs on the echo path; the option carries the measured
-time. -/
+/-- Send one 32-byte payload, await the echo, check it with
+`checkEcho`, and return the round-trip time in milliseconds inside
+`some`. The echo path never returns `.ok none`. -/
 def ping (s : Streams.Stream) (clock : Conc.Clock) (payload : ByteArray) :
     Conc.Async (Except Error (Option Nat)) := do
   if payload.size ≠ payloadSize then return .error (.wrongSize payload.size)
