@@ -63,7 +63,7 @@ def component (proto : Protocol) (value : List Nat) : List Nat :=
 def address (ipProto : Protocol) (ip : List Nat) (transport : Protocol) (port : Nat) :
     Except Error Multiaddr :=
   (Multiaddr.ofByteArray? (ofNatList (component ipProto ip ++
-    component transport (portValue port)))).mapError fun _ => .value .ip
+    component transport (portValue port)))).mapError fun _ => .multiaddr
 
 /-- The multiaddrs of a record, in the order of the table above. -/
 def multiaddrs (r : Enr) : Except Error (List Multiaddr) := do
@@ -100,7 +100,7 @@ def parts? (m : Multiaddr) : Option (Protocol × List Nat × Protocol × Nat) :=
   | [hi, lo] => some (ipProto, rest.take size, transport, hi * 256 + lo)
   | _ => none
 
-/-- The address pairs, sorted by key name. -/
+/-- The address values the reverse map collects, one field per key. -/
 structure Endpoints where
   ip : Option (List Nat) := none
   ip6 : Option (List Nat) := none
@@ -121,7 +121,7 @@ def merge {α : Type} [DecidableEq α] (k : Key) (old : Option α) (new : α) :
 def pairsOfMultiaddrs (addrs : List Multiaddr) : Except Error (List Pair) := do
   let parts ← addrs.mapM fun m => match parts? m with
     | some p => .ok p
-    | none => .error (.value .ip)
+    | none => .error .multiaddr
   -- The IPv4 addresses first: they fix the general ports.
   let mut e : Endpoints := {}
   for (ipProto, a, transport, port) in parts do

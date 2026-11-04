@@ -2,6 +2,7 @@ import Bytes
 import Crypto
 import Libp2p.Identity.Constants
 import Libp2p.Identity.Rlp
+import Libp2p.Identity.Rlp.Bytes
 import Libp2p.Identity.Mock.Multiformats
 
 /-!
@@ -55,9 +56,9 @@ PRINCIPLES 2.4).
 `enr:`, then the base64url body of the encoded record, with no padding
 (EIP-778, "RLP Encoding"; RFC 4648 §5). The body runs through the
 `Multibase` codec of `codec/multiformats` under `base64url`, whose
-decoder is canonical. So the reader refuses a missing prefix, an `=`,
-and non-zero trailing bits, as sigp/enr does. go-ethereum accepts the
-trailing bits (package ARCHITECTURE, contract 7).
+decoder is canonical. The reader refuses a missing prefix, as
+go-ethereum does. It refuses an `=` and non-zero trailing bits, as
+sigp/enr does (package ARCHITECTURE, contract 7).
 -/
 
 set_option autoImplicit false
@@ -149,6 +150,9 @@ inductive Error where
   /-- The text lacks the `enr:` prefix, or its body is not canonical
   base64url. -/
   | text
+  /-- A multiaddr is not an `ip4` or `ip6` address, then a `tcp` or `udp`
+  port, the one shape a record holds. -/
+  | multiaddr
   deriving DecidableEq, Repr
 
 end Enr

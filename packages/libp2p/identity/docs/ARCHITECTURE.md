@@ -20,7 +20,8 @@ imports it for `PeerId`, and nothing in it knows a connection (§2,
 | `Libp2p/Identity/Keys.lean` | `PubKey` and `PrivKey`, the `ProtoMessage` instances over the field table, and the sign/verify/derive dispatch |
 | `Libp2p/Identity/Unmarshal.lean` | the strict unmarshal: decode, then the per-type `Data` check, before anything derives from the key |
 | `Libp2p/Identity/PeerId.lean` | derivation over the marshaled key, identity inlining, and the text forms |
-| `Libp2p/Identity/Rlp.lean` | the package's own RLP (the decision below): the item tree, the model codec with the `Codec` and `LawfulCodec` instances, the canonical scalars, and the `ByteArray` decoder |
+| `Libp2p/Identity/Rlp.lean` | the package's own RLP (the decision below): the item tree, the model codec with the `Codec` and `LawfulCodec` instances, and the canonical scalars |
+| `Libp2p/Identity/Rlp/Bytes.lean` | the `ByteArray` decoder and encoder, the production path that the harness of `base/bytes` pins to the model |
 | `Libp2p/Identity/Enr.lean` | the ENR record, its typed pairs, the `v4` signature check and signer, and the text form |
 | `Libp2p/Identity/Enr/Mapping.lean` | the peer-id mapping and the multiaddr mapping |
 | `Libp2p/Identity/Mock/*.lean` | the mocks of the W5.1 key surface and of the W2.3 multiaddr and multibase surface while their units are open (RULES.md, "Working ahead of the tree"); the integration deletes them |
@@ -195,8 +196,8 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
 - **The RLP is the package's own.** The RLP package of the etheorem
   monorepo (`LeanRlp`, LGPL-3.0) is the upstream source, and the
   package's own small RLP is the fallback while the upstream has not
-  landed what the unit needs. The upstream facts: `LeanRlp` has its item codec and
-  the fuel and header theorems on `main` (`2569ba5a`,
+  landed what the unit needs. The upstream facts: `LeanRlp` has its
+  item codec and the fuel and header theorems on `main` (`2569ba5a`,
   etheorem/etheorem#123). Its vector runner (its PLAN, Stage 2) and
   its round-trip, injectivity, and canonical-form theorems (Stage 3)
   have not landed. The unit needs both: the `LawfulCodec` law, and a

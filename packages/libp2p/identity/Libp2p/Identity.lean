@@ -1,5 +1,6 @@
 import Libp2p.Identity.Constants
 import Libp2p.Identity.Rlp
+import Libp2p.Identity.Rlp.Bytes
 import Libp2p.Identity.Enr
 import Libp2p.Identity.Enr.Mapping
 
