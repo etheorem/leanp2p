@@ -174,7 +174,8 @@ comparison needs a total function on this side.
   digests, and the pure copy stays as the audited implementation and
   oracle.
   The spike's rule carries over: SHA-1 serves the multihash framing
-  and nothing security-relevant.
+  and nothing security-relevant. The module docstring records the
+  cryptanalysis behind the rule.
 - **No constant-time claims.** §4.6 states the rule: nobody writes
   constant-time primitives in Lean. The constant-time code stays in
   the C shim. The Lean copy serves the audit and the cross-check, and

@@ -9,9 +9,14 @@ FIPS 180-4 §6.1 over the `List Nat` model, with a `ByteArray` form for
 the IO edge. SHA-1 is here for the multihash function table, code
 0x11: a peer may send a sha1 multihash, and the caller composes this
 digest with the framing of `codec/multiformats` through the facade.
-SHA-1 serves nothing security-relevant. This copy makes no
-constant-time claim. It shares the padding and the block split of
-SHA-256 (`Preprocess`), and it keeps a five-word state.
+SHA-1 serves nothing security-relevant. Researchers published a
+practical collision pair in 2017, and chosen-prefix collisions
+followed. The construction is Merkle-Damgard, so a raw keyed digest
+`H(key ‖ message)` also invites a length-extension forgery. The
+framing-only role avoids both hazards. A caller that needs a MAC uses
+`Hmac`, and a caller that needs collision resistance uses `Sha256`.
+This copy makes no constant-time claim. It shares the padding and the
+block split of SHA-256 (`Preprocess`), and it keeps a five-word state.
 -/
 
 set_option autoImplicit false
