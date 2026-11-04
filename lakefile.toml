@@ -161,6 +161,7 @@ roots = ["Libp2p.Security"]
 name = "Libp2pMux"
 srcDir = "packages/libp2p/mux"
 roots = ["Libp2p.Mux"]
+globs = ["Libp2p.Mux.*"]
 
 [[lean_lib]]
 name = "Libp2pNegotiate"
