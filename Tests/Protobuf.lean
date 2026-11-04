@@ -7,7 +7,7 @@ import Proto
 The message fixtures run in the Fields view, without importing upper
 packages. The suite also pins the independent ByteArray decoder to the
 model over valid messages, truncated fixtures, and adversarial buffers.
-The generic codec loop is the temporary W1.2 harness in the mock module.
+The shared Bytes harness checks the real codec instance and model pin.
 -/
 
 set_option autoImplicit false
@@ -23,19 +23,20 @@ private def checked (entries : List Entry) : IO Fields :=
   | .error e => throw <| IO.userError s!"invalid protobuf test fields: {repr e}"
 
 /-- A model byte list as a production-path fixture. -/
-private def bytes (bs : List Nat) : ByteArray := Pb.Mock.Bytes.ofNatList bs
+private def bytes (bs : List Nat) : ByteArray := Bytes.ofNatList bs
 
-/-- The production decoder reports through the coarse codec error. -/
-private def production (bs : ByteArray) : Except Pb.Mock.Bytes.DecodeError (Fields × Nat) :=
-  (decodeFieldsB? bs).mapError Error.toDecodeError
+/-- Complete messages must consume their whole buffer before the shared model pin. -/
+private def production (bs : ByteArray) : Except Bytes.DecodeError (Fields × List Nat) := do
+  let (fs, used) ← (decodeFieldsB? bs).mapError Error.toDecodeError
+  if used = bs.size then .ok (fs, []) else .error .malformed
 
 /-- The model pin for one arbitrary buffer, valid or hostile. -/
 private def pin (bs : ByteArray) : Bool :=
-  Pb.Mock.Bytes.productionAgrees production bs
+  Bytes.checkModelPins production [bs]
 
 /-- The generic codec harness over one sample. -/
 private def roundtrip (fs : Fields) : Bool :=
-  Pb.Mock.Bytes.checkCodec production [fs]
+  Bytes.checkRoundTrips [fs] && pin (encodeFieldsB fs)
 
 /-- The model decoder reports exactly the expected error. -/
 private def modelError (input : List Nat) (expected : Error) : Bool :=
@@ -89,7 +90,7 @@ private instance : ProtoMessage Counter where
     intro e he
     simp only [List.mem_singleton] at he
     subst e
-    change 0 < 1 ∧ 1 < 2 ^ 29 ∧ c.value.val < Pb.Mock.Varint.limit
+    change 0 < 1 ∧ 1 < 2 ^ 29 ∧ c.value.val < Varint.limit
     exact ⟨by decide, by decide, c.value.isLt⟩⟩
   ofFields? fs :=
     match getVarint? 1 fs with
@@ -102,6 +103,20 @@ example (fs : Fields) : decodeFields? (encodeFields fs) = .ok (fs, []) := decode
 
 /-- Every emitted model entry is a byte. -/
 example (fs : Fields) : ∀ b ∈ encodeFields fs, b < 256 := encodeFieldsBytes fs
+
+/-- The public instance participates in the shared byte-codec law. -/
+example (fs : Fields) : Bytes.Codec.decode? (Bytes.Codec.encode fs) = .ok (fs, []) :=
+  Bytes.codecRoundTrip fs
+
+/-- Encoding through the real ByteArray conversion is lossless. -/
+example (fs : Fields) : Bytes.toNatList (encodeFieldsB fs) = encodeFields fs :=
+  encodeFieldsBModel fs
+
+/-- The shared inverse law preserves the exact input and its returned remainder. -/
+example (input rest : List Nat) (fs : Fields)
+    (accepted : Bytes.Codec.decode? input = .ok (fs, rest)) :
+    Bytes.Codec.encode fs ++ rest = input :=
+  Bytes.LawfulCodec.encodeDecode input fs rest accepted
 
 def run (r : Runner) : IO Unit := do
   r.section "protobuf" "wire model, protobuf-messages.json, keys-peer-ids.json, keys-go-libp2p.json"
@@ -178,8 +193,10 @@ def run (r : Runner) : IO Unit := do
     let fs ← checked [(1, .varint (i * 8191)), (3, .bytes payload),
       (2, .fixed32 (i * 65537)), (4, .fixed64 (i * 4294967297)), (1, .varint i)]
     samples := fs :: samples
-  r.check "generic harness: 256 generated bounded messages"
-    (Pb.Mock.Bytes.checkCodec production samples)
+  r.check "shared codec laws: 256 generated bounded messages"
+    (Bytes.checkRoundTrips samples)
+  r.check "shared production pin: 256 generated bounded messages"
+    (Bytes.checkModelPins production (samples.map encodeFieldsB))
 
   -- All one-byte buffers and deterministic short hostile inputs exercise
   -- wire dispatch, continuation bits, truncation, and arbitrary payloads.

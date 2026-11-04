@@ -12,7 +12,6 @@ set_option autoImplicit false
 
 namespace Pb
 
-open Mock
 
 /-- Internal total conversion; valid callers satisfy the bound before encoding. -/
 def boundedVarint (n : Nat) : Varint.UVarint :=
@@ -85,9 +84,9 @@ theorem leBytesLeOf (bs : List Nat) (k : Nat) (hlen : bs.length = k)
 /-- The wire-type constructor determines the payload format. -/
 def encodeValue : Value → List Nat
   | .varint n => encodeNat n
-  | .fixed64 n => leBytes n 8
+  | .fixed64 n => leBytes n fixed64Bytes
   | .bytes bs => encodeNat bs.length ++ bs
-  | .fixed32 n => leBytes n 4
+  | .fixed32 n => leBytes n fixed32Bytes
 
 /-- Field tags keep the low three bits for the wire type. -/
 def keyOf (e : Entry) : Nat := e.1 * 8 + e.2.wireType
@@ -122,14 +121,14 @@ def decodeValue? (wire : Nat) (bs : List Nat) : Except Error (Value × List Nat)
       let (v, rest) ← (Varint.decode? bs).mapError Error.framing
       .ok (.varint v.val, rest)
   | 1 =>
-      let (n, rest) ← readFixed 8 bs
+      let (n, rest) ← readFixed fixed64Bytes bs
       .ok (.fixed64 n, rest)
   | 2 =>
       let (len, rest) ← (Varint.decode? bs).mapError Error.framing
       let (payload, tail) ← takeBytes len.val rest
       .ok (.bytes payload, tail)
   | 5 =>
-      let (n, rest) ← readFixed 4 bs
+      let (n, rest) ← readFixed fixed32Bytes bs
       .ok (.fixed32 n, rest)
   | _ => .error .badWireType
 
@@ -194,10 +193,10 @@ theorem decodeValueEncode (v : Value) (h : v.Valid) (rest : List Nat) :
         Varint.decodeEncodeSuffix, boundedVarint, Nat.mod_eq_of_lt h]
   | fixed64 n =>
       simp [Bind.bind, Except.bind, decodeValue?, Value.wireType, encodeValue,
-        readFixedEncode n 8 h rest]
+        readFixedEncode n fixed64Bytes h rest]
   | fixed32 n =>
       simp [Bind.bind, Except.bind, decodeValue?, Value.wireType, encodeValue,
-        readFixedEncode n 4 h rest]
+        readFixedEncode n fixed32Bytes h rest]
   | bytes bs =>
       rcases h with ⟨hlen, hbytes⟩
       simp [Bind.bind, Except.bind, Except.mapError, decodeValue?, Value.wireType, encodeValue, encodeNat, List.append_assoc,
@@ -209,7 +208,7 @@ theorem keyBound (e : Entry) (h : e.Valid) : keyOf e < Varint.limit := by
   obtain ⟨n, v⟩ := e
   have hn := h.2.1
   change n < 2 ^ 29 at hn
-  cases v <;> simp only [keyOf, Value.wireType, Varint.limit] <;> omega
+  cases v <;> simp only [keyOf, Value.wireType, Varint.limit, Varint.maxBytes] <;> omega
 
 /-- Taking the tag's high bits recovers the field number. -/
 theorem keyNumber (e : Entry) : keyOf e / 8 = e.1 := by
@@ -318,15 +317,15 @@ theorem decodeValueOk (wire : Nat) (bs : List Nat) (v : Value) (rest : List Nat)
         rcases hp with ⟨rfl, rfl⟩
         refine ⟨?_, by simp_all [Value.wireType]⟩
         simpa only [encodeValue, encodeNat, boundedVarintValue] using
-          Varint.encodeDecode bs n tail hd
-  · cases hd : readFixed 8 bs with
+          Varint.encodeDecode hd
+  · cases hd : readFixed fixed64Bytes bs with
     | error err => simp [hd, Bind.bind, Except.bind] at h
     | ok pair =>
         obtain ⟨n, tail⟩ := pair
         simp only [hd, Bind.bind, Except.bind] at h
         have hp := Prod.mk.inj (Except.ok.inj h)
         rcases hp with ⟨rfl, rfl⟩
-        exact ⟨readFixedOk 8 n bs tail hd, by simp_all [Value.wireType]⟩
+        exact ⟨readFixedOk fixed64Bytes n bs tail hd, by simp_all [Value.wireType]⟩
   · cases hd : Varint.decode? bs with
     | error err => simp [hd, Except.mapError, Bind.bind, Except.bind] at h
     | ok pair =>
@@ -340,18 +339,18 @@ theorem decodeValueOk (wire : Nat) (bs : List Nat) (v : Value) (rest : List Nat)
             have hp := Prod.mk.inj (Except.ok.inj h)
             rcases hp with ⟨rfl, rfl⟩
             obtain ⟨hlen, _, hsplit⟩ := takeBytesOk n.val tail payload after ht
-            have hi := Varint.encodeDecode bs n tail hd
+            have hi := Varint.encodeDecode hd
             refine ⟨?_, by simp_all [Value.wireType]⟩
             simpa only [encodeValue, hlen, encodeNat, boundedVarintValue,
               List.append_assoc] using hi.trans (congrArg (Varint.encode n ++ ·) hsplit)
-  · cases hd : readFixed 4 bs with
+  · cases hd : readFixed fixed32Bytes bs with
     | error err => simp [hd, Bind.bind, Except.bind] at h
     | ok pair =>
         obtain ⟨n, tail⟩ := pair
         simp only [hd, Bind.bind, Except.bind] at h
         have hp := Prod.mk.inj (Except.ok.inj h)
         rcases hp with ⟨rfl, rfl⟩
-        exact ⟨readFixedOk 4 n bs tail hd, by simp_all [Value.wireType]⟩
+        exact ⟨readFixedOk fixed32Bytes n bs tail hd, by simp_all [Value.wireType]⟩
   · cases h
 
 /-- A successful field parse preserves the tag and every payload byte. -/
@@ -375,7 +374,7 @@ theorem decodeEntryOk (bs : List Nat) (entry : {e : Entry // e.Valid}) (rest : L
               have hkey : keyOf (tag.val / 8, v) = tag.val := by
                 simp only [keyOf, hwire]
                 omega
-              have hin := Varint.encodeDecode bs tag tail hd
+              have hin := Varint.encodeDecode hd
               simpa only [encodeEntry, hkey, encodeNat, boundedVarintValue,
                 List.append_assoc] using
                 hin.trans (congrArg (Varint.encode tag ++ ·) hvalue)
@@ -428,12 +427,12 @@ theorem encodeDecode (bs : List Nat) (fs : Fields) (rest : List Nat)
       simpa only [List.append_nil] using decodeEntriesOk bs.length bs value hd
 
 /-- The generic codec boundary maps the detailed wire error once. -/
-instance : Mock.Bytes.Codec Fields where
+instance : Bytes.Codec Fields where
   encode := encodeFields
   decode? bs := (decodeFields? bs).mapError Error.toDecodeError
 
-/-- Both codec laws follow from the protobuf proofs, not extra mock axioms. -/
-instance : Mock.Bytes.LawfulCodec Fields where
+/-- The shared codec laws follow from the protobuf proofs and the real varint theorems. -/
+instance : Bytes.LawfulCodec Fields where
   decodeEncode fs := by
     change (decodeFields? (encodeFields fs)).mapError Error.toDecodeError = _
     rw [decodeEncode]
@@ -445,7 +444,7 @@ instance : Mock.Bytes.LawfulCodec Fields where
     | ok pair =>
         simp only [hd, Except.mapError, Except.ok.injEq] at h
         cases h
-        exact encodeDecode bs fs rest hd
+        exact (encodeDecode bs fs rest hd).symm
 
 /-- Equal encodings imply equal ordered Fields values. -/
 theorem encodeInjective {a b : Fields} (h : encodeFields a = encodeFields b) : a = b := by
@@ -458,8 +457,8 @@ theorem encodeValueBytes (v : Value) (h : v.Valid) :
     ∀ b ∈ encodeValue v, b < 256 := by
   cases v with
   | varint n => exact Varint.encodeBytes (boundedVarint n)
-  | fixed64 n => exact leBytesValid n 8
-  | fixed32 n => exact leBytesValid n 4
+  | fixed64 n => exact leBytesValid n fixed64Bytes
+  | fixed32 n => exact leBytesValid n fixed32Bytes
   | bytes bs =>
       intro b hb
       rcases List.mem_append.mp hb with hb | hb

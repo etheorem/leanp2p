@@ -57,7 +57,8 @@ The names are the root names (§7, row 4), shaped by the mechanisms of
   an absent payload from a nested decoding error. `getStr?` returns
   `none` for invalid UTF-8. `getAllStrs` skips invalid UTF-8 payloads.
 - `Codec Fields` and `LawfulCodec Fields` are the instances of §3.2.
-  The generic harness of `base/bytes` runs once for them.
+  They use the merged `Bytes` classes. `Fields` derives `DecidableEq`
+  for the shared `checkRoundTrips` and `checkModelPins` harness.
 - `ProtoMessage α` carries `toFields : α → Pb.Fields` and `ofFields? :
   Pb.Fields → Except Pb.Error α` (§3.2). The instance holds the field
   table as data. Over the class, `encodeMessage : α → List Nat` and
@@ -92,10 +93,13 @@ The names are the root names (§7, row 4), shaped by the mechanisms of
    constructs the proof field (§3.7). The message layer's field table
    constructs well-formed entries by construction, and the generic
    encoder goes through `toFields`.
-5. **The model pin.** The `ByteArray` path is pinned to the model
+5. **The model pin.** The independent `ByteArray` decoder is pinned to the model
    through the generic harness of `base/bytes`, in the
    `decodeFieldsB? b = decodeFields? (toNatList b)` shape (§4.2, §6;
    `base/bytes` docs, owned contracts 1 and 2).
+   The harness adapter rejects a successful decode that does not consume
+   the complete buffer. `encodeFieldsBModel` proves the encoder's byte
+   conversion is lossless through the real `Bytes` implementation.
 
 ## The error boundary
 
@@ -166,6 +170,10 @@ and a fixed32 below `2^32`. Length-delimited values carry a length below
 policy comes from root §4.3. This package does not implement the full
 ten-byte protobuf uint64 range or signed scalar conversions.
 
+`fixed64Bytes` and `fixed32Bytes` in `Proto/Wire.lean` own the fixed
+widths. The validity check, model codec, production decoder and proofs
+all use these constants.
+
 The caller supplies one externally framed message. The decoder consumes
 the complete buffer, so a successful model result has an empty suffix.
 The production result reports the full buffer size. Concatenated field
@@ -182,41 +190,23 @@ singular-lookup contract. It does not merge embedded messages. A typed
 consumer that needs protobuf message-merge behavior can use
 `getAllBytes` and apply its schema rules.
 
-## Proof boundary and temporary dependencies
+## Proof boundary
 
-W1.2 (#2) and W2.1 (#3) are open. The implementation uses
-`Proto/Mock/Bytes.lean` and `Proto/Mock/Varint.lean` under the
-`Pb.Mock` namespace, as permitted by `RULES.md`. They import no real
-dependency package. Their opaque functions have executable bodies so
-the vector tests can run.
+The package imports the merged W1.2 (`Bytes`) and W2.1 (`Varint`)
+implementations. The proofs use `Varint.decodeEncodeSuffix`,
+`Varint.encodeDecode`, `Varint.encodeNonempty` and `Varint.encodeBytes`
+directly. No dependency mock or package-specific axiom remains.
 
-The byte mock supplies the documented classes, conversions, error type,
-and a temporary generic harness. The class member names and harness
-arguments remain local until W1.2 supplies its concrete declarations.
-The protobuf instances prove both class laws from the core theorems.
+The public theorems are `decodeEncode`, `encodeDecode`,
+`encodeInjective`, `encodeFieldsBytes`, `lookupLastAppend` and
+`encodeFieldsBModel`. The `Bytes.LawfulCodec Fields` instance proves
+both shared laws from the core theorems. Its inverse states
+`encode fs ++ rest = input`, the direction used by the real class.
 
-The varint mock assumes four dependency facts:
-
-- `Pb.Mock.Varint.decodeEncodeSuffix`: encoding a bounded integer
-  decodes with an arbitrary suffix untouched.
-- `Pb.Mock.Varint.encodeDecode`: successful decoding splits the input
-  into the encoded value and its suffix.
-- `Pb.Mock.Varint.encodeNonempty`: every encoding contains a byte.
-- `Pb.Mock.Varint.encodeBytes`: every emitted model entry is below 256.
-
-The protobuf layer adds no axioms of its own. Its main theorems are
-`decodeEncode`, `encodeDecode`, `encodeInjective`, and `encodeFieldsBytes`.
-`lookupLastAppend` proves the last-occurrence lookup rule. The proofs
-use the Lean kernel and the listed dependency facts. Tests compare the
-production decoder with the model; that comparison is not a theorem.
-
-This package can be reviewed with the mocks. It can merge after both
-dependencies merge and the mocks disappear. Integration replaces the
-mock imports and harness, maps the concrete dependency names, and proves
-the four assumed facts from the dependency's theorems. It then reruns
-the build, both test modes, the import lint, and the axiom audit.
-`RULES.md` gives this integration a twelve-hour window after the last
-dependency merges.
+The axiom audit lists only Lean's standard `propext`, `Classical.choice`
+and `Quot.sound`. The proofs cover the list model and the encoder's
+byte conversion. Tests pin the independent production decoder to that
+model; decoder agreement remains a test claim.
 
 ## What the package must not depend on
 

@@ -1,4 +1,5 @@
-import Proto.Mock.Varint
+import Bytes
+import Varint
 
 /-!
 # Ordered protobuf fields
@@ -12,7 +13,7 @@ set_option autoImplicit false
 
 namespace Pb
 
-open Mock.Bytes (DecodeError)
+open Bytes (DecodeError)
 
 /-- Failures retain the distinction between incomplete and invalid framing. -/
 inductive Error where
@@ -36,12 +37,18 @@ def Value.wireType : Value → Nat
   | .bytes _ => 2
   | .fixed32 _ => 5
 
+/-- Wire type one carries eight little-endian bytes. -/
+def fixed64Bytes : Nat := 8
+
+/-- Wire type five carries four little-endian bytes. -/
+def fixed32Bytes : Nat := 4
+
 /-- Byte validity is needed for the model-to-ByteArray conversion to preserve values. -/
 def Value.Valid : Value → Prop
-  | .varint n => n < Mock.Varint.limit
-  | .fixed64 n => n < 256 ^ 8
-  | .bytes bs => bs.length < Mock.Varint.limit ∧ ∀ b ∈ bs, b < 256
-  | .fixed32 n => n < 256 ^ 4
+  | .varint n => n < Varint.limit
+  | .fixed64 n => n < 256 ^ fixed64Bytes
+  | .bytes bs => bs.length < Varint.limit ∧ ∀ b ∈ bs, b < 256
+  | .fixed32 n => n < 256 ^ fixed32Bytes
 
 instance (v : Value) : Decidable v.Valid := by
   cases v <;> unfold Value.Valid <;> infer_instance
@@ -63,6 +70,7 @@ instance (e : Entry) : Decidable e.Valid := inferInstanceAs
 structure Fields where
   entries : List Entry
   valid : ∀ e ∈ entries, e.Valid
+  deriving DecidableEq
 
 instance : BEq Fields where
   beq a b := a.entries == b.entries
