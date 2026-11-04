@@ -39,6 +39,14 @@ testDriver = "tests"
 name = "Backend"
 path = "packages/crypto/backend"
 
+# `net/streams/shim` is a nested Lake package for the same reason. Its
+# `lakefile.lean` builds the C abort of the TCP transport. It provides
+# the `StreamsShim` library, and it links against the toolchain's own
+# `libuv.a`.
+[[require]]
+name = "StreamsShim"
+path = "packages/net/streams/shim"
+
 # The etheorem hazmat pins (root ARCHITECTURE §4.6, PLAN W3.2). Each is
 # one single-family package, never the `LeanHazmat` umbrella, so the
 # build compiles only the families it uses. All sit at one monorepo

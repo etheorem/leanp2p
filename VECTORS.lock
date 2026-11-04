@@ -82,3 +82,29 @@ repo = "https://github.com/libp2p/go-libp2p"
 commit = "3c2c902122cb6fae3897f729a3dbb9d4665ae90d"
 branch = "master"
 used-for = "core/crypto/test_data fixtures (rsa/secp256k1/ecdsa key protobufs + signatures over a fixed message) and crypto/fixture_test.go TestFixtures; core/crypto/pb/crypto.proto and core/peer/pb/peer_record.proto: authoritative field tables (phase 2)"
+
+[[vendor]]
+dir = "vendor/go-yamux"
+repo = "https://github.com/libp2p/go-yamux"
+commit = "86999c64954b3109d08aac4d6dc94afa6fbfa302"
+branch = "master"
+# A sparse entry: scripts/vendor-pull.sh fetches these paths only. The
+# leading `/` anchors each pattern at the repository root.
+paths = ["/session.go", "/LICENSE*"]
+used-for = "v5.1.0, the go-yamux that vendor/go-libp2p requires (go.mod, line 32): session.go, the read of a frame header that treats the peer's reset as EOF (net/streams, the peer's reset)"
+
+[[vendor]]
+dir = "vendor/nim-libp2p"
+repo = "https://github.com/vacp2p/nim-libp2p"
+commit = "3dce083d1c9900d4d98878faaffe5c872b65ec48"
+branch = "master"
+paths = ["/libp2p/stream/chronosstream.nim", "/libp2p/stream/lpstream.nim", "/LICENSE*"]
+used-for = "chronosstream.nim and lpstream.nim: a TCP read error as EOF, and the remote reset as a kind of EOF (net/streams, the peer's reset)"
+
+[[vendor]]
+dir = "vendor/lean4"
+repo = "https://github.com/leanprover/lean4"
+commit = "293d5d0c0c3f3dded4688b3ccd6a33939ac5102b"
+branch = "master"
+paths = ["/src/runtime/uv/tcp.h", "/src/runtime/uv/tcp.cpp", "/LICENSE"]
+used-for = "v4.34.0, the pinned toolchain: the libuv TCP binding of the runtime, the socket layout and the request references that the net/streams shim relies on"

@@ -139,7 +139,7 @@ while IFS= read -r -d '' f; do
         seg=${mod%%.*}
         case $seg in
           Cli)    gname=cli;    grank=0 ;;
-          Streams|Yamux) gname=net;    grank=2 ;;
+          Streams|StreamsShim|Yamux) gname=net;    grank=2 ;;
           Crypto|CryptoPure|Backend) gname=crypto; grank=3 ;;
           Varint|Multiformats|Proto|Snappy) gname=codec; grank=4 ;;
           Conc|Bytes) gname=base;   grank=5 ;;
@@ -182,7 +182,7 @@ while IFS= read -r -d '' f; do
           ;;
         *)
           case $seg in
-            Streams)      mleaf=streams      ;;
+            Streams|StreamsShim) mleaf=streams ;;
             Yamux)        mleaf=yamux        ;;
             Varint)       mleaf=varint       ;;
             Proto)        mleaf=proto        ;;

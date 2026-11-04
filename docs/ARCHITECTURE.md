@@ -746,8 +746,12 @@ Two contracts live here, and no change may drop them:
 
 - **TCP close discipline.** libuv drops cancelled promises, so `close`
   resolves the promise of the parked read itself. A double resolve is a
-  no-op. `close` also sends a FIN to the peer. A failed write tears the
-  connection down: the local read sees EOF, and the peer gets a FIN.
+  no-op. `close` also ends the connection toward the peer. With no
+  write in flight, it sends a FIN. With a write in flight, it sends an
+  RST: a write to a peer that stops reading never completes, the FIN
+  waits behind it, and the write request holds the socket and its
+  descriptor. A failed write tears the connection down: the local read
+  sees EOF, and the peer gets a FIN or an RST by the same rule.
 - **No reader strand.** The stage that over-reads owns those bytes and
   hands them on *as data*. Every upgrade stage takes the leftover
   `ByteArray` of the previous stage and returns its own, so the types

@@ -14,7 +14,7 @@ under `+RTS -N1`, and the import lint is green.
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
 | 1 | W1.1, W1.2, W2.1, W2.3 | the streams core, root W4.1: `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` with `prependBytes` over the loop (§3.3), `Streams/Constants.lean`, the sim transport as the test `Transport` value, and a stub TCP value (`Streams/Tcp.lean`: the mapping between a multiaddr and a socket address in both directions; `dial` and `listen` throw) | the root W4.1 row holds, and the unit 1 milestones below pass |
-| 2 | W4.1, W1.1 | the TCP transport, root W4.2: `Streams/Tcp.lean` replaces the stub, with the close-wakes discipline, failed-write teardown, and the deadline wiring for §5.4 | the root W4.2 row holds, and the unit 2 milestones below pass |
+| 2 | W4.1, W1.1 | the TCP transport, root W4.2: `Streams/Tcp.lean` replaces the stub, with the close-wakes discipline, failed-write teardown, and the deadline wiring for §5.4; the C shim of `shim/` ends the stuck requests of a socket | the root W4.2 row holds, and the unit 2 milestones below pass |
 
 Unit 1 needs W2.1 for the `uvarint` prefix of `Framing`, and W2.3 for
 the `Multiaddr` of `Connection`, `Listener`, and `Transport`
@@ -54,9 +54,9 @@ Unit 0 is done.
   `Action.refused` through the loop, and `Stream.write` returns only
   after its tag resolves. `prependBytes` puts the handed-on bytes
   ahead of the bytes the loop delivers.
-- TCP stub: an `/ip4` and an `/ip6` TCP multiaddr map to their socket
-  addresses and back. Every other shape maps to `none`, and `handles`
-  refuses it. `dial` and `listen` throw.
+- TCP addresses: an `/ip4` and an `/ip6` TCP multiaddr map to their
+  socket addresses and back. Every other shape maps to `none`,
+  `handles` refuses it, and a `dial` or a `listen` of it throws.
 - The theorems of ARCHITECTURE, "Theorems", build with no `sorry`. Their
   axioms are the three standard axioms of Lean and the two axioms of the
   varint mock, no others.
@@ -70,11 +70,25 @@ Unit 0 is done.
   and it returns EOF; a second `close` is a no-op; a parked accept
   wakes when the listener closes.
 - Failed-write teardown: a write that fails tears the connection down,
-  the local read then sees EOF, and the peer receives a FIN.
+  and the local read then sees EOF. The suite fails the write for
+  real: it drops the peer's end with unread bytes, so the kernel
+  resets the connection, and a later write fails on the socket.
 - Silent peer: a dial that receives nothing fails at the 30 s deadline
   of §5.4, and the teardown joins every task of the connection.
 - Deadline wiring: `withinDeadline` closes the connection on expiry,
-  and the parked read ends on its own.
+  and the parked read ends on its own. A connect that hangs fails at
+  the dial deadline: the suite fills the accept queue of a loopback
+  listener that never accepts, so the kernel drops the next SYN, and
+  it dials that listener on the test clock. No packet leaves the
+  machine.
+- The RST path of §4.7: a teardown with a write in flight to a peer
+  that stops reading aborts the write, and a raw socket on the peer's
+  end meets the reset. A raw socket reads below `Connection.read`,
+  which answers a reset as EOF.
+- The peer's reset (ARCHITECTURE, "Decisions"): a read that meets the
+  RST of a dropped peer answers EOF, and the connection is torn down.
+- A closed listener stops listening: a dial to it answers `none`, and
+  its port takes a new listener.
 - The TCP suite over loopback: dial and listen, plus an echo
   exchange. The mss, Noise, and muxer suites of the spike run over
   this transport when their packages land (W5.5, W5.3, W5.4, W4.3),
