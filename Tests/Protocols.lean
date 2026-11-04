@@ -301,6 +301,35 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     r.check "ping e2e partial echo at EOF rejected" (failsWith Ping.Error.truncated res)
     tc.close
 
+  -- ping: an echo longer than one payload is rejected
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let payload := Bytes.ofNatList (List.replicate 32 7)
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      discard <| pair.b.write (Bytes.ofNatList (List.replicate 33 7))
+    let res ← Ping.ping pair.a tc.clock payload
+    ts.joinAll
+    r.check "ping e2e 33-byte echo rejected"
+      (failsWith (Ping.Error.wrongSize 33) res)
+    tc.close
+
+  -- ping: an echo over one payload, split across chunks, is rejected
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let payload := Bytes.ofNatList (List.replicate 32 7)
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      discard <| pair.b.write (Bytes.ofNatList (List.replicate 16 7))
+      discard <| pair.b.write (Bytes.ofNatList (List.replicate 17 7))
+    let res ← Ping.ping pair.a tc.clock payload
+    ts.joinAll
+    r.check "ping e2e 16+17-byte echo rejected"
+      (failsWith (Ping.Error.wrongSize 33) res)
+    tc.close
+
   -- ping: an echo split across chunks is accepted
   do
     let pair ← mkPair

@@ -149,11 +149,14 @@ def pingHandler : Mock.Core.StreamHandler :=
     handle := fun s => ExceptT.mk ((Except.mapError mapPingError) <$> handleCore s) }
 
 /-- Accumulate echo chunks until one whole payload is present. The
-module doc gives the reason for `partial`. -/
+initiator reads one 32-byte payload, so an accumulator above that size
+is an oversized echo. The module doc gives the reason for `partial`. -/
 private partial def awaitEcho (s : Streams.Stream) (acc : List Nat) :
     Conc.Async (Except Error (List Nat)) := do
   match splitPayloads acc with
-  | (p :: _, _) => return .ok p
+  | (p :: _, _) =>
+      if acc.length = payloadSize then return .ok p
+      else return .error (.wrongSize acc.length)
   | ([], _) =>
       match ← s.read with
       | .error e => return .error (.stream e)
