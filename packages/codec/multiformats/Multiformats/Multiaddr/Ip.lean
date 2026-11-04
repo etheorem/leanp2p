@@ -40,6 +40,17 @@ def ip4String? (bytes : List Nat) : Except Error String :=
       if bytes.all (· < 256) then .ok s!"{a}.{b}.{c}.{d}" else .error .badValue
   | _ => .error .badValue
 
+/-- A checked IPv4 value always has a printable text form. -/
+theorem ip4StringValid (bytes : List Nat) (length : bytes.length = 4)
+    (bounded : ∀ b ∈ bytes, b < 256) : ∃ text, ip4String? bytes = .ok text := by
+  have allBytes : bytes.all (· < 256) = true := by
+    simpa only [List.all_eq_true, decide_eq_true_eq] using bounded
+  match bytes with
+  | [a, b, c, d] =>
+      refine ⟨s!"{a}.{b}.{c}.{d}", ?_⟩
+      simp only [ip4String?, allBytes, ite_true]
+  | [] | [_] | [_, _] | [_, _, _] | _ :: _ :: _ :: _ :: _ :: _ => simp at length
+
 /-- Hex groups allow at most four ASCII digits. -/
 private def group? (text : String) : Except Error Nat := do
   if text.isEmpty || text.length > 4 then .error .badValue
@@ -114,5 +125,19 @@ def ip6String? (bytes : List Nat) : Except Error String := do
       | some (start, count) =>
           .ok (String.intercalate ":" ((groups.take start).map hexGroup) ++ "::" ++
             String.intercalate ":" ((groups.drop (start + count)).map hexGroup))
+
+/-- The byte invariant makes every IPv6 formatting branch successful. -/
+theorem ip6StringValid (bytes : List Nat) (length : bytes.length = 16)
+    (bounded : ∀ b ∈ bytes, b < 256) : ∃ text, ip6String? bytes = .ok text := by
+  have allBytes : bytes.all (· < 256) = true := by
+    simpa only [List.all_eq_true, decide_eq_true_eq] using bounded
+  unfold ip6String?
+  split
+  · rename_i rejected
+    simp [length, allBytes] at rejected
+  · dsimp only
+    split
+    · exact ⟨_, rfl⟩
+    · split <;> exact ⟨_, rfl⟩
 
 end Multiformats.Multiaddr

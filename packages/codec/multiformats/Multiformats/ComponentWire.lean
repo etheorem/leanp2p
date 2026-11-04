@@ -14,8 +14,6 @@ set_option autoImplicit false
 
 namespace Multiformats.ComponentWire
 
-open Mock
-
 /-- The raw framing invariant is independent of protocol-specific text rules. -/
 def validValue (protocol : Protocol) (value : List Nat) : Prop :=
   (∀ b ∈ value, b < 256) ∧ value.length ≤ maxComponentBytes ∧
@@ -95,7 +93,7 @@ def decodeAt? (input : List Nat) : Except Error (Frame × List Nat) := do
 theorem valueLengthLt (frame : Frame) : frame.value.length < Varint.limit := by
   have h := frame.valid.2.1
   simp only [maxComponentBytes] at h
-  simp only [Varint.limit]
+  simp only [Varint.limit, Varint.maxBytes]
   omega
 
 /-- The payload rule composes with an arbitrary following frame. -/
@@ -141,7 +139,7 @@ theorem decodeValueOk (protocol : Protocol) (input value rest : List Nat)
           obtain ⟨count, tail⟩ := pair
           simp only [decodeValue?, hs, hc, Except.mapError, Bind.bind, Except.bind] at h
           obtain ⟨hlen, _, _, split⟩ := Wire.takeBytesOk maxComponentBytes count.val tail value rest h
-          have header := Varint.encodeDecode input count tail hc
+          have header := Varint.encodeDecode hc
           have all := header.trans (congrArg (Varint.encode count ++ ·) split)
           simpa only [encodeValue, hs, Wire.encodeNat, hlen, Wire.toVarintVal,
             List.append_assoc] using all
@@ -171,7 +169,7 @@ theorem encodeDecode (input : List Nat) (frame : Frame) (rest : List Nat)
                   simp only [hf] at h
                   have he := Prod.mk.inj (Except.ok.inj h)
                   rcases he with ⟨rfl, rfl⟩
-                  have header := Varint.encodeDecode input rawProtocol tail ht
+                  have header := Varint.encodeDecode ht
                   have payload := decodeValueOk protocol tail value after hv
                   simpa only [encode, Wire.encodeNat, codeEq, Wire.toVarintVal,
                     List.append_assoc] using

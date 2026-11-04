@@ -60,6 +60,60 @@ def decodeFrames : Nat → List Nat → Except Error (List Frame)
           let frames ← decodeFrames fuel rest
           .ok (frame :: frames)
 
+/-- A tail-recursive reader keeps stack use bounded for long component sequences. -/
+private def decodeFramesLoop : Nat → List Nat → List Frame → Except Error (List Frame)
+  | fuel, input, reversed =>
+      if input = [] then .ok reversed.reverse
+      else match fuel with
+      | 0 => .error (.framing .malformed)
+      | fuel + 1 => do
+          let (frame, rest) ← ComponentWire.decodeAt? input
+          decodeFramesLoop fuel rest (frame :: reversed)
+
+/-- The accumulator reader has exactly the model's values and errors. -/
+private theorem decodeFramesLoopEq (fuel : Nat) (input : List Nat) (reversed : List Frame) :
+    decodeFramesLoop fuel input reversed =
+      (decodeFrames fuel input).map (fun frames => reversed.reverse ++ frames) := by
+  induction fuel generalizing input reversed with
+  | zero =>
+      by_cases empty : input = [] <;> simp [decodeFramesLoop, decodeFrames, empty, Except.map]
+  | succ fuel ih =>
+      by_cases empty : input = []
+      · simp [decodeFramesLoop, decodeFrames, empty, Except.map]
+      · simp only [decodeFramesLoop, decodeFrames, ite_eq_right empty]
+        cases hc : ComponentWire.decodeAt? input with
+        | error error => simp [Bind.bind, Except.bind, Except.map]
+        | ok pair =>
+            obtain ⟨frame, rest⟩ := pair
+            simp only [Bind.bind, Except.bind]
+            rw [ih]
+            cases ht : decodeFrames fuel rest <;>
+              simp [Except.map, List.reverse_cons, List.append_assoc]
+
+/-- The empty accumulator starts the checked tail-recursive reader. -/
+private def decodeFramesTail (fuel : Nat) (input : List Nat) : Except Error (List Frame) :=
+  decodeFramesLoop fuel input []
+
+/-- Compilation uses the proved accumulator reader without changing the model's definition. -/
+@[csimp] theorem decodeFramesEqLoop : decodeFrames = decodeFramesTail := by
+  funext fuel input
+  symm
+  cases hd : decodeFrames fuel input <;>
+    simpa [decodeFramesTail, hd, Except.map] using decodeFramesLoopEq fuel input []
+
+/-- FlatMap uses the standard library's tail-recursive implementation. -/
+private def encodeFramesTail (frames : List Frame) : List Nat :=
+  frames.flatMap ComponentWire.encode
+
+/-- The standard flatMap compiler path avoids a stack frame per encoded component. -/
+@[csimp] theorem encodeFramesEqFlatMap :
+    encodeFrames = encodeFramesTail := by
+  funext frames
+  unfold encodeFramesTail
+  induction frames with
+  | nil => rfl
+  | cons frame frames ih => simp only [encodeFrames, List.flatMap_cons, ih]
+
 /-- A checked sequence reuses the unambiguous component encoding. -/
 def encode {accept : List Frame → Bool} (value : Value accept) : List Nat :=
   encodeFrames value.frames

@@ -1,4 +1,4 @@
-import Multiformats.Mock.Varint
+import Varint
 import Multiformats.Error
 
 /-!
@@ -11,8 +11,6 @@ and payload checks. The model rejects entries that cannot be bytes.
 set_option autoImplicit false
 
 namespace Multiformats.Wire
-
-open Mock
 
 /-- Valid callers are unchanged; the modulo keeps the helper total on Nat. -/
 def toVarint (n : Nat) : Varint.UVarint :=

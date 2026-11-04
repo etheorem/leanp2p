@@ -18,24 +18,24 @@ structure Segment where
   text : Option String
   deriving DecidableEq, Repr
 
-/-- Structural recursion consumes at least the protocol name at each step. -/
-private def segments : List String → Except Error (List Segment)
-  | [] => .ok []
+/-- The accumulator keeps long component sequences on the tail-recursive path. -/
+private def segments (reversed : List Segment) : List String → Except Error (List Segment)
+  | [] => .ok reversed.reverse
   | name :: tail => do
       let protocol ← match Protocol.ofName? name with
         | some protocol => .ok protocol
         | none => .error .unknownProtocol
       if protocol == .unix then
         if tail.isEmpty then .error .badValue
-        else .ok [⟨protocol, some ("/" ++ String.intercalate "/" tail)⟩]
+        else .ok (reversed.reverse ++ [⟨protocol, some ("/" ++ String.intercalate "/" tail)⟩])
       else if protocol.fixedBytes? == some 0 then
-        .ok (⟨protocol, none⟩ :: (← segments tail))
+        segments (⟨protocol, none⟩ :: reversed) tail
       else
         match tail with
         | [] => .error .badValue
         | value :: rest =>
             if value.isEmpty then .error .badValue
-            else .ok (⟨protocol, some value⟩ :: (← segments rest))
+            else segments (⟨protocol, some value⟩ :: reversed) rest
 
 /-- One optional trailing separator is tolerated; empty interior segments fail. -/
 def parseSegments? (text : String) : Except Error (List Segment) := do
@@ -44,7 +44,7 @@ def parseSegments? (text : String) : Except Error (List Segment) := do
     match text.toList with
     | '/' :: chars =>
         let chars := if chars.getLast? == some '/' then chars.dropLast else chars
-        if chars.isEmpty then .error .badAddress else segments ((String.ofList chars).splitOn "/")
+        if chars.isEmpty then .error .badAddress else segments [] ((String.ofList chars).splitOn "/")
     | _ => .error .badAddress
 
 /-- Converting segments does not discard the caller's separate text view. -/

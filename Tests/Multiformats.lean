@@ -103,7 +103,7 @@ private def multibaseChecks (runner : Runner) : IO Unit := do
       | some base =>
           if file != "multibase-case-insensitivity.json" then
             runner.check s!"captured multibase encode: {name}"
-              (match Multibase.encode? base input with
+              (match Multibase.encode base input with
                 | .ok got => got == expected | .error _ => false)
           runner.check s!"captured multibase decode: {name}"
             (match Multibase.decode? expected with
@@ -113,14 +113,14 @@ private def multibaseChecks (runner : Runner) : IO Unit := do
       ([98, 97, 115, 101, 45, 52, 53], "RUJCLQE7W581")] do
     let data := Bytes.ofNatList input
     runner.check "RFC 9285 exact encoding"
-      (match Multibase.encode? .base45 data with | .ok got => got == expected | .error _ => false)
+      (match Multibase.encode .base45 data with | .ok got => got == expected | .error _ => false)
     runner.check "RFC 9285 exact decoding"
       (match Multibase.decode? expected with | .ok (_, got) => got == data | .error _ => false)
   runner.check "pinned Proquint example"
-    (match Multibase.encode? .proquint (Bytes.ofNatList [127, 0, 0, 1]) with
+    (match Multibase.encode .proquint (Bytes.ofNatList [127, 0, 0, 1]) with
       | .ok got => got == "pro-lusab-babad" | .error _ => false)
   runner.check "Proquint rejects an incomplete sixteen-bit word"
-    (match Multibase.encode? .proquint (Bytes.ofNatList [1]) with
+    (match Multibase.encode .proquint (Bytes.ofNatList [1]) with
       | .error .badBaseValue => true | _ => false)
   for text in ["?abc", "", "fabc", "f0g", "mA", "mAA=", "mAB", "RA", "R:::",
       "R::", "pro-baba", "p-babab", "pro-babab-", "b1n1"] do
@@ -129,7 +129,7 @@ private def multibaseChecks (runner : Runner) : IO Unit := do
   for seed in List.range 128 do
     let data := Bytes.ofNatList ((List.range (seed % 35)).map fun j => (seed + j * 89) % 256)
     for base in Multibase.Base.all do
-      let result := Multibase.encode? base data
+      let result := Multibase.encode base data
       if base == .proquint && data.size % 2 != 0 then
         runner.check "Proquint odd-byte domain check"
           (match result with | .error .badBaseValue => true | _ => false)
@@ -158,7 +158,7 @@ private def hashChecks (runner : Runner) : IO Unit := do
               | .error e => throw <| IO.userError s!"captured multihash base decode: {repr e}"
               | .ok (_, bytes) =>
                   runner.check "captured multihash text re-encodes exactly"
-                    (match Multibase.encode? base bytes with | .ok got => got == prefixed | .error _ => false)
+                    (match Multibase.encode base bytes with | .ok got => got == prefixed | .error _ => false)
                   pure bytes
       match Multihash.ofByteArray? input with
       | .error e => runner.check s!"multihash fixture decode: {repr e}" false

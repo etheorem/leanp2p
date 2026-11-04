@@ -127,6 +127,9 @@ def encode? (base : Base) (data : ByteArray) : Except Error String := do
     | .base256emoji => .ok (String.ofList (data.toList.map fun b => emojiAlphabet.getD b.toNat '?'))
   .ok (String.singleton base.prefixChar ++ body)
 
+/-- The public encoder reports Proquint's odd-byte domain error explicitly. -/
+def encode (base : Base) (data : ByteArray) : Except Error String := encode? base data
+
 /-- The fixed base32 encoder cannot reach Proquint's domain error. -/
 def encodeBase32 (data : ByteArray) : String :=
   match h : encode? .base32 data with

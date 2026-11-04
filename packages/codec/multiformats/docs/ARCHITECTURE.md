@@ -9,29 +9,24 @@ without libp2p still runs them (§4.4).
 
 ## Implementation status
 
-The registry generator, Base58, checked multibase conversions, multihash,
-CID, component framing, and validated sequence cores are implemented.
-The codec instances use the merged `Bytes` classes and harness. Varint
-remains behind `Multiformats.Mock.Varint` until W2.1 merges. Its four
-assumed dependency facts are named in that module and audited in the PR.
+The package implements the registries, Base58, checked multibase,
+multihash, CID and the complete public multiaddr API. It imports the
+merged `Bytes` and `Varint` packages directly. There are no dependency
+mocks or assumed dependency facts.
 
-`Multiformats.Multiaddr` currently names helper functions for IP text,
-UTF-8 percent escapes, protocol values and text segmentation. It does
-not yet name the public address type. `ComponentWire`, `SequenceWire`
-and `SequenceOps` hold its reusable wire and operation cores. The
-public address wrappers, remembered peer text and final class instances
-remain unfinished. The contracts below describe the required surface.
+`Multiaddr` contains canonical wire components. Its exact `LawfulCodec`
+instance covers all validated values. `Multiaddr.Text` keeps the parsed
+segments beside that canonical address and preserves CID-form peer
+text. A wire codec cannot recover a presentation flag absent from the
+bytes, so the text view has no codec instance. This corrects the earlier
+contract that stored the flag in the value covered by exact equality.
 
-Two public-surface decisions need resolution before W2.3 can close:
-
-- The remembered `p2p` text form does not survive binary encoding. Two
-  values that differ only in that form encode identically, so an exact
-  codec roundtrip cannot recover both. The text segment layer retains
-  the original spelling while the organiser decides its public home.
-- The registry includes experimental Proquint, whose pinned format
-  specifies complete 16-bit words. `Multibase.encode?` returns an
-  explicit error for an odd-byte Proquint input. The required total
-  `encode` entry point is pending a decision about that input domain.
+`Multibase.encode` and `encode?` both return `Except Error String`.
+Proquint rejects odd byte counts because its pinned format encodes
+whole 16-bit words. This corrects the earlier unrestricted `String`
+return type. Address composition, truncation and splitting also return
+checked results, because the output must meet the cap and ordering
+rules. Root ARCHITECTURE §4.4 records these contract corrections.
 
 The generator consumes all pinned multicodec rows for `ContentCodec`,
 the `hash` and `multihash` tags for `HashCode`, and the protocol and
@@ -53,9 +48,10 @@ spike's raw UTF-8 encoding of that text is not the specified wire form.
 | `Multiformats/Multibase.lean` | the full registry: one closed inductive `Base` over the multibase table, a prefix character per base, `encode` / `decode?` |
 | `Multiformats/Multihash.lean` | the function table as a closed inductive, the proof-carrying `Multihash` type, the strict decode, the `Codec` instances |
 | `Multiformats/Cid.lean` | CID v0 and v1, the text forms through multibase, the `Codec` instances |
-| `Multiformats/Multiaddr.lean` | the component inductive over the protocol table and the validated `Multiaddr` type |
-| `Multiformats/Multiaddr/Text.lean` | `parse?` and `toString`, with the percent codecs beside them |
-| `Multiformats/Multiaddr/Binary.lean` | `toByteArray` and `ofByteArray?`, plus `Codec Multiaddr` |
+| `Multiformats/Multiaddr.lean` | the public multiaddr modules |
+| `Multiformats/Multiaddr/Core.lean` | raw `Component`, validated canonical `Multiaddr`, total canonical printer, classes and exact codec laws |
+| `Multiformats/Multiaddr/Text.lean` | `parse?`, `parseText?`, the peer text view, and JSON boundaries |
+| `Multiformats/Multiaddr/Binary.lean` | `toByteArray`, `ofByteArray?`, and the independent cursor decoder |
 | `Multiformats/Multiaddr/Ops.lean` | the operations API |
 
 All declarations live in the `Multiformats` namespace. The root module
@@ -86,7 +82,7 @@ The names are the root names (§7, row 5), shaped by the mechanisms of
   declared length. `Multihash.ofByteArray?` and `Codec Multihash`
   decode strictly, and `LawfulCodec Multihash` states the law.
 - `Multibase` exposes `Base` (the closed registry), `encode : Base →
-  ByteArray → String`, and `decode? : String → Except
+  ByteArray → Except Multiformats.Error String`, and `decode? : String → Except
   Multiformats.Error (Base × ByteArray)`. base58btc and base58flickr
   dispatch into `Base58`, whose `encode` and `decode?` over
   `ByteArray` turn each leading zero byte of the payload into one `1`
@@ -96,10 +92,15 @@ The names are the root names (§7, row 5), shaped by the mechanisms of
   `LawfulCodec Cid` exist, and the text forms run through `Multibase`.
 - `Multiaddr` is a validated component list (§3.7), with `parse?`,
   `toString`, `toByteArray`, and `ofByteArray?` as the boundary
-  functions (§7, row 5). The operations API takes the spike's shape,
+  functions (§7, row 5). `components` exposes raw protocol/value pairs;
+  `ofComponents?` checks them, and `describe` prints canonical text.
+  The operations API follows the spike's behavior,
   which the go and js operation vectors pin: `encapsulate`,
   `decapsulate`, `decapsulateCode`, `split`/`join`, `components`,
   `protocols`, `valueForProtocol`, `contains`, `unique`, and `filter`.
+  `encapsulate`, `decapsulate`, `decapsulateCode`, `split` and `join`
+  return `Except Error` to validate every constructed result.
+  `getComponents` gives the decoded text view used by the JS suite.
 - The standard classes sit on `Multiaddr` (§3.2). `ToString` prints
   the text form of the spec, the case §3.2 allows hand-written.
 - `Codec` instances exist for `Multiaddr`, `Multihash`, and `Cid`
@@ -182,11 +183,12 @@ waiting (§5.2).
 
 ## Decisions
 
-- **The `p2p` component prints the parsed form.** Go prints base58btc
+- **The text view prints the parsed peer form.** Go prints base58btc
   for every `p2p` value (its bytes-to-string transcoder is base58). Js
   prints base58btc from bytes and keeps a CIDv1 form it parsed. The
-  wire value is the bare multihash. The parse stores which text form
-  it came from, and printing returns that form. A binary decode prints
+  wire value is the bare multihash. `parseText?` stores the parsed
+  spelling in `Multiaddr.Text`; its printer returns that form.
+  `parse?` returns the canonical `Multiaddr`. A binary decode prints
   base58btc, the go form. Both upstream suites round-trip under the
   rule. The peer-id print form itself belongs to `libp2p/identity`
   (PRINCIPLES 2.1); this document fixes only the multiaddr component.
@@ -201,8 +203,12 @@ waiting (§5.2).
   rather than patched silently (PRINCIPLES 2.1). The two js vectors
   that carry a string value for `memory` are skipped in the suite as
   documented divergences.
-- **Print-form details.** `parse? ""` fails, as go rejects it, and
-  `toString` of the empty address is `/`, as js prints it.
+- **Print-form details.** `parse? ""` and `parse? "/"` fail, as Go
+  rejects them. The empty binary address prints `/`, as JS prints it.
+  Its exact binary roundtrip holds. Text roundtrips cover nonempty
+  addresses whose printed form fits the text input cap. Binary and
+  text inputs each have a 1 MiB cap; text can expand beyond wire size.
+  JSON checks its escaped-text budget before parsing.
   `::ffff:1.2.3.4` prints dotted, and every other IPv6 address prints
   RFC 5952 compressed.
 - **Why the tables are committed.** §3.8: reviewers can read and grep

@@ -12,6 +12,11 @@ import Multiformats.Multiaddr.Ip
 import Multiformats.Multiaddr.Percent
 import Multiformats.Multiaddr.Value
 import Multiformats.Multiaddr.Segments
+import Multiformats.Multiaddr.Core
+import Multiformats.Multiaddr.Text
+import Multiformats.Multiaddr.Binary
+import Multiformats.Multiaddr.Ops
+import Multiformats.Multiaddr
 
 /-!
 # Multiformats

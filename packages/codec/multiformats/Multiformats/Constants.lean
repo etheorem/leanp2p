@@ -20,4 +20,7 @@ def maxComponentBytes : Nat := 65536
 /-- The complete address bounds the number of components and every parser traversal. -/
 def maxAddressBytes : Nat := 1048576
 
+/-- A JSON string may escape each input byte as six characters, plus two quotes. -/
+def maxAddressJsonBytes : Nat := 6 * maxAddressBytes + 2
+
 end Multiformats

@@ -114,29 +114,77 @@ def parseValue? (protocol : Protocol) (text : String) : Except Error Frame := do
     let frame ← ComponentWire.ofValue? protocol bytes
     if validFrame frame then .ok frame else .error .badValue
 
-/-- Printing a value independently also checks its semantic constraints. -/
-def valueString? (frame : Frame) : Except Error String := do
-  if !validFrame frame then .error .badValue
-  else
-    let bytes := frame.value
-    let buffer := Bytes.ofNatList bytes
-    match frame.proto with
-    | .ip4 => ip4String? bytes
-    | .ip6 => ip6String? bytes
-    | .tcp | .udp | .dccp | .sctp | .ipcidr | .memory => .ok (toString (readBigEndian bytes))
-    | .ip6zone | .dns | .dns4 | .dns6 | .dnsaddr | .sni | .unix => utf8? bytes
-    | .«http-path» => percentEncode <$> utf8? bytes
-    | .p2p => .ok (Base58.encode buffer)
-    | .onion | .onion3 =>
-        let hostBytes := if frame.proto == .onion then 10 else 35
-        let host := BitBase.encode 5 "abcdefghijklmnopqrstuvwxyz234567" 0
-          (Bytes.ofNatList (bytes.take hostBytes))
-        .ok (host ++ ":" ++ toString (readBigEndian (bytes.drop hostBytes)))
-    | .garlic64 => .ok (BitBase.encode 6
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-~" 4 buffer)
-    | .garlic32 => .ok (BitBase.encode 5 "abcdefghijklmnopqrstuvwxyz234567" 0 buffer)
-    | .certhash | .ech => .ok ("u" ++ BitBase.encode 6
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" 0 buffer)
-    | _ => .ok ""
+/-- Formatting is separate from validation so checked addresses need no repeated check. -/
+private def formatFrame? (frame : Frame) : Except Error String :=
+  let bytes := frame.value
+  let buffer := Bytes.ofNatList bytes
+  match frame.proto with
+  | .ip4 => ip4String? bytes
+  | .ip6 => ip6String? bytes
+  | .tcp | .udp | .dccp | .sctp | .ipcidr | .memory => .ok (toString (readBigEndian bytes))
+  | .ip6zone | .dns | .dns4 | .dns6 | .dnsaddr | .sni | .unix => utf8? bytes
+  | .«http-path» => percentEncode <$> utf8? bytes
+  | .p2p => .ok (Base58.encode buffer)
+  | .onion | .onion3 =>
+      let hostBytes := if frame.proto == .onion then 10 else 35
+      let host := BitBase.encode 5 "abcdefghijklmnopqrstuvwxyz234567" 0
+        (Bytes.ofNatList (bytes.take hostBytes))
+      .ok (host ++ ":" ++ toString (readBigEndian (bytes.drop hostBytes)))
+  | .garlic64 => .ok (BitBase.encode 6
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-~" 4 buffer)
+  | .garlic32 => .ok (BitBase.encode 5 "abcdefghijklmnopqrstuvwxyz234567" 0 buffer)
+  | .certhash | .ech => .ok ("u" ++ BitBase.encode 6
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" 0 buffer)
+  | _ => .ok ""
+
+/-- Printing a raw frame checks its semantic constraints at the boundary. -/
+def valueString? (frame : Frame) : Except Error String :=
+  if validFrame frame then formatFrame? frame else .error .badValue
+
+/-- A checked UTF-8 value cannot reach the formatter's error branch. -/
+private theorem utf8Valid (bytes : List Nat)
+    (valid : (Bytes.toString? (Bytes.ofNatList bytes)).isSome = true) :
+    ∃ text, utf8? bytes = .ok text := by
+  cases hs : Bytes.toString? (Bytes.ofNatList bytes) with
+  | none => simp [hs] at valid
+  | some text => exact ⟨text, by simp [utf8?, hs]⟩
+
+/-- Every semantically valid, correctly framed component has a successful formatter. -/
+private theorem formatFrameValid (frame : Frame) (valid : validFrame frame = true) :
+    ∃ text, formatFrame? frame = .ok text := by
+  unfold formatFrame?
+  cases hp : frame.proto <;> dsimp only <;> try exact ⟨_, rfl⟩
+  case ip4 =>
+    have length : frame.value.length = 4 := by
+      have width := frame.valid.2.2
+      rw [hp] at width
+      exact width
+    exact ip4StringValid frame.value length frame.valid.1
+  case ip6 =>
+    have length : frame.value.length = 16 := by
+      have width := frame.valid.2.2
+      rw [hp] at width
+      exact width
+    exact ip6StringValid frame.value length frame.valid.1
+  all_goals
+    have textValid : (Bytes.toString? (Bytes.ofNatList frame.value)).isSome = true := by
+      cases hs : Bytes.toString? (Bytes.ofNatList frame.value) with
+      | none => simp [validFrame, hp, nameValid, hs] at valid
+      | some text => rfl
+    obtain ⟨text, formatted⟩ := utf8Valid frame.value textValid
+    first
+    | exact ⟨text, formatted⟩
+    | exact ⟨percentEncode text, by rw [formatted]; rfl⟩
+
+/-- The checked printer is total because its error branch is proved unreachable. -/
+def valueString (frame : Frame) (valid : validFrame frame = true) : String :=
+  match result : formatFrame? frame with
+  | .ok text => text
+  | .error error => by
+      have impossible : False := by
+        obtain ⟨text, good⟩ := formatFrameValid frame valid
+        rw [result] at good
+        cases good
+      exact False.elim impossible
 
 end Multiformats.Multiaddr

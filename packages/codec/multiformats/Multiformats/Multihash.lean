@@ -24,7 +24,6 @@ structure Multihash where
 
 namespace Multihash
 
-open Mock
 
 /-- Raw digest data is checked once when it enters the wire model. -/
 def ofDigest? (code : HashCode) (digest : List Nat) : Except Error Multihash :=
@@ -36,7 +35,7 @@ def ofDigest? (code : HashCode) (digest : List Nat) : Except Error Multihash :=
 theorem digestLengthLt (value : Multihash) : value.digest.length < Varint.limit := by
   have h := value.bounded
   simp only [maxDigestBytes] at h
-  simp only [Varint.limit]
+  simp only [Varint.limit, Varint.maxBytes]
   omega
 
 /-- The declared length is derived from the digest, so it cannot disagree. -/
@@ -112,8 +111,8 @@ theorem decodeAtOk (input : List Nat) (value : Multihash) (rest : List Nat)
                       rcases he with ⟨rfl, rfl⟩
                       obtain ⟨hlen, _, _, hsplit⟩ :=
                         Wire.takeBytesOk maxDigestBytes length.val afterLength payload after hp
-                      have hraw := Varint.encodeDecode input raw tail hr
-                      have hlength := Varint.encodeDecode tail length afterLength hl
+                      have hraw := Varint.encodeDecode hr
+                      have hlength := Varint.encodeDecode hl
                       have hall := hraw.trans (congrArg (Varint.encode raw ++ ·)
                         (hlength.trans (congrArg (Varint.encode length ++ ·) hsplit)))
                       simpa only [encode, Wire.encodeNat, codeEq, hlen, Wire.toVarintVal,

@@ -21,7 +21,6 @@ inductive Cid where
 
 namespace Cid
 
-open Mock
 
 /-- CIDv0 cannot be constructed around another hash shape. -/
 def v0? (hash : Multihash) : Except Error Cid :=
@@ -128,8 +127,8 @@ theorem decodeAtOk (input : List Nat) (value : Cid) (rest : List Nat)
                         simp only [hm] at h
                         have he := Prod.mk.inj (Except.ok.inj h)
                         rcases he with ⟨rfl, rfl⟩
-                        have header := Varint.encodeDecode input version tail hv
-                        have content := Varint.encodeDecode tail rawCodec afterCodec hc
+                        have header := Varint.encodeDecode hv
+                        have content := Varint.encodeDecode hc
                         have digest := Multihash.decodeAtOk afterCodec hashValue after hm
                         have hall := header.trans (congrArg (Varint.encode version ++ ·)
                           (content.trans (congrArg (Varint.encode rawCodec ++ ·) digest)))
