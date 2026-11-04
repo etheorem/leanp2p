@@ -1,4 +1,8 @@
 import Libp2p.Identity.KeyType
+import Libp2p.Identity.Constants
+import Libp2p.Identity.Marshal
+import Libp2p.Identity.Unmarshal
+import Libp2p.Identity.Keys
 
 /-!
 # Libp2p.Identity

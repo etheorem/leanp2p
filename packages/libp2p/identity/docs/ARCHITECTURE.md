@@ -16,9 +16,9 @@ imports it for `PeerId`, and nothing in it knows a connection (§2,
 | `Libp2p/Identity.lean` | the root module; one import line per public submodule |
 | `Libp2p/Identity/Constants.lean` | the 42-byte inlining threshold, the per-type `Data` lengths, and the DER minima; one home per fact (PRINCIPLES 1.5) |
 | `Libp2p/Identity/KeyType.lean` | the closed set (§3.4): four constructors, `toCode`/`ofCode?`, and the `ofCode?_toCode` theorem |
-| `Libp2p/Identity/Marshal.lean` | the per-type `Data` forms; produces the bytes the backend loads |
-| `Libp2p/Identity/Keys.lean` | `PubKey` and `PrivKey`, the `ProtoMessage` instances over the field table, and the sign/verify/derive dispatch |
-| `Libp2p/Identity/Unmarshal.lean` | the strict unmarshal: decode, then the per-type `Data` check, before anything derives from the key |
+| `Libp2p/Identity/Marshal.lean` | writers for the per-type `Data` forms, the backend byte selection, and the Type/Data protobuf field table and encoding |
+| `Libp2p/Identity/Keys.lean` | `PubKey` and `PrivKey`, their validity rules and checked constructors, the thin `ProtoMessage` instances and marshal/unmarshal entry points, and the sign/verify/derive dispatch |
+| `Libp2p/Identity/Unmarshal.lean` | protobuf decoding and field extraction; calls the checked key constructor before returning a key |
 | `Libp2p/Identity/PeerId.lean` | derivation over the marshaled key, identity inlining, and the text forms |
 | `Libp2p/Identity/Rlp.lean` | the wrapper over the imported RLP library: the `Codec` instances, the error mapping, and the surface; the codec itself comes from the etheorem monorepo |
 | `Libp2p/Identity/Enr.lean` | the ENR record, its typed pairs, and the signature check |
@@ -38,7 +38,10 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   derive (§3.2).
 - `PubKey` and `PrivKey` carry a key type and `Data` bytes. The strict
   unmarshal builds them, so a constructed key already fits its type
-  (§3.7); sign and derive re-check nothing.
+  (§3.7); sign and derive re-check nothing. Each key also carries the
+  protobuf payload bounds, so its `ProtoMessage` encoder is total.
+  The validity rules live with the key definitions. `Unmarshal` receives
+  their checked constructor as an argument; it does not repeat the rules.
 - Sign, verify, and derive go through the `Crypto` facade (§3.6). The
   schemes are the peer-ids spec's: Ed25519 signs the raw message
   (RFC 8032), and the three DER schemes hash with SHA-256 first and
@@ -61,6 +64,15 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
 
   The Ed25519 private form is the seed‖public envelope the peer-ids
   spec vector itself carries.
+  `Marshal` assembles Ed25519 seed/public bytes, compressed secp256k1
+  points, RSA SPKI/PKCS#1 DER, and P-256 SPKI/SEC1 DER from supplied
+  components. The writers do not generate or cryptographically validate
+  keys. Ed25519 public bytes and secp256k1 private scalars need no
+  additional encoding. Imported `Data` is retained byte-exactly;
+  `backendData` selects the first 32 bytes of an Ed25519 private key
+  and otherwise passes the stored representation to the backend.
+  PKCS#8 import remains a DER-shell check here; the backend loader
+  owns parsing and any DER re-encoding, through the crypto facade.
 - `PeerId` is a validated multihash (§3.7): the peer-ids shape over
   the marshaled public key. A marshaled key of at most 42 bytes
   inlines as an identity multihash, so every Ed25519 id is a
@@ -101,7 +113,9 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
    peer id. The public table demands 32 bytes for Ed25519 and 33 for
    secp256k1, so a 31-byte Ed25519 key cannot derive an id. The
    private table demands 32, 64, or 96 bytes for Ed25519 and 32 for
-   secp256k1. A DER-shaped key type passes only a DER shell: at
+   secp256k1. The two public-key copies of a legacy 96-byte Ed25519
+   private key must agree before construction, per the peer-ids spec.
+   A DER-shaped key type passes only a DER shell: at
    least 8 bytes, a leading `0x30`. The content rules stay in the
    verifier behind the facade, RSA 2048 to 8192 bits and secp256k1
    low-S among them (§4.6); identity checks the shell, and the
