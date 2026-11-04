@@ -177,7 +177,8 @@ namespace Enr
 /-! ## The `v4` scheme -/
 
 /-- The compressed form of an uncompressed key `x ‖ y`: `0x02` for an
-even `y`, `0x03` for an odd one, then `x`. -/
+even `y`, `0x03` for an odd one, then `x`. The input is the 64-byte
+point the recovery returns; `get! 63` reads the last byte of `y`. -/
 def compress (xy : ByteArray) : List Nat :=
   (if (xy.get! 63).toNat % 2 = 0 then 0x02 else 0x03) :: toNatList (xy.extract 0 32)
 
