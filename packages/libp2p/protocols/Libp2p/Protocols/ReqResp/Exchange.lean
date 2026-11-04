@@ -155,9 +155,11 @@ def requestAll (s : Streams.Stream) (m : Method) (clock : Conc.Clock) (timeoutMs
   | .error e => return .error e
   | .ok () => return .ok (← acc.get).reverse
 
-/-- The error message of an `InvalidRequest` answer: the error's name,
-which fits the 256-byte `ErrorMessage` limit. -/
-def invalidRequestMessage (e : Error) : ByteArray :=
+/-- The payload of an error chunk: the error's name, which fits the
+256-byte `ErrorMessage` limit. The responder uses it for the
+`InvalidRequest` answer and for the `ServerError` chunk that a refused
+answer chunk produces. -/
+def errorMessageOf (e : Error) : ByteArray :=
   (toString (repr e)).toUTF8.extract 0 Constants.errorMessageLimit
 
 /-- Write the chunks of an answer, then close. A chunk the writer
@@ -169,7 +171,7 @@ def writeAnswer (s : Streams.Stream) (m : Method) (chunks : List Chunk) :
     | .ok bytes =>
       if let .error e ← s.write bytes then return .error (.stream e)
     | .error e =>
-      let msg := invalidRequestMessage e
+      let msg := errorMessageOf e
       if let .ok bytes := encodeChunkB m ⟨.serverError, ByteArray.empty, msg⟩ then
         if let .error e ← s.write bytes then return .error (.stream e)
       s.close
@@ -189,7 +191,7 @@ def serve (s : Streams.Stream) (m : Method) (clock : Conc.Clock) (timeoutMs : Na
   | .error .timeout => return .error .timeout
   | .error e =>
     -- A malformed request: answer in error, then close.
-    if let .ok bytes := encodeChunkB m ⟨.invalidRequest, ByteArray.empty, invalidRequestMessage e⟩ then
+    if let .ok bytes := encodeChunkB m ⟨.invalidRequest, ByteArray.empty, errorMessageOf e⟩ then
       discard <| s.write bytes
     s.close
     return .error e

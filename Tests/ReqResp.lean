@@ -595,7 +595,7 @@ def limiterChecks (r : Runner) : IO Unit := do
 
 /-! ## Over the sim transport -/
 
-open Libp2p.Protocols.Mock.Muxer (muxer Role)
+open Libp2p.Protocols.Mock.Muxer (muxer)
 open Libp2p.Protocols.Mock.HostStream (Host)
 
 /-- A connected pair of hosts over a new sim net and the mock muxer. -/
