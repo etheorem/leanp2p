@@ -26,7 +26,8 @@ Each operation fails through one channel of §3.5:
   a network that is down, or a write to a closed connection.
 
 A write that fails tears the connection down (§4.7). The local read
-then sees EOF, and the peer gets a FIN. Each transport value keeps this
+then sees EOF, and the peer gets a FIN, or an RST when a write is in
+flight. Each transport value keeps this
 rule, so a caller never holds a connection that is half closed.
 
 `Connection` holds operations and no state. The state lives in the

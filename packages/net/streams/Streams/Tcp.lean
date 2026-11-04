@@ -21,7 +21,7 @@ promise through `Async.ofPromise`.
 ## The close discipline (§4.7)
 
 libuv drops a cancelled promise. A task parked on it would never wake,
-against PRINCIPLES 3.1. So a close never only cancels: it first
+against PRINCIPLES 3.1. So a close never stops at the cancel: it first
 resolves the promise of every parked operation itself, and only then
 lets libuv drop its reference (`cancelRecv`, `cancelAccept`). The
 first resolve of a promise wins, and a later one does nothing
@@ -29,10 +29,12 @@ first resolve of a promise wins, and a later one does nothing
 promise in either order.
 
 * `Connection.close` resolves the parked read with EOF and every write
-  in flight with a fault, stops the reads, and sends a FIN with
-  `shutdown`. A second close does nothing.
+  in flight with a fault, stops the reads, and ends the connection
+  toward the peer: a FIN, or an RST when a write is in flight. A
+  second close does nothing.
 * A failed write, or a failed read, runs the same teardown, then throws.
-  The local read sees EOF from then on, and the peer gets the FIN.
+  The local read sees EOF from then on, and the peer gets the FIN or
+  the RST by the same rule.
 * A read that meets the peer's reset runs the same teardown, and
   answers EOF (below, "The peer's reset").
 * `Listener.close` resolves the parked accept, so it wakes with `none`.
