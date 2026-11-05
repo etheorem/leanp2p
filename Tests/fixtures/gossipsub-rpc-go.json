@@ -1,11 +1,11 @@
 {
   "_provenance": {
-    "generatedBy": "packages/libp2p/protocols/tools/go-rpc-fixtures/main.go",
-    "module": "github.com/libp2p/go-libp2p-pubsub, pb package",
-    "version": "v0.15.1-0.20260305223556-a01777894f4c",
     "api": "proto.Marshal of pb.RPC values, then proto.Unmarshal and proto.Equal for the roundtrip field",
     "format": "the RPC payload of one gossipsub frame, as lowercase hex; the uvarint prefix is Streams.Framing",
-    "source": "vendor/test-plans/gossipsub-interop/go-libp2p/go.mod:8 pins the module version"
+    "generatedBy": "packages/libp2p/protocols/tools/go-rpc-fixtures/main.go",
+    "module": "github.com/libp2p/go-libp2p-pubsub, pb package",
+    "source": "vendor/test-plans/gossipsub-interop/go-libp2p/go.mod:8 pins the module version",
+    "version": "v0.15.1-0.20260305223556-a01777894f4c"
   },
   "cases": [
     {
