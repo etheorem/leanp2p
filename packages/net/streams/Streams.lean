@@ -1,6 +1,7 @@
 import Streams.Constants
 import Streams.Error
 import Streams.Conn
+import Streams.Reader
 import Streams.BufReader
 import Streams.Framing
 import Streams.Stream
