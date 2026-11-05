@@ -17,20 +17,22 @@ same node code ran under both muxers in-process and over loopback TCP
 
 | Module | Holds, and why |
 |---|---|
-| `Libp2p/Mux.lean` | the root module; one import line per public submodule. It does not re-export the mock or the private test protocol |
+| `Libp2p/Mux.lean` | the root module; one import line per public submodule. It does not re-export the mock or the private test wire |
 | `Libp2p/Mux/Constants.lean` | `Mux.yamuxId` (`/yamux/1.0.0`), `Mux.mplexId` (`/mplex/6.7.0`), `Mux.testId` (`/leanp2p/test-mux/1.0.0`), and `Mux.mplexMessageCap` (1 MiB); the named ids of §3.4 and the cap of §5.1, one home per fact (§3.8) |
 | `Libp2p/Mux/Yamux.lean` | `Mux.yamux`, the yamux value over the session of `net/yamux`; the `Role` conversion below. Planned |
 | `Libp2p/Mux/Mplex.lean` | the mplex message codec and `Mux.mplex` (P2, §8); the spike reference is `Conn/Mplex.lean` (§10 row 15, §7 row 10). Planned |
-| `Libp2p/Mux/Test.lean` | `Mux.test : Muxer`, the independent test session under `Mux.testId`. Planned. Private frame and session state stay behind this value |
+| `Libp2p/Mux/Test.lean` | `Mux.test : Muxer`, the independent test session under `Mux.testId`. Planned |
+| `Libp2p/Mux/Test/Wire.lean` | the private header, frame, and incremental parser. Present. Internal, and tests import it directly |
 | `Libp2p/Mux/Mock/Core.lean` | the temporary `ProtocolId` used until W5.2. Present. Isolated, and deleted when `Libp2p.Core` lands |
 
-All declarations live in the `Libp2p.Mux` namespace, and the root
-module re-exports the public submodules.
+Public declarations live in the `Libp2p.Mux` namespace, and the root
+module re-exports the public submodules. The private wire declarations
+live in `Libp2p.Mux.Test.Wire`.
 
-`Libp2p/Mux.lean`, `Libp2p/Mux/Constants.lean`, and
-`Libp2p/Mux/Mock/Core.lean` are in the tree. `Yamux.lean`,
-`Mplex.lean`, and `Test.lean` are the remaining modules of this
-package.
+`Libp2p/Mux.lean`, `Libp2p/Mux/Constants.lean`,
+`Libp2p/Mux/Mock/Core.lean`, and `Libp2p/Mux/Test/Wire.lean` are in
+the tree. `Yamux.lean`, `Mplex.lean`, and `Test.lean` are the remaining
+modules of this package.
 
 ## Public surface
 
@@ -182,10 +184,17 @@ id is never reused.
 
 The header codec and the frame codec cover values their types can
 construct. The parser performs the semantic checks. It checks a
-declared payload length against `testPayloadCap` before it allocates
+declared payload length against `testPayloadCap` before it retains
 the body. An unknown kind, an id of zero, a control length other than
 zero, a data length of zero, or a data length above the cap fails at
 that check.
+
+One pull emits at most `parserFrameBudget` complete frames. The
+private wire module is the home of that constant. A later pull emits
+a complete frame the first pull kept. It needs no new connection
+bytes. A partial body stores the bytes already received and the
+length still required. The next chunk does not encode that header
+again.
 
 A partial header or a partial body waits while the connection stays
 open. A connection end during a partial header or body is a protocol
@@ -334,9 +343,10 @@ admitted writes is at most the live-stream cap times the
 admitted-write cap. The length of each retained array is the
 caller's, and it has no session cap.
 
-`Connection.read` returns one array of any positive length. The reader
-keeps that array while it copies slices from it. That array is not
-part of the subtotal.
+`Connection.read` may return an array of any positive length. `feedB`
+does not reject a chunk because of its size. The session preserves the
+copied-byte subtotal by feeding slices no larger than `testPayloadCap`.
+The original array stays outside that subtotal while the reader owns it.
 
 A caller parked outside admission holds its own array until the call
 returns. The count of those callers has no session cap. Maps,
