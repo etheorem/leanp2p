@@ -37,9 +37,9 @@ updateGet (root ARCHITECTURE §4.1). Only the first stop caller joins.
 
 ## Recorded decisions
 
-- **The stop field runs in Async.** The brief gives it a BaseIO type.
-  TaskSet.joinAll runs in Async, because joining can park. This field keeps
-  that type and leaves the blocking run to the application edge.
+- **The stop field runs in Async.** Joining parks, and TaskSet.joinAll runs
+  in Async for that reason. So the field keeps that type and leaves the
+  blocking run to the application edge.
 - **Actions never park.** Each send offers a frame to a peer queue with 32
   slots. One writer task owns that peer's stream. A full queue drops the
   frame, as go does for a full peer queue. Node.dropped reports these drops.
@@ -48,11 +48,10 @@ updateGet (root ARCHITECTURE §4.1). Only the first stop caller joins.
   Overflow drops the newest excess sends and adds to Node.dropped. Due sends
   leave before the tick shifts the message cache. The delay index increases
   across the run. Config.order hashes the heartbeat count with peer bytes.
-- **Subscribe registers its callback before the post.** A delivery handled
-  between the post and registration would miss its callback. The second
-  review measured 11 lost deliveries in 60 trials with that order. A refused
-  post takes back its own registration by id. Concurrent callers remove
-  their own entries through atomic updates.
+- **Subscribe registers its callback before the post.** The loop can serve a
+  delivery between the post and the registration, and that delivery would
+  miss the callback. A refused post takes back its own registration by id.
+  Concurrent callers remove their own entries through atomic updates.
 - **The handler announces its opener.** It posts peerJoined before reading
   frames, so the first RPC reaches a known peer. Repeat joins are no-ops.
 - **No signer.** The core validates with `strictNoSign` (`Core.validationOk`),

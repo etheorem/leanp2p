@@ -195,8 +195,8 @@ private def switchChecks (r : Tests.Runner) : Async Unit := do
   r.check "switch.no-open-after-close"
     (match ← a.newStream pb [id] with | .error (.closed _) => true | _ => false)
 
-/-- A local publish has no deliver action in the reviewed core. The loop
-serves queued inputs before stop, without a separate drain loop. -/
+/-- A local publish has no deliver action in the core. The loop serves queued
+inputs before stop, without a separate drain loop. -/
 private def localChecks (r : Tests.Runner) : Async Unit := do
   let sw ← (Switch.new : BaseIO Switch)
   let f ← fixture sw pa
@@ -283,9 +283,9 @@ private def inboundChecks (r : Tests.Runner) : Async Unit := do
   try sw.close catch _ => pure ()
   (f.clock.test.close : BaseIO Unit)
 
-/-- The reviewed core emits no local delivery for publish. These 20 trials
-use a peer RPC immediately after subscribe, so they exercise callback
-registration against a real delivery without changing that core policy. -/
+/-- The core emits no local delivery for publish. These 20 trials use a peer
+RPC immediately after subscribe, so they exercise callback registration
+against a real delivery. -/
 private def subscribeRace (r : Tests.Runner) : Async Unit := do
   let sw ← (Switch.new : BaseIO Switch)
   let f ← fixture sw pb
