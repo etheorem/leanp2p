@@ -15,14 +15,14 @@ level (ARCHITECTURE, "Modules"; root ARCHITECTURE §3.3).
 
 ## The loop
 
-One task owns the router state. A bounded `Chan` carries the events of the
-application and the host. The clock seam carries the heartbeat and the
-delayed gossip. The loop parks in `select` over the two, so the timer costs
-no task, and a `TestClock` drives every time decision of a test.
+One task owns the router state. A bounded channel carries application and
+host events and the wakes of Conc.Alarm. The alarm has its own task. The
+loop uses repeat and parks only on the channel receive. Ready events use
+constant stack space. The loop asks the alarm for the next due time after
+each input. A TestClock drives the alarm in tests.
 
-`loop` and `readFrames` are `partial`. A peer controls the number of events
-and chunks. No measure bounds the wait for a complete frame or a close
-(root CLAUDE.md, "`partial def`").
+The inbound readFrames is partial because a peer controls the number of
+frames and chunks before EOF (root CLAUDE.md, "partial def").
 
 ## Ownership
 
@@ -226,6 +226,11 @@ private def closeOutbound (streams : Outbound) : Conc.Async Unit := do
   for (_, stream) in streams do
     stream.close
 
+/-- The one input queue carries core events and alarm wakes. -/
+inductive Input where
+  | event (e : Core.Event)
+  | wake (now : Millis)
+
 /-! ## The inbound handler -/
 
 /-- The total frame size once its prefix is complete. A prefix under the
@@ -245,7 +250,7 @@ A chunk may hold several frames, so pos marks the bytes already consumed.
 The handler appends only the bytes needed by the prefix or current body.
 Its buffer stays under the RPC cap plus Varint.maxBytes, even when one
 chunk holds many frames. EOF between frames is clean. -/
-private partial def readFrames (events : Conc.Chan Core.Event) (peer : Peer)
+private partial def readFrames (events : Conc.Chan Input) (peer : Peer)
     (stream : Streams.Stream) (buf chunk : ByteArray) (pos : Nat) :
     Conc.Async (Except Mock.Core.Error Unit) := do
   match frameSize buf with
@@ -256,7 +261,7 @@ private partial def readFrames (events : Conc.Chan Core.Event) (peer : Peer)
         match Rpc.decodeFrame? (Bytes.toNatList buf) with
         | .ok (some (payload, [])) =>
           -- Park: the loop frees a slot, or stop closes the event queue.
-          match ← events.send (.rpc peer payload) with
+          match ← events.send (.event (.rpc peer payload)) with
           | .error _ => return .ok ()
           | .ok () => return ← readFrames events peer stream ByteArray.empty chunk pos
         | _ => return .error (.protocol "the RPC frame is malformed")
@@ -278,7 +283,7 @@ private partial def readFrames (events : Conc.Chan Core.Event) (peer : Peer)
 /-- Serve every RPC of a peer's stream in arrival order. Frame errors reset
 both directions. A clean EOF closes our write direction. The host owns and
 joins this handler task. -/
-def handler (events : Conc.Chan Core.Event) : Mock.Core.StreamHandler where
+def handler (events : Conc.Chan Input) : Mock.Core.StreamHandler where
   id := Constants.meshsubId
   handle peer stream := ExceptT.mk do
     let answer ← readFrames events peer stream ByteArray.empty ByteArray.empty 0
@@ -322,7 +327,9 @@ private structure Env where
   /-- The subscription table. -/
   subs : Conc.OnceRef Subscriptions
   /-- The event queue. -/
-  events : Conc.Chan Core.Event
+  events : Conc.Chan Input
+  /-- The owned alarm task posts wakes on events. -/
+  alarm : Conc.Alarm
 
 /-- One gossip send that waits for its due time. -/
 private structure Pending where
@@ -343,12 +350,6 @@ private structure LoopState where
   pending : List Pending
   /-- The time of the next heartbeat. -/
   nextTick : Millis
-
-/-- What wakes the loop: the timer, or the event queue. `none` is a closed
-and empty queue. -/
-private inductive Wake where
-  | timer
-  | event (e : Option Core.Event)
 
 /-- Run the actions of one core step, in order, and answer the delayed
 sends. `gossipAt` is the time of the tick when a tick made the actions. The
@@ -409,40 +410,38 @@ private def announce (env : Env) (st : LoopState) (event : Core.Event) :
       streams ← sendRpc env.host streams peer rpc
   return { st with streams }
 
-/-- The loop. Each pass sends the gossip that came due, runs the heartbeat
-when it came due, arms one timer for the next due time, and parks.
+/-- The next wake is the first due send or the next heartbeat. -/
+private def dueOf (st : LoopState) : Millis :=
+  st.pending.foldl (fun due p => Nat.min due p.due) st.nextTick
 
-A due time in the past gives a timer of 0 ms: the `Nat` subtraction stops at
-0, and such a timer completes at once. The tick runs at the top of the pass,
-so an event queue that stays full cannot hold a heartbeat back. The peer
-order of a tick comes from the state of the loop, its only writer. -/
-private partial def loop (env : Env) (st : LoopState) : Conc.Async Unit := do
-  let clock := env.config.clock
-  -- The ascription marks the action `BaseIO`, so the lift into `Async` applies
-  -- (see `Conc.TaskSet.joinAll`).
-  let now ← (clock.nowMs : BaseIO Nat)
+/-- Send due gossip before the heartbeat shifts the message cache. -/
+private def onWake (env : Env) (st : LoopState) (now : Millis) : Conc.Async LoopState := do
   let (due, later) := st.pending.partition (fun p => decide (p.due ≤ now))
   let mut streams := st.streams
   for p in due.mergeSort (fun a b => decide (a.due ≤ b.due)) do
     streams ← sendRpc env.host streams p.peer p.rpc
-  let st : LoopState := { st with streams, pending := later }
-  let st ←
-    if st.nextTick ≤ now then do
-      let order := st.router.peers.map (·.1)
-      let st ← stepAndAct env st (.tick now order)
-      pure { st with nextTick := now + env.config.params.heartbeatInterval }
-    else
-      pure st
-  let wake := st.pending.foldl (fun m p => Nat.min m p.due) st.nextTick
-  let timer ← (clock.after (wake - now) : BaseIO (Conc.Park Unit))
-  -- Park: a send or a close of the queue wakes it, and so does the timer.
-  match ← Conc.select #[Conc.Park.recv env.events Wake.event, timer.map fun () => Wake.timer] with
-  | .timer => loop env st
-  | .event none => closeOutbound st.streams
-  | .event (some e) =>
-    let st ← stepAndAct env st e
-    let st ← announce env st e
-    loop env st
+  let st := { st with streams, pending := later }
+  if st.nextTick ≤ now then
+    let st ← stepAndAct env st (.tick now (st.router.peers.map (·.1)))
+    return { st with nextTick := now + env.config.params.heartbeatInterval }
+  return st
+
+/-- Run the core through one receive park. Each action returns its state.
+The closed channel serves queued inputs before it returns none. The tail
+closes the alarm and every cached outbound stream. -/
+private def loop (env : Env) (st0 : LoopState) : Conc.Async Unit := do
+  let mut st := st0
+  (env.alarm.set (dueOf st) : BaseIO Unit)
+  repeat
+    match ← env.events.recv with
+    | none => break
+    | some (.wake now) => st ← onWake env st now
+    | some (.event e) =>
+      st ← stepAndAct env st e
+      st ← announce env st e
+    (env.alarm.set (dueOf st) : BaseIO Unit)
+  (env.alarm.close : BaseIO Unit)
+  closeOutbound st.streams
 
 /-- The router state of a node with no peers at time `now`. -/
 private def initialState (p : Core.Params) (now : Millis) : Core.State :=
@@ -474,16 +473,18 @@ application. -/
 def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
   let now ← config.clock.nowMs
   let subs : Conc.OnceRef Subscriptions ← Conc.OnceRef.new { next := 0, entries := [] }
-  let events : Conc.Chan Core.Event ← Conc.Chan.new 64
+  let events : Conc.Chan Input ← Conc.Chan.new 64
   host.setHandler (handler events)
   let tasks ← Conc.TaskSet.new
-  tasks.spawn <| loop { host, config, subs, events }
+  let alarm ← Conc.Alarm.new
+  tasks.spawn <| alarm.run config.clock (fun now => events.send (.wake now))
+  tasks.spawn <| loop { host, config, subs, events, alarm }
     { router := initialState config.params now
       streams := []
       pending := []
       nextTick := now + config.params.heartbeatInterval }
   return {
-    publish := fun topic payload => events.trySend (.publish (messageOf topic payload))
+    publish := fun topic payload => events.trySend (.event (.publish (messageOf topic payload)))
     subscribe := fun topic callback => do
       -- The cell changes first, so a delivery after the event finds the
       -- callback. A refused event takes this one registration back.
@@ -491,15 +492,15 @@ def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
         (s.next,
           { next := s.next + 1
             entries := s.entries ++ [{ id := s.next, topic, callback }] })
-      let sent ← events.trySend (.subscribe topic)
+      let sent ← events.trySend (.event (.subscribe topic))
       if !sent then
         subs.update fun s => { s with entries := s.entries.filter (fun e => e.id != id) }
       return sent
     unsubscribe := fun topic => do
       subs.update fun s => { s with entries := s.entries.filter (fun e => e.topic != topic) }
-      events.trySend (.unsubscribe topic)
-    peerJoined := fun peer proto => events.trySend (.peerJoined peer proto)
-    peerLeft := fun peer => events.trySend (.peerLeft peer)
+      events.trySend (.event (.unsubscribe topic))
+    peerJoined := fun peer proto => events.trySend (.event (.peerJoined peer proto))
+    peerLeft := fun peer => events.trySend (.event (.peerLeft peer))
     stop := do
       (events.close : BaseIO Unit)
       tasks.joinAll }
