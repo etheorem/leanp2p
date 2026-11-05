@@ -26,7 +26,7 @@ the constraints of that split.
 | `Backend/Error.lean` | `CryptoError`, the one error inductive of the package (§3.5), and `liftShim`, the one lift of a shim `Option` into it |
 | `Backend/Sized.lean` | `Key32`, `Digest32`, and `Nonce12`, the proof-carrying newtypes (§3.7) that cross the FFI edge. `Sym` and `Sign` both take them, so they sit below both. |
 | `Backend/Sym.lean` | random bytes, the SHA-1 and SHA-512 digest bindings, the interim SHA-256 binding, HMAC, HKDF, and ChaCha20-Poly1305 seal and open |
-| `Backend/Sign.lean` | X25519 derivation and DH. Derive, sign, and verify for Ed25519, RSA, secp256k1, and ECDSA P-256 (P-256 verification is the interim fallback until the facade routes it). The secp256k1 compact signer over a caller's digest. The DER re-encode of an RSA or P-256 private key (`rsaPkcs1`, `p256Sec1`). Key generation for all five types. |
+| `Backend/Sign.lean` | X25519 derivation and DH. Derive, sign, and verify for Ed25519, RSA, secp256k1, and ECDSA P-256. The facade routes P-256 verification to `LeanHazmatP256`, and this verifier is the reference of the route's differential test. The secp256k1 compact signer over a caller's digest. The DER re-encode of an RSA or P-256 private key (`rsaPkcs1`, `p256Sec1`). Key generation for all five types. |
 | `Backend/X509.lean` | the certificate helpers of the tls.md shape. `inspect` reads the SPKI, the value of one extension the caller names by OID, and the validity times. `selfSigned` checks the signature. The helpers know no protocol, so the caller passes the libp2p OID. |
 | `Backend.lean` | the package root, one import line per submodule. Production callers import `Crypto` instead (§3.6). |
 
@@ -72,7 +72,7 @@ once, in this package.
 | RSA derive, re-encode, sign, verify | all pure | RSASSA-PKCS1-v1_5 signs deterministically, and the PKCS#1 re-encode depends on the key alone (§3.6) |
 | secp256k1 derive and verify | pure | deterministic (§3.6) |
 | secp256k1 sign, DER over SHA-256 of a message and compact over a digest | pure | RFC 6979 derives the nonce from the key and the digest (§3.6) |
-| ECDSA P-256 derive, re-encode, and verify | pure | deterministic (§3.6). Verification is the interim fallback until the facade routes it. |
+| ECDSA P-256 derive, re-encode, and verify | pure | deterministic (§3.6). The facade routes verification to `LeanHazmatP256`, and this verifier is the reference of the route's differential test. |
 | ECDSA P-256 sign | `IO` | ECDSA draws a random nonce (§3.6) |
 | SHA-1, SHA-512, the interim SHA-256, HMAC, HKDF | pure | deterministic (§3.6) |
 | ChaCha20-Poly1305 seal and open | pure | deterministic (§3.6) |
@@ -247,7 +247,8 @@ property-wise at the IO edge (PLAN W3.3):
 
 The relation runs through the facade and the cross-check, and never
 through an import. The pure pair states the same rule from its side.
-This pair's plan carries the unit.
+The facade pair (`packages/crypto/docs/`) records the unit. Unit 2 of
+this pair's plan is the backend side of it.
 
 ## Decisions
 
