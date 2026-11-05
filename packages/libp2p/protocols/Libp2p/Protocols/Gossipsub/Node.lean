@@ -76,9 +76,14 @@ through `OnceRef.update` (root ARCHITECTURE §4.1).
   loop per stream (comm.go, lines 75 to 120). Go and rust write many RPCs on
   one stream. A one-frame rule would break interop on the second RPC. The
   handler bounds each frame before appending bytes and preserves frame order.
-- **The receipt observer runs before the core step.** Config.onRpc receives
-  the sender and payload bytes of every RPC, including duplicates and bad
-  protobuf bodies. Frame errors fail the handler before they reach it.
+- **The receipt observer runs before the core step.** The interop harness
+  logs every received message, including duplicates (gossipsub-interop,
+  test-specs/implementation.md, lines 71 to 78). Its go participant logs
+  messages on RECV_RPC (go-libp2p/tracer.go, lines 75 to 88). Core.handlePubs
+  deduplicates before delivery (Core.lean, lines 603 and 614). Config.onRpc
+  exposes the sender and unframed body before that step. The observer can
+  decode the body to log every message. The default hook decodes nothing.
+  Frame errors fail the handler before they reach the observer.
 - **The host posts `peerJoined` before it serves a stream of that peer.** The
   core ignores an RPC from an unknown peer (`Core.rpcStep`), so an earlier
   stream loses its RPC.
@@ -106,8 +111,9 @@ structure Config where
   /-- The delay of the `i`-th gossip send of one heartbeat, in milliseconds.
   The caller fixes it, so a test gets exact times. -/
   trickle : Nat → Millis := defaultTrickle
-  /-- Observe each inbound RPC before validation and deduplication. The callback
-  runs on the loop task and must not park. The bytes are the unframed body. -/
+  /-- Called for every inbound RPC with its sender and its bytes, before the
+  core sees them. A harness reads it to log each received message, including
+  a duplicate. It runs on the loop task, so it must not park. -/
   onRpc : Peer → List Nat → BaseIO Unit := fun _ _ => pure ()
 
 /-- A running node. Every field is a seam over the loop task, which is the
