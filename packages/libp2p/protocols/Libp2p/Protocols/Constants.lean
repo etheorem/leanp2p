@@ -3,7 +3,8 @@ import Libp2p.Protocols.Mock.Core
 /-!
 # Protocol constants
 
-One home per literal (DRY). The module holds the protocol ids of
+Other modules read these values from this module and do not repeat the
+literals. The module holds the protocol ids of
 identify, identify push, and ping, the identify message cap, the
 identify protocol version, and the ping payload size.
 -/
