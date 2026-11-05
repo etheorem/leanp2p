@@ -24,6 +24,13 @@ once.
 
 Unit 0 is done. Sub-units 1a, 1b, and 1c close root W2.3 together.
 
+All three sub-units are implemented against the merged dependencies.
+The suite calls the public `Multiaddr` parser, binary codec and checked
+operations. It covers the canonical class instances and the text view's
+peer spelling. Root ARCHITECTURE §4.4 and the package architecture
+record the contract corrections for exact wire identity, Proquint's
+checked encoder and address operations that can produce invalid results.
+
 ## Consumers
 
 W5.1 (`libp2p/identity`) builds the peer id on multihash, a validated
@@ -90,7 +97,10 @@ Milestones for 1c:
 - The invalid corpora: `construct-fails`, `invalid`, `invalid-p2p` (a
   `p2p` value whose declared digest length mismatches), and the fuzz
   corpora `multiaddr-go-fuzz-bytes` and `multiaddr-go-fuzz-strings`.
-  Decoding is total, and every accepted input round-trips.
+  Decoding is total, and every accepted binary input re-encodes exactly.
+  Nonempty accepted addresses also print and parse when the printed
+  form fits the text cap. The empty binary value displays `/`; the
+  strict text parser rejects that spelling.
 - The table match test: the committed generated table equals
   `multiaddr-protocols.json`, the extraction of `protocols.csv`.
 - The generic harness closes `Multiaddr`.

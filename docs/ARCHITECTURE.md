@@ -656,6 +656,33 @@ parsers are strict: a leading `/`, no empty segments, no `_` digit
 separators, no leading-zero IPv4 octets. Percent codecs operate on the
 UTF-8 bytes of the text.
 
+`Multiaddr` contains canonical wire data and carries its validation
+proof. Its `LawfulCodec` instance proves exact value equality, as §3.2
+requires. `Multiaddr.parse?` returns this canonical value.
+`Multiaddr.parseText?` returns a `Multiaddr.Text` view that also keeps
+the parsed peer spelling. The view prints a parsed CID-form peer id in
+that form. Canonical and binary-decoded addresses print the bare
+base58 peer id. The wire format has no spelling bit, so storing that
+bit inside the value covered by the exact codec law would contradict
+the law.
+
+`Multibase.encode : Base → ByteArray → Except Multiformats.Error String`
+reports Proquint's domain error for an odd byte count. Proquint encodes
+whole 16-bit words. The compatibility name `encode?` has the same type.
+
+Address operations that construct values return `Except Error`:
+`encapsulate`, `join`, `split`, `decapsulate` and `decapsulateCode`.
+Appending can exceed the address cap or place a component after a Unix
+path. Splitting or truncating can detach an IPv6 zone from its address.
+The check applies to the result as well as the inputs. Lookup and
+collection operations keep their direct result types.
+
+Empty binary addresses roundtrip exactly and display as `/`. The text
+parser rejects both empty text and `/`, as the captured Go cases require.
+Text roundtrips apply when the nonempty printed form fits the text
+input cap. Binary roundtrips apply to every validated value, including
+addresses whose expanded text exceeds that cap.
+
 ### 4.5 `codec/proto`: protobuf wire codec
 
 Encode and decode over the byte model, with lengths framed by
