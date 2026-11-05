@@ -61,7 +61,7 @@ private def badBody : List Nat := [255]
 
 /-- The configuration of a node on a test clock. -/
 private def configOn (tc : TestClock) (params : Core.Params := Core.defaults)
-    (trickle : Nat → Millis := defaultTrickle) : Config :=
+    (trickle : Nat → Millis := fun _ => 0) : Config :=
   { params, clock := tc.clock, trickle }
 
 /-- A delivery callback that keeps the message for the check. -/
@@ -580,7 +580,12 @@ private def gossipParams : Core.Params :=
 the time of the heartbeat plus `trickle i`, and no earlier. -/
 private def trickleSpread (r : Tests.Runner) : Async Unit := do
   r.check "node.trickle.default-is-zero"
-    ((List.range 64).all (fun i => defaultTrickle i == 0))
+    ((List.range 64).all (fun i => ({} : Config).trickle i == 0))
+  r.check "node.trickle.public-spread-is-below-one-second"
+    ((List.range 1000).all (fun i => Libp2p.Protocols.Gossipsub.Node.spread i < 1000))
+  r.check "node.trickle.public-spread-formula"
+    (Libp2p.Protocols.Gossipsub.Node.spread 0 == 1 &&
+      Libp2p.Protocols.Gossipsub.Node.spread 1 == 920)
   let sw ← (Switch.new : BaseIO Switch)
   let tc ← (TestClock.new : BaseIO TestClock)
   let seen : Chan Seen ← (Chan.new 16 : BaseIO (Chan Seen))

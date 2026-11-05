@@ -112,7 +112,8 @@ in the codec group wrapping upstream `google/snappy`.
   - The receipt observer sees duplicates before validation and delivery.
   - The default gossip delay is zero. Tests supply an explicit spread.
   - A heartbeat sends the graft, and a later publish reaches the mesh.
-  - The `i`-th IHAVE of a heartbeat leaves at `trickle i`, and no earlier.
+  - With a configured spread, the i-th IHAVE of a heartbeat leaves at its
+    delay and no earlier.
   - A publish with no peers opens no stream and delivers nothing locally.
   - `stop` joins the loop, a later post answers `false`, and the switch
     closes.

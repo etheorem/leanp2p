@@ -59,9 +59,15 @@ through `OnceRef.update` (root ARCHITECTURE §4.1).
   join, so that peer would never learn the topic. The go implementation
   announces a change in its host registry, outside the router. The loop
   does the same with `subOptRpc`, after the core step.
-- **The default gossip delay is zero.** The pinned go implementation flushes
-  heartbeat gossip at once. Config.trickle keeps an explicit delay for tests
-  and callers that need one, as section 12 of the brief records.
+- **The default gossip delay is zero.** The pinned go router enqueues IHAVEs
+  in emitGossip (gossipsub.go, lines 2007 to 2076). Its flush sends them at
+  once (lines 2078 to 2092). The random sleep in announceRetry belongs to a
+  subscription retry (pubsub.go, lines 1234 to 1235). The loop owns the
+  emission schedule, so a caller can spread heartbeat gossip across the
+  interval. The default spreads nothing and matches go. Tests configure an
+  explicit spread because issue #23 names the trickle regressions. The delay
+  applies only to heartbeat IHAVEs. Publish, forward, graft and hello sends
+  leave at once.
 - **The loop keeps one outbound stream per peer.** The pinned go pubsub
   version a01777894f4c resets the previous inbound stream on a duplicate
   open (comm.go, lines 55 to 65). Its sender keeps one stream per peer
@@ -97,9 +103,10 @@ namespace Libp2p.Protocols.Gossipsub.Node
 
 open Mock.Host (HostSeam)
 
-/-- The default sends heartbeat gossip at once, as the pinned go router does.
-Callers can provide a delay through Config.trickle. -/
-def defaultTrickle (_i : Nat) : Millis := 0
+/-- A spread a caller may choose for heartbeat gossip. Each delay stays below
+one second. The multiplier is prime, so the delays do not repeat with a short
+period. Config.trickle defaults to zero. -/
+def spread (i : Nat) : Millis := (i * 7919 + 1) % 1000
 
 /-- The configuration of one node: the router parameters, the clock the
 loop reads, and the spread of the heartbeat gossip. -/
@@ -110,7 +117,7 @@ structure Config where
   clock : Conc.Clock := Conc.Clock.system
   /-- The delay of the `i`-th gossip send of one heartbeat, in milliseconds.
   The caller fixes it, so a test gets exact times. -/
-  trickle : Nat → Millis := defaultTrickle
+  trickle : Nat → Millis := fun _ => 0
   /-- Called for every inbound RPC with its sender and its bytes, before the
   core sees them. A harness reads it to log each received message, including
   a duplicate. It runs on the loop task, so it must not park. -/
