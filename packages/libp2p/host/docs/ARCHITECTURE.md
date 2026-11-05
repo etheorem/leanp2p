@@ -20,7 +20,7 @@ libp2p group is §7, row 10).
 | `Libp2p/Host/Registry.lean` | the session and handler registries, each a `Std.HashMap` inside an `OnceRef`, their pure update functions, and the shared table types (§3.8, §3.10) |
 | `Libp2p/Host/Dedup.lean` | the dedup rule as one pure function over the session table |
 | `Libp2p/Host/Peerstore.lean` | the third registry, addresses by peer, deduplicated at add (§3.8) |
-| `Libp2p/Host/Swarm.lean` | `dial`, `dialPeer`, `startListening`, the accept loop, the upgrade pipeline, and stream serving |
+| `Libp2p/Host/Swarm.lean` | `dial`, `dialPeer`, `startListening`, `newStream`, the accept loop, the upgrade pipeline, and stream serving |
 | `Libp2p/Host/Shutdown.lean` | `Host.close`, the §5.5 sequence |
 | `Libp2p/Host/Policy.lean` | the permissive default gater, and the permissive and denying test doubles the core pair assigned here |
 
@@ -48,6 +48,14 @@ module re-exports the public submodules.
   closes the stream, never the session, and the error reaches the
   owner through the spawned task's completion (PRINCIPLES 3.2). This
   settles the question the core pair left open.
+- `newStream` opens a stream to a peer and negotiates one of the given
+  protocol ids, in preference order. With no live session, it dials
+  the peer first. The answer is the selected id and the stream, with
+  the bytes the negotiation over-read at its front (§4.7, §5.6). This
+  is go-libp2p's `host.NewStream`
+  (`vendor/go-libp2p/core/host/host.go`, lines 61 to 65). The clients
+  of `libp2p/protocols` and the binaries of `cli/` reach their
+  outbound streams through it.
 - The peerstore surface: `addAddrs` (deduplicated at add, so a redial
   grows nothing) and `addrsOf`. Limits and TTLs stay deferred (§9,
   delta 3).

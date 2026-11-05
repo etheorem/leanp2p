@@ -148,7 +148,7 @@ while IFS= read -r -d '' f; do
       *)
         seg=${mod%%.*}
         case $seg in
-          Cli)    gname=cli;    grank=0 ;;
+          Cli|Interop) gname=cli; grank=0 ;;
           Streams|StreamsShim|Yamux) gname=net;    grank=2 ;;
           Crypto|CryptoPure|Backend) gname=crypto; grank=3 ;;
           Varint|Multiformats|Proto|Snappy) gname=codec; grank=4 ;;

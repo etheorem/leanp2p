@@ -48,7 +48,10 @@ the same pattern, a live run against foreign nodes.
   `tcp + /noise + yamux`, dial and listen, both directions, with the
   two harness executables coordinated through Redis in docker, per
   `scripts/interop-matrix.sh`. A cell passes when the dialer prints
-  the timing JSON of the `interop` contract.
+  the timing JSON of the `interop` contract. The cells: go dials go
+  (the check of the setup), Lean dials go, go dials Lean, and Lean
+  dials Lean. The script writes the records and a results table in
+  the test plan's `name,outcome` shape.
 - The matrix cells for mplex are skipped against go v0.50, which
   removed mplex upstream (the mux pair's record). The Lean side's
   mplex identity stays covered in-process, as the spike's
@@ -57,13 +60,27 @@ the same pattern, a live run against foreign nodes.
   a raw connection that sends nothing fails the upgrade at the
   deadline (§5.4), and teardown closes the pending connection and
   joins every task. The host pair carries the in-suite form; the gate
-  runs it live against the composed binary.
+  runs it live against the composed binary: a raw TCP client connects
+  to the Lean listener, holds its write side open, and sends nothing.
+  The listener closes it no earlier than the 30 s deadline, and a go
+  dialer passes against the same listener meanwhile.
 - The slow-reader scenario: the spike ran no live leg for it. The
   in-process evidence is the yamux flow-control work, a transfer
   larger than the 256 KiB initial window completing in both directions
   over noise-encrypted TCP, and data beyond the receive window failing
-  as a protocol error. Unit 2 designs the live scenario against §5.1's
-  bounded receive path and records its shape here when it lands.
+  as a protocol error. The live leg (`scripts/interop-slowreader/`): a
+  go peer dials the Lean listener, opens a ping stream, and writes
+  32-byte payloads without reading the echoes. Lean's ping handler
+  parks on its full send window and stops reading, so its receive
+  window fills, and the go writes stall. The scenario passes when the
+  writes stall below 64 MiB, the bound of §5.1's receive path with
+  room for both windows and the kernel buffers, and a second ping over
+  a fresh stream on the same connection completes.
+- In the suite (`Tests/Interop.lean`): the configuration table and the
+  timing record; the RESP2 header parse with both caps; the Redis
+  client against a scripted server over the sim, with whole writes and
+  in the byte-splitting mode; a reply line over the cap; the CRLF scan
+  pinned to its model; and the published address.
 - The `-N1` statement: every in-suite test of both units passes under
   `+RTS -N1` (§6; PRINCIPLES 5.3). The gate runs foreign processes
   under docker, outside `lake test`, and the scripts carry their own
