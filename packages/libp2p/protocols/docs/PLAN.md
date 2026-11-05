@@ -89,7 +89,8 @@ in the codec group wrapping upstream `google/snappy`.
   back, as a request and as a response chunk, and the empty payload is
   the prefix alone.
 - The writer: with a block that shrinks, it writes compressed chunks,
-  and they read back, alone and beside a raw chunk.
+  and they read back, alone and beside a raw chunk. A block that does
+  not shrink, or a compressor error, gives a raw chunk.
 - The concurrency limit: two requests with one id take a slot each, a
   third is refused, another id has its own slots, and a request gives
   its slot back when it ends (the bound of `Table.take` is a theorem).

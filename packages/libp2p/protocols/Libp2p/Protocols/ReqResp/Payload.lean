@@ -1,5 +1,5 @@
 import Varint
-import Libp2p.Protocols.Mock.Snappy
+import Snappy
 import Libp2p.Protocols.ReqResp.Crc32c
 import Libp2p.Protocols.ReqResp.SnappyFrame
 
@@ -291,11 +291,11 @@ def checksumB (data : ByteArray) : ByteArray :=
   ByteArray.mk #[m.toUInt8, (m >>> 8).toUInt8, (m >>> 16).toUInt8, (m >>> 24).toUInt8]
 
 /-- The block compressor the writer calls: the `codec/snappy` binding. -/
-abbrev Compressor := ByteArray → Except Mock.Snappy.Error ByteArray
+abbrev Compressor := ByteArray → Except Snappy.Error ByteArray
 
 /-- One data chunk for at most 65536 bytes: compressed when the block
 is shorter than the raw bytes, uncompressed otherwise. -/
-def dataChunkB (block : ByteArray) (compress : Compressor := Mock.Snappy.compress) : ByteArray :=
+def dataChunkB (block : ByteArray) (compress : Compressor := Snappy.compress) : ByteArray :=
   let crc := checksumB block
   match compress block with
   | .ok c =>
@@ -314,9 +314,8 @@ def streamIdB : ByteArray :=
 /-- A framed stream of `payload`: the identifier, then one data chunk
 per 65536 bytes. The empty payload is the identifier alone; a reader of
 `n = 0` reads no frame (see `ReqResp/Core.lean`). The compressor is an
-argument so the suite can drive the compressed branch with a block that
-shrinks. -/
-def encodeFramesB (payload : ByteArray) (compress : Compressor := Mock.Snappy.compress) :
+argument so the suite can drive the error arm of `dataChunkB`. -/
+def encodeFramesB (payload : ByteArray) (compress : Compressor := Snappy.compress) :
     ByteArray := Id.run do
   let mut out := streamIdB
   let blocks := (payload.size + Constants.snappyMaxDataLen - 1) / Constants.snappyMaxDataLen
@@ -331,7 +330,7 @@ def encodeLengthB (n : Nat) : ByteArray := ByteArray.mk ((encodeLength n).map (�
 /-- One payload on the wire: the prefix, then the framed stream. The
 empty payload has the prefix alone, since a reader of `n = 0` stops
 after it. -/
-def encodePayloadB (payload : ByteArray) (compress : Compressor := Mock.Snappy.compress) :
+def encodePayloadB (payload : ByteArray) (compress : Compressor := Snappy.compress) :
     ByteArray :=
   if payload.size = 0 then encodeLengthB 0
   else encodeLengthB payload.size ++ encodeFramesB payload compress

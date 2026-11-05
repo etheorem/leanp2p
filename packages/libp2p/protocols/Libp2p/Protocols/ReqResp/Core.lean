@@ -202,7 +202,7 @@ def dataOf (kind : SnappyFrame.Kind) (body : ByteArray) (room : Nat) : Except Er
   let cap := min Constants.snappyMaxDataLen room
   let data ← match kind with
     | .compressed =>
-      match Mock.Snappy.decompress raw cap with
+      match Snappy.decompress raw cap with
       | .ok d => pure d
       | .error .outputTooLarge =>
         -- The block announces more than the cap: past the payload, or

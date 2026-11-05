@@ -26,7 +26,7 @@ group is §7, row 10). The spike has no req/resp or gossipsub code.
 | `Libp2p/Protocols/ReqResp/Core.lean` | the reader state machine of §3.3: `State`, `Event`, `Action`, and the total `step`; it reads one request or a run of response chunks, and the output so far, the budget spent, the chunk count, and the error/EOF distinction live in the state |
 | `Libp2p/Protocols/ReqResp/Limiter.lean` | `MAX_CONCURRENT_REQUESTS`: the pure table rule with its bound theorem, and the per-peer `Limiter` over `OnceRef` |
 | `Libp2p/Protocols/ReqResp/Exchange.lean` | the shell over the core: the requester `request` and `requestPeer`, the responder `serve`, the handler value the registry stores, and the deadlines |
-| `Libp2p/Protocols/Mock/{Core,Host,Snappy,Muxer,HostStream}.lean` | the mocks of the dependencies this package still stands in for (RULES.md, "Working ahead of the tree"); the integration deletes them |
+| `Libp2p/Protocols/Mock/{Core,Muxer,HostStream}.lean` | the mocks of the dependencies this package still stands in for, W5.2, W5.4, and W5.6 (RULES.md, "Working ahead of the tree"); the integration deletes them |
 | `Libp2p/Protocols/Gossipsub/Rpc.lean` | the RPC message with its `ProtoMessage` instance (§3.2) |
 | `Libp2p/Protocols/Gossipsub/Core.lean` | `State`, `Event`, `Action`, `ProtocolError`, and the total `step` that holds mesh, scoring, and heartbeat (§3.3) |
 | `Libp2p/Protocols/Gossipsub/Node.lean` | the loop task over the core, and the publish and subscribe surface at the seam level |
@@ -282,9 +282,10 @@ Both spike programs call `Ping.ping`.
   the gossipsub queues (root PLAN W6.4 names W1.1), `withinDeadline`
   for the req/resp deadlines, and `TaskSet` for the loop tasks.
 - From the codec group, `codec/varint` for the minimal LEB128 writer
-  the length prefix shares, and `codec/proto` for the little-endian
+  the length prefix shares, `codec/proto` for the little-endian
   digits of the chunk length and their lemmas (`Pb.leBytes`,
-  `Pb.leOf`), so neither fact has a second home.
+  `Pb.leOf`), so neither fact has a second home, and `codec/snappy`
+  for the raw block `compress` and `decompress`.
 - No SSZ anywhere. The package frames opaque bytes (§8).
 - No snappy by name. The compression call goes through the
   `codec/snappy` binding interface, so a native Lean

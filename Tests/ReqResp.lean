@@ -251,7 +251,7 @@ def framingChecks (r : Runner) : IO Unit := do
   let big := noise 3 65537
   r.check "an uncompressed chunk of 65537 bytes is refused (section 4.3)"
     (failsWith (.frame .dataTooLong) (readRequest m [opening 70000 ++ rawChunk big]))
-  let block := (Mock.Snappy.compress p).toOption.getD ByteArray.empty
+  let block := (Snappy.compress p).toOption.getD ByteArray.empty
   r.check "a compressed chunk reads"
     (succeedsWith [p] (readRequest m [opening 5 ++ SnappyFrame.headerB .compressed (block.size + 4) ++
       checksumB p ++ block]))
@@ -540,35 +540,46 @@ def exchangeChecks (r : Runner) : Async Unit := do
 
 /-! ## The writer's compressed branch -/
 
-/-- A compressor that shrinks a run of one byte: a literal of the byte,
-then copies of offset 1 and length up to 64 (`format_description.txt`,
-2.1 and 2.2.2). Other input goes to the mock, which writes a literal. -/
-def runCompress (b : ByteArray) : Except Mock.Snappy.Error ByteArray := Id.run do
-  let some x := b[0]? | return Mock.Snappy.compress b
-  if b.size < 2 ∨ !(b.toList.all (· == x)) then return Mock.Snappy.compress b
-  let mut out := Mock.Snappy.preamble b.size ++ ByteArray.mk #[0, x]
-  let mut left := b.size - 1
-  while 0 < left do
-    let len := min left 64
-    out := out ++ ByteArray.mk #[((len - 1) * 4 + 2).toUInt8, 1, 0]
-    left := left - len
-  return .ok out
+/-- The kinds of the data chunks of one written payload, in order: the
+chunk headers after the length prefix and the stream identifier. -/
+def chunkKinds (payloadSize : Nat) (wire : ByteArray) : List SnappyFrame.Kind := Id.run do
+  let mut pos := (encodeLengthB payloadSize).size + streamIdB.size
+  let mut kinds := []
+  -- Every chunk is at least its 4-byte header, so `wire.size` rounds
+  -- bound the walk.
+  for _ in [0:wire.size] do
+    let some (.ok (k, len)) := SnappyFrame.decodeHeaderB? wire pos | break
+    kinds := kinds ++ [k]
+    pos := pos + Constants.snappyHeaderLen + len
+  return kinds
 
 def writerChecks (r : Runner) : IO Unit := do
   r.section "writer" "framing_format.txt sections 4.2 and 4.3"
   let m := method
   let run := bs (List.replicate 140000 0x61)
-  let wire := encodePayloadB run runCompress
-  -- The identifier, then three compressed chunks of 65536, 65536, and
-  -- 8928 bytes: each block is a 3-byte preamble, a literal, and copies.
+  let wire := encodePayloadB run
+  -- The identifier, then three chunks of 65536, 65536, and 8928 bytes.
+  -- The binding shrinks each run, so each chunk is compressed.
   r.check "the writer picks compressed chunks when the block is shorter"
-    (wire.size < 10000 && wire.get! ((encodeLengthB 140000).size + 10) == 0)
+    (wire.size < 10000 && chunkKinds run.size wire == [.compressed, .compressed, .compressed])
   r.check "compressed chunks from the writer read back" (succeedsWith [run] (readRequest m [wire]))
   r.check "compressed chunks read back in 1000-byte pieces"
     (succeedsWith [run] (readRequest m (piecesOf 1000 wire)))
-  let mixed := run ++ noise 4 1000
+  -- A run fills the first chunk, and noise the second. The binding
+  -- cannot shrink the noise, so the writer keeps those bytes raw.
+  let mixed := bs (List.replicate 65536 0x61) ++ noise 4 1000
+  let mixedWire := encodePayloadB mixed
+  r.check "a run and noise give a compressed and a raw chunk"
+    (chunkKinds mixed.size mixedWire == [.compressed, .uncompressed])
   r.check "a payload of a compressed and a raw chunk reads back"
-    (succeedsWith [mixed] (readRequest m [encodePayloadB mixed runCompress]))
+    (succeedsWith [mixed] (readRequest m [mixedWire]))
+  -- A compressor error leaves the chunk raw, and the payload still reads.
+  let refuse : Compressor := fun _ => .error .inputTooLarge
+  let refusedWire := encodePayloadB run refuse
+  r.check "a compressor error gives raw chunks"
+    (chunkKinds run.size refusedWire == [.uncompressed, .uncompressed, .uncompressed])
+  r.check "raw chunks from a refused compression read back"
+    (succeedsWith [run] (readRequest m [refusedWire]))
 
 /-! ## The concurrency limit -/
 
