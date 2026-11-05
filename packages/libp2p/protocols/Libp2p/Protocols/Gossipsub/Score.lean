@@ -86,8 +86,9 @@ namespace Libp2p.Protocols.Gossipsub.Score
 /-! ## Parameters -/
 
 /-- The per-topic score parameters of gossipsub v1.1. The field order follows the topic
-parameter table of the spec. `meshMessageDeliveriesWindow` and `meshMessageDeliveriesActivation`
-feed the core's delivery accounting; `topicScore` reads only the activation. -/
+parameter table of the spec. `topicScore` reads the activation. The core stores the window
+and never reads it, so every accepted message from a mesh peer counts toward `P3`
+(`Core.lean` records the omission). -/
 structure TopicParams where
   /-- The weight of this topic in the total score. -/
   topicWeight : Int

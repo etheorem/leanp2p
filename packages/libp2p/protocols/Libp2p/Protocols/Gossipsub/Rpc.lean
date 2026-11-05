@@ -860,7 +860,6 @@ theorem roundTripPeers (p : ControlPrune) (h : ControlPrune.Valid p) :
       p'.peers = p.peers :=
   ⟨p, ControlPrune.decodeEncode p h, rfl⟩
 
-
 /-! ## The length-delimited frame step
 
 One RPC frame is a uvarint length and the message bytes, under

@@ -1603,6 +1603,7 @@ theorem scoreOf_gossipState (p : Params) (s : State) (now : Millis) (order : Lis
     (q : Peer) :
     scoreOf p (gossipState p s now order) q = scoreOf p (heartbeatNext p s now order) q := by
   simp [scoreOf, gossipState, peerOf, heartbeatNext]
+
 theorem tickPruneNegative (p : Params) (s s' : State) (acts : List Action)
     (now : Millis) (order : List Peer)
     (hdue : heartbeatDue p s now)
