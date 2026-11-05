@@ -1,0 +1,168 @@
+{
+  "_provenance": {
+    "generatedBy": "packages/libp2p/protocols/tools/go-rpc-fixtures/main.go",
+    "module": "github.com/libp2p/go-libp2p-pubsub, pb package",
+    "version": "v0.15.1-0.20260305223556-a01777894f4c",
+    "api": "proto.Marshal of pb.RPC values, then proto.Unmarshal and proto.Equal for the roundtrip field",
+    "format": "the RPC payload of one gossipsub frame, as lowercase hex; the uvarint prefix is Streams.Framing",
+    "source": "vendor/test-plans/gossipsub-interop/go-libp2p/go.mod:8 pins the module version"
+  },
+  "cases": [
+    {
+      "name": "sub-opt-subscribe",
+      "hex": "0a0e0801120a746573742d746f7069630a050800120174",
+      "fields": {
+        "subscriptions": [
+          {
+            "topicid": "test-topic",
+            "subscribe": true
+          },
+          {
+            "topicid": "t",
+            "subscribe": false
+          }
+        ]
+      },
+      "roundtrip": true
+    },
+    {
+      "name": "publish-basic",
+      "hex": "121612080001020304050607220a746573742d746f706963",
+      "fields": {
+        "publish": [
+          {
+            "topic_str": "test-topic",
+            "topic_bytes_hex": "746573742d746f706963",
+            "data_hex": "0001020304050607"
+          }
+        ]
+      },
+      "roundtrip": true
+    },
+    {
+      "name": "publish-empty-data",
+      "hex": "120c220a746573742d746f706963",
+      "fields": {
+        "publish": [
+          {
+            "topic_str": "test-topic",
+            "topic_bytes_hex": "746573742d746f706963"
+          }
+        ]
+      },
+      "roundtrip": true
+    },
+    {
+      "name": "control-graft",
+      "hex": "1a0e1a0c0a0a746573742d746f706963",
+      "fields": {
+        "control": {
+          "graft": [
+            {
+              "topic_bytes_hex": "746573742d746f706963"
+            }
+          ]
+        }
+      },
+      "roundtrip": true
+    },
+    {
+      "name": "control-prune",
+      "hex": "1a1722150a0a746573742d746f70696312050a03010203183c",
+      "fields": {
+        "control": {
+          "prune": [
+            {
+              "topic_bytes_hex": "746573742d746f706963",
+              "peers_hex_list": [
+                "010203"
+              ],
+              "backoff": 60
+            }
+          ]
+        }
+      },
+      "roundtrip": true
+    },
+    {
+      "name": "control-ihave",
+      "hex": "1a220a200a0a746573742d746f7069631208010000000000000012080200000000000000",
+      "fields": {
+        "control": {
+          "ihave": [
+            {
+              "topic_bytes_hex": "746573742d746f706963",
+              "message_ids_hex": [
+                "0100000000000000",
+                "0200000000000000"
+              ]
+            }
+          ]
+        }
+      },
+      "roundtrip": true
+    },
+    {
+      "name": "control-iwant",
+      "hex": "1a1612140a0801000000000000000a080200000000000000",
+      "fields": {
+        "control": {
+          "iwant": [
+            {
+              "message_ids_hex": [
+                "0100000000000000",
+                "0200000000000000"
+              ]
+            }
+          ]
+        }
+      },
+      "roundtrip": true
+    },
+    {
+      "name": "mixed",
+      "hex": "0a0e0801120a746573742d746f7069630a050800120174121612080001020304050607220a746573742d746f7069631a0e1a0c0a0a746573742d746f706963",
+      "fields": {
+        "subscriptions": [
+          {
+            "topicid": "test-topic",
+            "subscribe": true
+          },
+          {
+            "topicid": "t",
+            "subscribe": false
+          }
+        ],
+        "publish": [
+          {
+            "topic_str": "test-topic",
+            "topic_bytes_hex": "746573742d746f706963",
+            "data_hex": "0001020304050607"
+          }
+        ],
+        "control": {
+          "graft": [
+            {
+              "topic_bytes_hex": "746573742d746f706963"
+            }
+          ]
+        }
+      },
+      "roundtrip": true
+    },
+    {
+      "name": "unknown-fields",
+      "hex": "121612080001020304050607220a746573742d746f7069634a04deadbeef",
+      "fields": {
+        "publish": [
+          {
+            "topic_str": "test-topic",
+            "topic_bytes_hex": "746573742d746f706963",
+            "data_hex": "0001020304050607"
+          }
+        ]
+      },
+      "roundtrip": true
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import Tests.Gossipsub.Cache
 import Tests.Gossipsub.Score
 import Tests.Gossipsub.Rpc
 import Tests.Gossipsub.Node
+import Tests.Gossipsub.Wire
 import Tests.Concurrency
 import Tests.Protobuf
 import Tests.Bytes
@@ -43,6 +44,7 @@ def main : IO UInt32 := do
   Tests.Gossipsub.Score.run r
   Tests.Gossipsub.Rpc.run r
   Tests.Gossipsub.Node.run r
+  Tests.Gossipsub.Wire.run r
   Tests.Concurrency.run r
   Tests.Protobuf.run r
   Bytes.runTests r
