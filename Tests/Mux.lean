@@ -2911,6 +2911,48 @@ private def runConcurrentOpens (r : Runner) : Async Unit := do
   | .ok (), .ok () => r.check "both public sessions join after the exchange" true
   | _, _ => r.check "both public sessions join after the exchange" false
 
+/-- A reader fault through `Mux.test.open` stays the connection `IO.Error`.
+Both joins throw that same error. -/
+private def runReaderFault (r : Runner) : Async Unit := do
+  let pair ← ends 50
+  let boom := IO.userError "reader boom"
+  -- The reader parks on this gate. Closing it throws after `open` returns.
+  let gate : Chan Unit ← Chan.new 1
+  let conn : Connection := { pair.dialer with
+    read := do
+      match ← gate.recv with
+      | none => throw boom
+      | some _ => pair.dialer.read }
+  match ← (test.open .initiator conn .empty).run with
+  | .error _ =>
+    gate.close
+    pair.dialer.close
+    pair.peer.close
+    r.check "Mux.test.open returns before the reader fault" false
+    r.check "the public reader fault is the connection error" false
+    r.check "a second public join throws the same reader fault" false
+  | .ok sess =>
+    r.check "Mux.test.open returns before the reader fault" true
+    gate.close
+    let first ←
+      try
+        match ← sess.join with
+        | .ok () => pure "returned ok"
+        | .error _ => pure "returned core error"
+      catch e =>
+        pure e.toString
+    let second ←
+      try
+        match ← sess.join with
+        | .ok () => pure "returned ok"
+        | .error _ => pure "returned core error"
+      catch e =>
+        pure e.toString
+    r.check "the public reader fault is the connection error" (first == boom.toString)
+    r.check "a second public join throws the same reader fault"
+      (second == boom.toString && second == first)
+    pair.peer.close
+
 private def checks (r : Runner) : Async Unit := do
   r.check "Mux.test.id is Mux.testId" (decide (test.id = testId))
   r.check "the test protocol id is /leanp2p/test-mux/1.0.0"
@@ -2922,11 +2964,17 @@ private def checks (r : Runner) : Async Unit := do
   runClose r
   runIdRestart r
   runConcurrentOpens r
+  runReaderFault r
 
 /-- The public `Mux.test` boundary over the sim connection. -/
 def run (r : Runner) : IO Unit := do
   r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
   Async.run (checks r)
+
+/-- The public reader-fault path through `Mux.test.open`. -/
+def runFault (r : Runner) : IO Unit := do
+  r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
+  Async.run (runReaderFault r)
 
 end Tests.Mux.Public
 
