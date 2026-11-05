@@ -111,6 +111,29 @@ The shapes are §4.9's, refined where this section says so.
   decision inputs beyond these are the seam's to refine as the host
   lands (W5.6).
 
+**The policy shapes** (fixed by W5.6, as the bullet above leaves them
+to the host). The peer of an inbound connection is unknown until the
+handshake ends, so the gater and the resource manager each decide once
+more there, with the proved peer, as go-libp2p does
+(`ConnectionGater.InterceptSecured`, `vendor/go-libp2p/core/connmgr/gater.go`;
+`ResourceScope.SetPeer`, `vendor/go-libp2p/core/network/rcmgr.go`).
+
+- `ConnectionGater`: `allowDial` (the expected peer and the address,
+  before a dial), `allowInbound` (the two addresses, after an accept),
+  and `allowSecured` (the role, the proved peer, and the two
+  addresses, after the handshake and before the muxer stage). Each
+  answers a `Bool` in `BaseIO`, so a policy has no fault channel.
+- `ResourceManager.openConnection` admits a connection by its role,
+  the expected peer, and the remote address, and answers a
+  `ConnectionScope`, or `none` when it does not fit. The scope names
+  the proved peer (`setPeer`), admits streams and buffered bytes
+  (`reserveStream`, `reserveMemory`, each a `Reservation` with its
+  `release`), and returns every share at its own `release`.
+- `AddressRanker.rank` maps a peer's addresses to a dial schedule, an
+  `AddrDelay` (an address and a delay in milliseconds) each: the shape
+  of go-libp2p's `AddrDelay` and `DialRanker`
+  (`vendor/go-libp2p/core/network/network.go`, lines 212 and 218).
+
 **Test values.** §3.1 gives every seam two values from the start, the
 production value and a test value, and every suite above the
 transport runs on the test values (PRINCIPLES 1.4). The test values

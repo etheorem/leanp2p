@@ -60,6 +60,23 @@ imports it and wires it; it keeps no copy.
   output: the `MuxSession` and the verified remote `PeerId`; a pair or
   a small structure is a refinement this package fixes at
   implementation time. Errors surface as `Core.Error` (§3.5).
+- `Negotiate.upgradeWith` is the upgrade with a checkpoint after the
+  handshake and before the muxer stage: it takes `admit : PeerId →
+  BaseIO (Option ρ)` and the clock of the deadline, and answers
+  `UpgradeResult ρ`, the upgraded connection or `refused` with the
+  reason `admit` gave. The host's gater and resource manager decide
+  there, by the proved peer (the core pair, "The policy shapes"), as
+  go's upgrader calls `InterceptSecured`
+  (`vendor/go-libp2p/p2p/net/upgrader/upgrader.go`, line 176). A
+  refusal is a value, not a `Core.Error` arm (§3.5). `upgrade` is
+  `upgradeWith` with a checkpoint that admits every peer.
+- `Negotiate.negotiateStream : Role → Stream → List ProtocolId →
+  ExceptT Negotiate.Error Async (ProtocolId × Stream)` runs
+  multistream-select over one muxed stream: the responder that the
+  host's stream serving calls, and the initiator of `newStream` (the
+  host pair). The bytes it reads past the selecting message go to the
+  front of the stream (`Stream.prependBytes`, §4.7). A stream that
+  ends before a selection is `Negotiate.Error.closed`.
 
 ## The muxer-selection decision
 
