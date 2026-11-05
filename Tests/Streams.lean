@@ -433,26 +433,6 @@ private def framingChecks (r : Runner) : Async Unit := do
   r.check "the model reports a non-byte in the payload as malformed"
     (failsWith .malformed (Frame.decode? .u16be 4 [0, 2, 1, 300]))
 
-/-- Every byte array of length at most `n`, shortest first. `n = 2`
-gives 65793 arrays. -/
-private def allBytesUpTo : Nat → List ByteArray
-  | 0 => [ByteArray.empty]
-  | n + 1 =>
-    let shorter := allBytesUpTo n
-    let longest := shorter.filter (·.size == n)
-    shorter ++ longest.flatMap fun b => (List.range 256).map fun x => b.push (UInt8.ofNat x)
-
-/-- `count` pseudo-random byte arrays, each of length at most `maxLen`.
-The generator is seeded, so a failed input comes back from the seed. -/
-private def genBytesList (count maxLen : Nat) (g : StdGen) : List ByteArray × StdGen :=
-  -- `Nat.fold` passes the generator from draw to draw.
-  Nat.fold count (fun _ _ (acc, g) =>
-    let (len, g) := randNat g 0 maxLen
-    let (bytes, g) := Nat.fold len (fun _ _ (bs, g) =>
-      let (x, g) := randNat g 0 255
-      (bs.push (UInt8.ofNat x), g)) (ByteArray.emptyWithCapacity len, g)
-    (bytes :: acc, g)) ([], g)
-
 /-- The generic harness of `base/bytes` over one prefix and cap, and the
 production encoder. The answer names the failed checks.
 

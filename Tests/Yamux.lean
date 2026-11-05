@@ -129,25 +129,6 @@ private def fixedVectors : List (String × Header × List Nat) := [
     hd .data ⟨false, false, false, false, 4095⟩ 1 0,
     [0, 0, 255, 240, 0, 0, 0, 1, 0, 0, 0, 0])]
 
-/-- Every byte array of length at most 2: 65793 inputs, shortest first.
-They cover each prefix shape the header decoder can meet before its
-12-byte read. -/
-private def allBytesUpToTwo : List ByteArray :=
-  let one := (List.range 256).map fun x => ByteArray.mk #[x.toUInt8]
-  let two := (List.range 65536).map fun x => ByteArray.mk #[(x / 256).toUInt8, (x % 256).toUInt8]
-  ByteArray.empty :: one ++ two
-
-/-- `count` seeded pseudo-random byte arrays, each of length at most
-`maxLen`. A failing input reproduces from the seed. -/
-private def genBytesList (count maxLen : Nat) (g : StdGen) : List ByteArray × StdGen :=
-  Nat.fold count (fun _ _ (acc, g) =>
-    let (len, g) := randNat g 0 maxLen
-    -- `Nat.fold` threads the generator through `len` draws.
-    let (b, g) := Nat.fold len (fun _ _ (b, g) =>
-      let (x, g) := randNat g 0 255
-      (b.push x.toUInt8, g)) (ByteArray.empty, g)
-    (b :: acc, g)) ([], g)
-
 /-- The production decoder in the harness's shape: the rest of the input
 in the model view (`Bytes.checkModelPins`). -/
 private def decodeHeaderB (b : ByteArray) : Except Bytes.DecodeError (Header × List Nat) :=
@@ -172,7 +153,9 @@ private def headerHarness (g : StdGen) : Bool × StdGen :=
     let h := hd ((FrameType.ofCode? t).getD .data) ((Flags.ofBits? fl).getD Flags.none) id len
     (Header.encodeB h :: acc, g)) ([], g)
   (Bytes.checkRoundTrips samples &&
-    Bytes.checkModelPins decodeHeaderB (allBytesUpToTwo ++ encoded ++ random ++ valid), g)
+    -- Every input up to 2 bytes covers each prefix shape the decoder
+    -- can meet before its 12-byte read.
+    Bytes.checkModelPins decodeHeaderB (allBytesUpTo 2 ++ encoded ++ random ++ valid), g)
 
 private def headerChecks (r : Runner) : IO Unit := do
   for (name, h, wire) in fixedVectors do
