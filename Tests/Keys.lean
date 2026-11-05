@@ -14,6 +14,11 @@ namespace Tests
 
 open Libp2p.Identity
 
+-- Public boundaries keep the package error type, including dependency failures.
+example : Except Libp2p.Identity.Error PubKey := unmarshalPubKey? .empty
+example (key : PrivKey) : Except Libp2p.Identity.Error PubKey := derivePubKey key
+example (key : PrivKey) : ExceptT Libp2p.Identity.Error IO ByteArray := key.sign .empty
+
 private def checkEnvelope {α : Type} [Pb.ProtoMessage α]
     (r : Runner) (name : String) (bytes : ByteArray) : IO Unit := do
   match Pb.decodeMessageB? (α := α) bytes with
@@ -91,7 +96,7 @@ private def checkPublic (r : Runner) (name : String) (bytes raw : ByteArray) : I
       r.check s!"public API preserves Data {name}" (key.raw == raw)
       r.check s!"public API preserves encoding {name}" (marshalPubKey key == bytes)
       r.check s!"public construction and unmarshal encode identically {name}"
-        ((PubKey.ofData? key.keyType raw).map marshalPubKey == some bytes)
+        (succeedsWith bytes ((PubKey.ofData? key.keyType raw).map marshalPubKey))
       r.check s!"public backend Data {name}" (key.backendData == raw)
       match key.keyType with
       | .rsa =>
@@ -115,7 +120,7 @@ private def checkPrivate (r : Runner) (name : String) (bytes raw : ByteArray) : 
       r.check s!"private API preserves Data {name}" (key.raw == raw)
       r.check s!"private API preserves encoding {name}" (marshalPrivKey key == bytes)
       r.check s!"private construction and unmarshal encode identically {name}"
-        ((PrivKey.ofData? key.keyType raw).map marshalPrivKey == some bytes)
+        (succeedsWith bytes ((PrivKey.ofData? key.keyType raw).map marshalPrivKey))
       let expected := if key.keyType == .ed25519 then raw.extract 0 32 else raw
       r.check s!"private backend Data {name}" (key.backendData == expected)
       match key.keyType with
@@ -182,8 +187,8 @@ def Keys.run (r : Runner) : IO Unit := do
     let publicKey ← unhex name (← jStr "keys-rfc8032.json" entry "pubHex")
     for raw in [seed, seed ++ publicKey, seed ++ publicKey ++ publicKey] do
       match PrivKey.ofData? .ed25519 raw with
-      | none => r.check s!"RFC private key accepted {name}, length {raw.size}" false
-      | some key => checkDerivation r s!"RFC {name}, length {raw.size}" key publicKey
+      | .error _ => r.check s!"RFC private key accepted {name}, length {raw.size}" false
+      | .ok key => checkDerivation r s!"RFC {name}, length {raw.size}" key publicKey
 
   for (name, code, raw) in [
       ("31-byte Ed25519 public", 1, ByteArray.mk (Array.replicate 31 0)),
@@ -195,22 +200,30 @@ def Keys.run (r : Runner) : IO Unit := do
 
   let seed := ByteArray.mk (Array.replicate 32 1)
   let pubBytes := ByteArray.mk (Array.replicate 32 2)
-  for raw in [seed, seed ++ pubBytes, seed ++ pubBytes ++ pubBytes] do
-    r.check s!"Ed25519 accepts private length {raw.size}"
-      (PrivKey.ofData? .ed25519 raw).isSome
-  r.check "Ed25519 rejects mismatched legacy public copies"
-    (PrivKey.ofData? .ed25519 (seed ++ pubBytes ++ seed)).isNone
   r.check "Ed25519 rejects private length 63"
-    (PrivKey.ofData? .ed25519 (ByteArray.mk (Array.replicate 63 0))).isNone
+    (failsWith (.invalidKeyData .ed25519 63)
+      (PrivKey.ofData? .ed25519 (ByteArray.mk (Array.replicate 63 0))))
   r.check "secp256k1 rejects private length 31"
-    (PrivKey.ofData? .secp256k1 (ByteArray.mk (Array.replicate 31 0))).isNone
+    (failsWith (.invalidKeyData .secp256k1 31)
+      (PrivKey.ofData? .secp256k1 (ByteArray.mk (Array.replicate 31 0))))
   r.check "private RSA rejects short DER"
-    (PrivKey.ofData? .rsa (ByteArray.mk #[0x30, 0, 0, 0])).isNone
+    (failsWith (.invalidKeyData .rsa 4) (PrivKey.ofData? .rsa (ByteArray.mk #[0x30, 0, 0, 0])))
 
   r.check "public envelope requires Type"
     (isRejected (α := PubKey) (Bytes.ofNatList ([0x12, 32] ++ List.replicate 32 0)))
   r.check "private envelope requires Data"
     (isRejected (α := PrivKey) (ByteArray.mk #[0x08, 1]))
+  r.check "public unmarshal identifies missing Type"
+    (failsWith (.missingField 1) (unmarshalPubKey? .empty))
+  r.check "private unmarshal identifies missing Data"
+    (failsWith (.missingField 2) (unmarshalPrivKey? (ByteArray.mk #[8, 1])))
+  r.check "public unmarshal identifies unsupported key type"
+    (failsWith (.unknownKeyType 4) (unmarshalPubKey? (← keyEnvelope 4 seed)))
+  r.check "public unmarshal preserves protobuf framing errors"
+    (failsWith (.protobuf (.framing .truncated)) (unmarshalPubKey? (ByteArray.mk #[8])))
+  r.check "public unmarshal identifies invalid key Data"
+    (failsWith (.invalidKeyData .ed25519 31)
+      (unmarshalPubKey? (← keyEnvelope 1 (seed.extract 0 31))))
 
   r.section "key Data writers" "peer-ids.md: per-type Data forms"
   r.check "Ed25519 writer concatenates seed and public key"

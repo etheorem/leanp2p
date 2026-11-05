@@ -1,4 +1,5 @@
-import Libp2p.Identity.KeyType
+import Libp2p.Identity.Error
+import Libp2p.Identity.Marshal
 import Bytes
 import Proto
 
@@ -17,17 +18,26 @@ namespace Libp2p.Identity.Unmarshal
 
 /-- Interpret Type/Data and call the key's checked constructor.
 Unknown fields are ignored; singular fields use protobuf's last-wins lookup. -/
-def keyFields? {α : Type} (ofData? : KeyType → ByteArray → Option α)
-    (fields : Pb.Fields) : Except Pb.Error α := do
-  let some code := Pb.getVarint? 1 fields | throw .badField
-  let some keyType := KeyType.ofCode? code | throw .badField
-  let some raw := Pb.getBytes? 2 fields | throw .badField
-  let some key := ofData? keyType (Bytes.ofNatList raw) | throw .badField
-  pure key
+def keyFields? {α : Type} (ofData? : KeyType → ByteArray → Except Error α)
+    (fields : Pb.Fields) : Except Error α := do
+  let some code := Pb.getVarint? 1 fields | throw (.missingField 1)
+  let some keyType := KeyType.ofCode? code | throw (.unknownKeyType code)
+  let some raw := Pb.getBytes? 2 fields | throw (.missingField 2)
+  ofData? keyType (Bytes.ofNatList raw)
 
-/-- Decode one complete externally framed message through its `ProtoMessage` instance. -/
-def key? {α : Type} [Pb.ProtoMessage α] (bytes : ByteArray) : Except Pb.Error α := do
-  let (key, _) ← Pb.decodeMessageB? bytes
-  pure key
+/-- Decode the complete buffer, preserving the constructor's precise error. -/
+def key? {α : Type} (ofData? : KeyType → ByteArray → Except Error α)
+    (bytes : ByteArray) : Except Error α := do
+  let (fields, _) ← (Pb.decodeFieldsB? bytes).mapError Error.protobuf
+  keyFields? ofData? fields
+
+/-- Field extraction recovers the original type and bytes before validation. -/
+theorem keyFieldsRoundTrip {α : Type} (ofData? : KeyType → ByteArray → Except Error α)
+    (keyType : KeyType) (raw : ByteArray)
+    (valid : (Pb.Value.bytes (Bytes.toNatList raw)).Valid) :
+    keyFields? ofData? (Marshal.keyFields keyType raw valid) = ofData? keyType raw := by
+  simp [keyFields?, Marshal.keyFields, Pb.getVarint?, Pb.getBytes?, Pb.lookupLast,
+    List.lookup, KeyType.ofCode?_toCode, Bytes.ofNatListToNatList]
+
 
 end Libp2p.Identity.Unmarshal

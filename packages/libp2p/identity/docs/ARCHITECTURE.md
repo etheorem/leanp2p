@@ -16,6 +16,7 @@ imports it for `PeerId`, and nothing in it knows a connection (§2,
 | `Libp2p/Identity.lean` | the root module; one import line per public submodule |
 | `Libp2p/Identity/Constants.lean` | the 42-byte inlining threshold, the per-type `Data` lengths, and the DER minima; one home per fact (PRINCIPLES 1.5) |
 | `Libp2p/Identity/KeyType.lean` | the closed set (§3.4): four constructors, `toCode`/`ofCode?`, and the `ofCode?_toCode` theorem |
+| `Libp2p/Identity/Error.lean` | the package error type, preserving protobuf, crypto, and multiformats failures |
 | `Libp2p/Identity/Marshal.lean` | writers for the per-type `Data` forms, the backend byte selection, and the Type/Data protobuf field table and encoding |
 | `Libp2p/Identity/Keys.lean` | `PubKey` and `PrivKey`, their validity rules and checked constructors, the thin `ProtoMessage` instances and marshal/unmarshal entry points, and the sign/verify/derive dispatch |
 | `Libp2p/Identity/Unmarshal.lean` | protobuf decoding and field extraction; calls the checked key constructor before returning a key |
@@ -42,26 +43,33 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   protobuf payload bounds, so its `ProtoMessage` encoder is total.
   The validity rules live with the key definitions. `Unmarshal` receives
   their checked constructor as an argument; it does not repeat the rules.
+- `PubKey.ofData?` and `PrivKey.ofData?` return `Except Error`.
+  The package's `Error` distinguishes missing fields, unsupported key
+  types, invalid Data, and inconsistent public halves. Dependency errors
+  retain their original value under `protobuf`, `crypto`, or `encoding`.
+  The generic `ProtoMessage` instances use the class's `Pb.Error`:
+  wire errors remain exact, and identity validation maps to `badField`.
+  The identity unmarshal functions preserve the precise package error.
 - Sign, verify, and derive go through the `Crypto` facade (§3.6). The
   schemes are the peer-ids spec's: Ed25519 signs the raw message
   (RFC 8032), and the three DER schemes hash with SHA-256 first and
   sign over the digest: secp256k1 with BIP-62 low-S, ECDSA P-256, and
   RSA RSASSA-PKCS1-v1_5. Which schemes draw a random nonce is the
   backend's binding table (§3.6).
-- `PrivKey.sign : PrivKey → ByteArray → ExceptT Crypto.CryptoError IO ByteArray`
+- `PrivKey.sign : PrivKey → ByteArray → ExceptT Error IO ByteArray`
   preserves signing errors and carries P-256's random nonce draw. The
   deterministic schemes lift their pure result into the same surface.
   `PubKey.verify : PubKey → ByteArray → ByteArray → Bool` stays pure
   and returns false for malformed inputs, signature mismatches, and
   backend faults. Both functions pass the original message to the
   facade, which owns each scheme's hashing.
-- `derivePubKey : PrivKey → Except Crypto.CryptoError PubKey` selects
+- `derivePubKey : PrivKey → Except Error PubKey` selects
   `Crypto.ed25519PublicKey`, `Crypto.secp256k1PublicKey`,
   `Crypto.rsaPublicKey`, or `Crypto.p256PublicKey`. Ed25519 passes the
   seed and secp256k1 passes the scalar, each as `Key32` with a size
   proof from the private key. RSA and P-256 pass their stored DER.
-  The returned bytes enter through `PubKey.ofData?`; an unexpected
-  public shape is a crypto fault.
+  The returned bytes enter through `PubKey.ofData?`, which reports an
+  unexpected public shape as `invalidKeyData`.
 - The `Keys` protobuf message has the field table of the peer-ids
   spec: field 1 `Type`, a varint, and field 2 `Data`, bytes. The
   `ProtoMessage` instances live here, next to the message types
@@ -82,11 +90,13 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   points, RSA SPKI/PKCS#1 DER, and P-256 SPKI/SEC1 DER from supplied
   components. The writers do not generate or cryptographically validate
   keys. Ed25519 public bytes and secp256k1 private scalars need no
-  additional encoding. Imported `Data` is retained byte-exactly;
-  `backendData` selects the first 32 bytes of an Ed25519 private key
-  and otherwise passes the stored representation to the backend.
-  PKCS#8 import remains a DER-shell check here; the backend loader
-  owns parsing and any DER re-encoding, through the crypto facade.
+  additional encoding. Ed25519 imports normalize to 64-byte seed‖public
+  envelopes. Construction derives the public half and checks any supplied
+  copies against it. P-256 imports normalize to SEC1 through
+  `Crypto.p256Sec1`; RSA requires PKCS#1 through `Crypto.rsaPkcs1`.
+  This makes exported private keys readable by go-libp2p's loaders.
+  `backendData` selects the Ed25519 seed and otherwise passes stored Data.
+  The backend owns DER parsing and re-encoding through the facade.
 - `PeerId` is a validated multihash (§3.7): the peer-ids shape over
   the marshaled public key. A marshaled key of at most 42 bytes
   inlines as an identity multihash, so every Ed25519 id is a
@@ -122,21 +132,25 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
    with minimal varints, and `codec/proto` makes that deterministic
    by construction (`codec/proto` docs). The suite marshals one key
    of each type twice and asserts the bytes are equal.
+   `Unmarshal.keyFieldsRoundTrip`, `PubKey.ofFieldsToFields`, and
+   `PubKey.decodeEncode` prove field extraction and the public-key
+   round trip over the protobuf byte model in the kernel.
 2. **Strict unmarshal before derivation.** A `Data` length that does
    not fit the key type is a rejection, before any id derives from
    the key (§4.9, §5.2; PRINCIPLES 2.4). The spike records the
    reason: a truncated key would still derive a well-formed but bogus
    peer id. The public table demands 32 bytes for Ed25519 and 33 for
-   secp256k1, so a 31-byte Ed25519 key cannot derive an id. The
+   secp256k1, with SEC1 prefix `0x02` or `0x03`. A 31-byte Ed25519 key
+   cannot derive an id. The
    private table demands 32, 64, or 96 bytes for Ed25519 and 32 for
    secp256k1. The two public-key copies of a legacy 96-byte Ed25519
    private key must agree before construction, per the peer-ids spec.
-   A DER-shaped key type passes only a DER shell: at
-   least 8 bytes, a leading `0x30`. The content rules stay in the
-   verifier behind the facade, RSA 2048 to 8192 bits and secp256k1
-   low-S among them (§4.6); identity checks the shell, and the
-   verifier checks the key (the RSA rules: the backend pair,
-   contracts 2 and 4).
+   Every supplied Ed25519 public half must also match the seed's
+   derived public key. Public DER passes a shell check: at least
+   8 bytes and a leading `0x30`. Private DER crosses the backend's
+   loader at construction, before the normalized export is stored.
+   The backend retains the RSA 2048 to 8192 bit rule. Verifiers own
+   signature checks, including secp256k1 low-S (§4.6).
 3. **Identity inlining follows the spec threshold.** The 42-byte
    threshold sits in `Constants.lean` as the one home of the number.
    A key at the threshold inlines; a key one byte over hashes (§4.9).
@@ -200,10 +214,10 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   and the package's own error mapping, with no second RLP. The
   recorded fallback, should the upstream not land in time or the
   skew not close, is the package's own small RLP.
-- **The strictness depth stops at the DER shell.** A full DER parse
-  here would duplicate the backend's parser, and two parsers drift.
-  The shell check is enough to gate the id derivation; the verifier
-  already refuses a key whose DER content is wrong (§4.6).
+- **DER parsing stays behind the facade.** Public keys pass a shell
+  check before peer-id derivation. Private keys use the backend loader
+  to validate and export the required form at construction. Identity
+  carries no second DER parser (§4.6).
 
 ## What the package must not depend on
 

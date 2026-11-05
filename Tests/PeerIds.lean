@@ -16,7 +16,7 @@ namespace Tests.PeerIds
 
 open Libp2p.Identity Multiformats
 
-private def rejected {α : Type} : Except PeerId.Error α → Bool
+private def rejected {α : Type} : Except Libp2p.Identity.Error α → Bool
   | .error _ => true
   | .ok _ => false
 
@@ -79,8 +79,8 @@ def run (r : Runner) : IO Unit := do
   for (rawSize, code) in [(38, HashCode.identity), (39, HashCode.«sha2-256»)] do
     let raw := ByteArray.mk (#[0x30] ++ Array.replicate (rawSize - 1) 0)
     match PubKey.ofData? .rsa raw with
-    | none => r.check s!"boundary key is accepted {rawSize}" false
-    | some key =>
+    | .error _ => r.check s!"boundary key is accepted {rawSize}" false
+    | .ok key =>
         r.check s!"boundary envelope size {rawSize}" ((marshalPubKey key).size == rawSize + 4)
         match PeerId.ofPublicKey key with
         | .error error => r.check s!"boundary derives {rawSize}: {repr error}" false

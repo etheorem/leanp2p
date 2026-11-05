@@ -34,13 +34,6 @@ inductive TextForm where
   | cid (text : String)
   deriving DecidableEq, Repr
 
-/-- Keep dependency failures distinct from peer-specific shape rejections. -/
-inductive Error where
-  | encoding (error : Multiformats.Error)
-  | crypto (error : Crypto.CryptoError)
-  | invalidMultihash | invalidCid | textTooLong
-  deriving BEq, DecidableEq, Repr
-
 end PeerId
 
 /-- A checked peer multihash, with the representation chosen at its boundary.
