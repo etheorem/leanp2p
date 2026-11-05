@@ -23,16 +23,18 @@ same node code ran under both muxers in-process and over loopback TCP
 | `Libp2p/Mux/Mplex.lean` | the mplex message codec and `Mux.mplex` (P2, §8); the spike reference is `Conn/Mplex.lean` (§10 row 15, §7 row 10). Planned |
 | `Libp2p/Mux/Test.lean` | `Mux.test : Muxer`, the independent test session under `Mux.testId`. Planned |
 | `Libp2p/Mux/Test/Wire.lean` | the private header, frame, and incremental parser. Present. Internal, and tests import it directly |
-| `Libp2p/Mux/Mock/Core.lean` | the temporary `ProtocolId` used until W5.2. Present. Isolated, and deleted when `Libp2p.Core` lands |
+| `Libp2p/Mux/Mock/Core/ProtocolId.lean` | the temporary `ProtocolId`. Present. `Constants.lean` imports only this module, so the constants stay free of `Conc` and `Streams` |
+| `Libp2p/Mux/Mock/Core.lean` | the temporary `Role`, `Error`, `Muxer`, and `MuxSession` that let W5.4 compile before W5.2. Present. The public root does not import it |
 
 Public declarations live in the `Libp2p.Mux` namespace, and the root
 module re-exports the public submodules. The private wire declarations
 live in `Libp2p.Mux.Test.Wire`.
 
 `Libp2p/Mux.lean`, `Libp2p/Mux/Constants.lean`,
-`Libp2p/Mux/Mock/Core.lean`, and `Libp2p/Mux/Test/Wire.lean` are in
-the tree. `Yamux.lean`, `Mplex.lean`, and `Test.lean` are the remaining
-modules of this package.
+`Libp2p/Mux/Mock/Core/ProtocolId.lean`, `Libp2p/Mux/Mock/Core.lean`,
+and `Libp2p/Mux/Test/Wire.lean` are in the tree. `Yamux.lean`,
+`Mplex.lean`, and `Test.lean` are the remaining modules of this
+package.
 
 ## Public surface
 
@@ -75,8 +77,15 @@ terminal state, admission gates, and scheduling state are private.
 They do not appear in public Lean declarations.
 
 Temporary W5.2 types live only under `Libp2p/Mux/Mock/`.
-`Mock/Core.lean` holds `ProtocolId`. The package deletes that mock
-when `Libp2p.Core` lands. The private test protocol is not part of
+`Mock/Core/ProtocolId.lean` holds `ProtocolId`, and `Constants.lean`
+imports that module alone. `Mock/Core.lean` holds `Role`, `Error`,
+`Muxer`, and `MuxSession`, so this package can compile before W5.2.
+The four error arms are the categories in the core architecture.
+Each arm carries a `String` as a provisional rendered payload.
+`MuxSession.join` is the provisional name of the completion the owner
+joins. W5.2 has not landed these declarations. When it lands, delete
+both mock modules. The imports then move to the `Libp2p.Core` modules
+that own the same names. The private test protocol is not part of
 the mock.
 
 ### Private frame

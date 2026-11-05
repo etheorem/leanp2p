@@ -1,4 +1,4 @@
-import Libp2p.Mux.Mock.Core
+import Libp2p.Mux.Mock.Core.ProtocolId
 
 /-!
 # The constants of `libp2p/mux`
@@ -7,9 +7,10 @@ Each fact has one home (ARCHITECTURE §3.8). This module holds the
 three protocol ids and the mplex length cap. The production
 definitions of the ids live only here (§3.4).
 
-`ProtocolId` is the temporary copy in `Libp2p.Mux.Mock.Core`. W5.2
-has not merged, so the real `Libp2p.Core.ProtocolId` is not on this
-branch. When W5.2 lands, this import becomes `Libp2p.Core`. The four
+`ProtocolId` is the temporary copy in
+`Libp2p.Mux.Mock.Core.ProtocolId`. This module imports that file
+alone, so the constants do not import the session seam. W5.2 has not
+merged. When W5.2 lands, this import becomes `Libp2p.Core`. The four
 public names stay.
 -/
 
