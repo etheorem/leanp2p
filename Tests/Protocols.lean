@@ -210,6 +210,26 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
           (stored == [addr])
     tc.close
 
+  -- identify: the push sender announces the record and the receiver stores it
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let store ← Mock.Host.inMemory
+    let key : PubKey := ⟨.ed25519, [7, 8]⟩
+    let pid : PeerId := peerIdOfPubKey key
+    let addr := [4, 127, 0, 0, 1, 6, 138, 43]
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      runHandler (Identify.pushHandler store pid tc.clock 1000) pair.b
+    let sent ← Identify.pushTo key [addr] [] none "" none pair.a
+    ts.joinAll
+    let stored ← store.addrsOf pid
+    r.check "identify e2e push sender announces the record"
+      ((match sent with
+        | Except.ok _ => true
+        | Except.error _ => false) && stored == [addr])
+    tc.close
+
   -- identify: the client rejects an over-cap frame before the body
   do
     let pair ← mkPair
