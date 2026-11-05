@@ -137,16 +137,37 @@ private def probe (sw : Switch) (me : Peer) (seen : Chan Seen) : Async HostSeam 
         | _ => pure () } : BaseIO Unit)
   return seam
 
-/-- Open a stream, write the chunks one by one, and half-close it. -/
-private def send (seam : HostSeam) (to : Peer) (chunks : List (List Nat)) :
+/-- Open a stream, and write the chunks one by one. The stream stays open. -/
+private def sendOpen (seam : HostSeam) (to : Peer) (chunks : List (List Nat)) :
     Async (Option Streams.Stream) := do
   match ← seam.newStream to [Constants.meshsubId] with
   | .error _ => return none
   | .ok (_, stream) =>
     for chunk in chunks do
       discard <| stream.write (Bytes.ofNatList chunk)
-    stream.close
     return some stream
+
+/-- Open a stream, write the chunks one by one, and half-close it. -/
+private def send (seam : HostSeam) (to : Peer) (chunks : List (List Nat)) :
+    Async (Option Streams.Stream) := do
+  let stream? ← sendOpen seam to chunks
+  if let some stream := stream? then
+    stream.close
+  return stream?
+
+/-- True when the handlers of the task set fail while the stream stays open,
+so the bytes alone made them fail. The expiry resets the stream, and the reset
+wakes a handler that still reads. -/
+private def failsOnOpenStream (ts : TaskSet) (stream? : Option Streams.Stream) : Async Bool := do
+  let some stream := stream? | return false
+  -- The expiry step of `withinDeadline` is `BaseIO` and the reset is `Async`, so
+  -- the reset runs as a task with an owner of its own.
+  let waker ← (TaskSet.new : BaseIO TaskSet)
+  let answer ← withinDeadline Clock.system patience (waker.spawn stream.reset) (joinFails ts)
+  waker.joinAll
+  return match answer with
+    | .ok failed => failed
+    | .error _ => false
 
 private def isGraftOf (t : TopicId) (rpc : Rpc.RPC) : Bool :=
   rpc.control.any (fun c => c.graft.any (fun g => g.topicId == t.name))
@@ -305,8 +326,8 @@ private def handlerChecks (r : Tests.Runner) : Async Unit := do
   r.check "node.handler.setup" (← settle tc 3)
   -- A length over the cap: the handler fails before any body arrives.
   let overCap := Streams.Framing.encodeLength .uvarint (Constants.rpcCap + 1)
-  let stream? ← send seamA pb [overCap]
-  r.check "node.handler.over-cap-fails" (← joinFails tasksB)
+  let stream? ← sendOpen seamA pb [overCap]
+  r.check "node.handler.over-cap-fails-on-the-prefix" (← failsOnOpenStream tasksB stream?)
   match stream? with
   | none => r.check "node.handler.over-cap-resets" false
   | some stream =>
@@ -314,8 +335,8 @@ private def handlerChecks (r : Tests.Runner) : Async Unit := do
     r.check "node.handler.over-cap-resets"
       (match written with | .error .closed => true | _ => false)
   -- A prefix that never ends.
-  discard <| send seamA pb [List.replicate 12 0x80]
-  r.check "node.handler.long-prefix-fails" (← joinFails tasksB)
+  let longPrefix? ← sendOpen seamA pb [List.replicate 12 0x80]
+  r.check "node.handler.long-prefix-fails" (← failsOnOpenStream tasksB longPrefix?)
   -- The stream ends inside a frame.
   discard <| send seamA pb [Streams.Framing.encodeLength .uvarint 5 ++ [1]]
   r.check "node.handler.end-inside-a-frame-fails" (← joinFails tasksB)
@@ -484,6 +505,45 @@ private def trickleSpread (r : Tests.Runner) : Async Unit := do
      | _, _ => false)
   teardown sw [n] [tc]
 
+/-- The receivers of the IHAVE sends of one heartbeat, in send order, when both
+sends come due in one pass of the loop. -/
+private def gossipOrder (spread : Nat → Millis) : Async (List Peer) := do
+  let sw ← (Switch.new : BaseIO Switch)
+  let tc ← (TestClock.new : BaseIO TestClock)
+  let seen : Chan Seen ← (Chan.new 16 : BaseIO (Chan Seen))
+  discard <| probe sw pc seen
+  discard <| probe sw pd seen
+  let (seam, _) ← (sw.host pa : BaseIO (HostSeam × TaskSet))
+  let opened : OnceRef (List Peer) ← (OnceRef.new [] : BaseIO (OnceRef (List Peer)))
+  let recording : HostSeam :=
+    { seam with
+      newStream := fun peer protocols => do
+        (opened.update (· ++ [peer]) : BaseIO Unit)
+        seam.newStream peer protocols }
+  let n ← (start recording (configOn tc gossipParams spread) : BaseIO Node)
+  discard (n.subscribe ta (fun _ => pure ()) : BaseIO Bool)
+  discard (n.peerJoined pc .meshsub : BaseIO Bool)
+  discard (n.peerJoined pd .meshsub : BaseIO Bool)
+  discard (n.publish ta (Bytes.ofNatList [1]) : BaseIO Bool)
+  discard <| settle tc 5
+  (tc.advance gossipParams.heartbeatInterval : BaseIO Unit)
+  discard <| settle tc 1
+  (tc.advance 20 : BaseIO Unit)
+  -- The pass that sends both arms the timer of the next heartbeat after them.
+  discard <| settle tc 1
+  let order ← (opened.get : BaseIO (List Peer))
+  teardown sw [n] [tc]
+  -- The first two streams carried the hellos.
+  return order.drop 2
+
+/-- Two sends that come due in one pass leave in the order of their due times,
+whatever the order of the heartbeat that made them. -/
+private def trickleOrder (r : Tests.Runner) : Async Unit := do
+  let rising ← gossipOrder (fun i => (i + 1) * 10)
+  let falling ← gossipOrder (fun i => 20 - i * 10)
+  r.check "node.trickle.two-sends-in-one-pass" (rising.length == 2)
+  r.check "node.trickle.due-time-orders-the-sends" (rising == falling.reverse)
+
 /-- The production clock: a real heartbeat sends the graft, and `stop` wakes a
 loop that parks on a real timer. `Config` defaults to this clock. -/
 private def systemClock (r : Tests.Runner) : Async Unit := do
@@ -638,6 +698,7 @@ def run (r : Tests.Runner) : IO Unit := do
     sendChecks r
     tickGrafts r
     trickleSpread r
+    trickleOrder r
     systemClock r
     callbackOrder r
     fullQueue r
