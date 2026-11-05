@@ -221,13 +221,16 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     let ts ← Conc.TaskSet.new
     ts.spawn do
       runHandler (Identify.pushHandler store pid tc.clock 1000) pair.b
-    let sent ← Identify.pushTo key [addr] [] none "" none pair.a
+    let sent ← Identify.pushTo key [addr] [] none "" none
+      { pair.a with close := pair.ab.close }
     ts.joinAll
+    let ended ← pair.b.read
     let stored ← store.addrsOf pid
     r.check "identify e2e push sender announces the record"
       ((match sent with
         | Except.ok _ => true
         | Except.error _ => false) && stored == [addr])
+    r.check "identify e2e push sender half-closes the stream" (isOkNone ended)
     tc.close
 
   -- identify: the client rejects an over-cap frame before the body

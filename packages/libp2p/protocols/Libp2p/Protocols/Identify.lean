@@ -15,7 +15,7 @@ import Libp2p.Protocols.Constants
 The pure half of `/ipfs/id/1.0.0`: the `Identify` message with its
 `ProtoMessage` instance, the strict field table, the validate, the
 table theorems, and `clientCore` with its theorems. The IO half: the
-responder, the client, and the push handler.
+responder, the client, the push handler, and the push sender.
 
 The wire shape comes from go-libp2p v0.50.0 `identify.pb.go`: fields
 1, 2, 3, 4, 5, 6, and 8. Field 8 is the signed peer record. The emit
@@ -486,7 +486,7 @@ def client (s : Streams.Stream) (clock : Conc.Clock) (timeoutMs : Nat)
   | .ok (.ok (some payload)) => return (some <$> validate payload expected)
 
 /-- The one map from this protocol's error into the coarse core error.
-`pushHandler` and `respondTo` call it at the seam. -/
+`pushHandler` and `writeRecord` call it at the seam. -/
 def mapIdentifyError : Error → Mock.Core.Error
   | .stream e => Mock.Core.mapStreamError e
   | .timeout => .timeout "identify: the deadline expired"
@@ -531,7 +531,7 @@ private def writeRecord (key : Mock.Identity.PubKey) (addrs : List (List Nat))
   | .ok msg =>
       match Streams.Framing.encodeB? .uvarint Constants.identifyCap
           (Pb.encodeMessageB msg) with
-      | none => return .error (.protocol "the identify response exceeds the cap")
+      | none => return .error (.protocol "the identify record exceeds the cap")
       | some frame =>
           match ← s.write frame with
           | .error e => return .error (Mock.Core.mapStreamError e)
@@ -550,12 +550,13 @@ def respondTo (key : Mock.Identity.PubKey) (addrs : List (List Nat))
 /-- The push sender: announce this peer's record on the stream that the
 host opened under `pushId`, then half-close.
 
-The host owns the schedule. Go's identify service subscribes to
-`EvtLocalAddressesUpdated` and `EvtLocalProtocolsUpdated` and pushes
-one record per event (the spike's `vendor/go-libp2p/p2p/protocol/identify/id.go`,
-the `loop` and `sendPushes` functions). This package sends one record
-per call and starts no timer, so the host decides when the local record
-changed. -/
+The host calls the sender after the local address set or the local
+protocol set changes. Go's identify service skips a push when the
+snapshot did not change, merges pending pushes into one round, and
+skips a connection that already carries the current record (the
+spike's `vendor/go-libp2p/p2p/protocol/identify/id.go`, the `loop` and
+`sendPushes` functions). This package sends one record per call and
+starts no timer. -/
 def pushTo (key : Mock.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat) := none) (s : Streams.Stream) :
