@@ -42,13 +42,15 @@ updateGet (root ARCHITECTURE §4.1). Only the first stop caller joins.
   slots. One writer task owns that peer's stream. A full queue drops the
   frame, as go does for a full peer queue. Node.dropped reports these drops.
   Actions return the next pending list, and the loop assigns that answer.
-- **The spread index counts sends within each heartbeat.** Config describes
-  this index, while the brief's loop sketch increments it once per tick.
-  Each delayed send gets its own index, and the next heartbeat starts at 0.
-- **A refused subscribe removes its callback.** The cell changes before the
-  post, so a refused post removes that registration by its unique id.
-- **The queue carries Core.Event directly.** The loop owns all delayed sends,
-  so no external sender needs the brief's unused send message constructor.
+- **Delayed gossip has a bound.** At most 256 sends wait in the pending list.
+  Overflow drops the newest excess sends and adds to Node.dropped. Due sends
+  leave before the tick shifts the message cache. The delay index increases
+  across the run. Config.order hashes the heartbeat count with peer bytes.
+- **A successful subscribe registers its callback.** The event post comes
+  first, and a refused post leaves no callback. Subscriptions use atomic
+  updates and preserve registration order.
+- **The handler announces its opener.** It posts peerJoined before reading
+  frames, so the first RPC reaches a known peer. Repeat joins are no-ops.
 - **No signer.** The core validates with `strictNoSign` (`Core.validationOk`),
   which requires `from` and `seqno` to be absent. So `publish` signs nothing
   and never writes the peer id of the node.
@@ -59,7 +61,7 @@ updateGet (root ARCHITECTURE §4.1). Only the first stop caller joins.
   only when a peer joins. The core emits nothing for a subscribe after the
   join, so that peer would never learn the topic. The go implementation
   announces a change in its host registry, outside the router. The loop
-  does the same with `subOptRpc`, after the core step.
+  does the same with subOptRpc, before the core step.
 - **The default gossip delay is zero.** The pinned go router enqueues IHAVEs
   in emitGossip (gossipsub.go, lines 2007 to 2076). Its flush sends them at
   once (lines 2078 to 2092). The random sleep in announceRetry belongs to a
@@ -87,9 +89,6 @@ updateGet (root ARCHITECTURE §4.1). Only the first stop caller joins.
   exposes the sender and unframed body before that step. The observer can
   decode the body to log every message. The default hook decodes nothing.
   Frame errors fail the handler before they reach the observer.
-- **The host posts `peerJoined` before it serves a stream of that peer.** The
-  core ignores an RPC from an unknown peer (`Core.rpcStep`), so an earlier
-  stream loses its RPC.
 - **A send failure has no sink.** The send retires the stream, and the mock host has
   no failure log. The host reports stream failures at integration.
 -/
@@ -105,6 +104,12 @@ one second. The multiplier is prime, so the delays do not repeat with a short
 period. Config.trickle defaults to zero. -/
 def spread (i : Nat) : Millis := (i * 7919 + 1) % 1000
 
+/-- Replayable peer order for a heartbeat. The hash combines its counter
+with each peer's identity bytes. The loop supplies only known peers. -/
+def defaultOrder (tick : Nat) (peers : List Peer) : List Peer :=
+  let key (peer : Peer) : UInt64 := mixHash (hash tick) (hash peer.bytes)
+  peers.mergeSort (fun a b => key a ≤ key b)
+
 /-- The configuration of one node: the router parameters, the clock the
 loop reads, and the spread of the heartbeat gossip. -/
 structure Config where
@@ -115,6 +120,8 @@ structure Config where
   /-- The delay of the `i`-th gossip send of one heartbeat, in milliseconds.
   The caller fixes it, so a test gets exact times. -/
   trickle : Nat → Millis := fun _ => 0
+  /-- Replayable peer order for the numbered heartbeat. -/
+  order : Nat → List Peer → List Peer := defaultOrder
   /-- Called for every inbound RPC with its sender and its bytes, before the
   core sees them. A harness reads it to log each received message, including
   a duplicate. It runs on the loop task, so it must not park. -/
@@ -143,7 +150,7 @@ structure Node where
   field runs in `Async` because a join parks, and a parked `BaseIO` action would
   hold a thread. A second call does nothing. -/
   stop : Conc.Async Unit
-  /-- The number of refused outbound frames. -/
+  /-- Frames dropped at the peer queue or pending-gossip bound. -/
   dropped : BaseIO Nat
 
 /-! ## One outbound RPC -/
@@ -258,6 +265,10 @@ joins this handler task. -/
 def handler (events : Conc.Chan Input) : Mock.Core.StreamHandler where
   id := Constants.meshsubId
   handle peer stream := ExceptT.mk do
+    -- The opener joins before its first RPC. Repeat joins are loop no-ops.
+    if let .error _ ← events.send (.event (.peerJoined peer .meshsub)) then
+      stream.close
+      return .ok ()
     let answer ← readFrames events peer stream ByteArray.empty ByteArray.empty 0
     match answer with
     | .ok () => stream.close
@@ -266,10 +277,8 @@ def handler (events : Conc.Chan Input) : Mock.Core.StreamHandler where
 
 /-! ## The subscription table -/
 
-/-- One delivery callback, with the id that lets `subscribe` take it back. -/
+/-- One delivery callback. -/
 private structure Subscription where
-  /-- The id of this registration. -/
-  id : Nat
   /-- The topic. -/
   topic : TopicId
   /-- The callback. -/
@@ -277,8 +286,6 @@ private structure Subscription where
 
 /-- The shared table of the callbacks, in registration order. -/
 private structure Subscriptions where
-  /-- The next free id. -/
-  next : Nat
   /-- The callbacks. -/
   entries : List Subscription
 
@@ -354,15 +361,19 @@ private structure LoopState where
   pending : List Pending
   /-- The time of the next heartbeat. -/
   nextTick : Millis
+  /-- The heartbeat count used for the peer order. -/
+  ticks : Nat
+  /-- The next run-wide delayed gossip index. -/
+  gossipIndex : Nat
 
 /-- Run the actions of one core step, in order, and answer the delayed
 sends. `gossipAt` is the time of the tick when a tick made the actions. The
 `i`-th IHAVE send of that tick waits for `trickle i` milliseconds, and every
 other action runs now. -/
-private def perform (env : Env) (gossipAt : Option Millis)
-    (actions : List Core.Action) : BaseIO (List Pending) := do
+private def perform (env : Env) (gossipAt : Option Millis) (index : Nat)
+    (actions : List Core.Action) : BaseIO (List Pending × Nat) := do
   let mut delayed : Array Pending := #[]
-  let mut gossipIndex := 0
+  let mut gossipIndex := index
   for action in actions do
     match action with
     | .deliver m => (deliver env.subs m : BaseIO Unit)
@@ -379,26 +390,7 @@ private def perform (env : Env) (gossipAt : Option Millis)
         else
           enqueue env to rpc
       | none => enqueue env to rpc
-  return delayed.toList
-
-/-- One core step, then its actions. Only an RPC that does not decode makes
-the core answer `.error`. That answer keeps the state, and the loop runs on. -/
-private def stepAndAct (env : Env) (st : LoopState) (event : Core.Event) : BaseIO LoopState := do
-  if let .rpc peer bytes := event then
-    (env.config.onRpc peer bytes : BaseIO Unit)
-  let st ← match event with
-    | .peerLeft peer => do
-      removePeer env peer
-      pure { st with pending := st.pending.filter (fun p => p.peer != peer) }
-    | _ => pure st
-  match Core.step env.config.params st.router event with
-  | .error (.decode _) => return st
-  | .ok (router, actions) =>
-    let gossipAt := match event with
-      | .tick now _ => some now
-      | _ => none
-    let delayed ← perform env gossipAt actions
-    return { st with router, pending := st.pending ++ delayed }
+  return (delayed.toList, gossipIndex)
 
 /-- Tell every known peer about a subscription change (module doc). -/
 private def announce (env : Env) (st : LoopState) (event : Core.Event) :
@@ -412,6 +404,31 @@ private def announce (env : Env) (st : LoopState) (event : Core.Event) :
       enqueue env peer rpc
   return st
 
+/-- One core step, then its actions. Only an RPC that does not decode makes
+the core answer `.error`. That answer keeps the state, and the loop runs on. -/
+private def stepAndAct (env : Env) (st : LoopState) (event : Core.Event) : BaseIO LoopState := do
+  if let .peerJoined peer _ := event then
+    if (Core.peerOf st.router peer).isSome then return st
+  let st ← announce env st event
+  if let .rpc peer bytes := event then
+    (env.config.onRpc peer bytes : BaseIO Unit)
+  let st ← match event with
+    | .peerLeft peer => do
+      removePeer env peer
+      pure { st with pending := st.pending.filter (fun p => p.peer != peer) }
+    | _ => pure st
+  match Core.step env.config.params st.router event with
+  | .error (.decode _) => return st
+  | .ok (router, actions) =>
+    let gossipAt := match event with
+      | .tick now _ => some now
+      | _ => none
+    let (delayed, gossipIndex) ← perform env gossipAt st.gossipIndex actions
+    let all := st.pending ++ delayed
+    let overflow := all.length - 256
+    if 0 < overflow then env.drops.update (· + overflow)
+    return { st with router, gossipIndex, pending := all.take 256 }
+
 /-- The next wake is the first due send or the next heartbeat. -/
 private def dueOf (st : LoopState) : Millis :=
   st.pending.foldl (fun due p => Nat.min due p.due) st.nextTick
@@ -423,8 +440,9 @@ private def onWake (env : Env) (st : LoopState) (now : Millis) : BaseIO LoopStat
     enqueue env p.peer p.rpc
   let st := { st with pending := later }
   if st.nextTick ≤ now then
-    let st ← stepAndAct env st (.tick now (st.router.peers.map (·.1)))
-    return { st with nextTick := now + env.config.params.heartbeatInterval }
+    let order := env.config.order st.ticks (st.router.peers.map (·.1))
+    let st ← stepAndAct env st (.tick now order)
+    return { st with nextTick := now + env.config.params.heartbeatInterval, ticks := st.ticks + 1 }
   return st
 
 /-- Run the core through one receive park. Each action returns its state.
@@ -439,7 +457,6 @@ private def loop (env : Env) (st0 : LoopState) : Conc.Async Unit := do
     | some (.wake now) => st ← (onWake env st now : BaseIO LoopState)
     | some (.event e) =>
       st ← (stepAndAct env st e : BaseIO LoopState)
-      st ← (announce env st e : BaseIO LoopState)
     (env.alarm.set (dueOf st) : BaseIO Unit)
   (env.alarm.close : BaseIO Unit)
   for (_, ob) in ← (env.outbound.get : BaseIO (List (Peer × Outbound))) do
@@ -474,7 +491,7 @@ the back-pressure to the peer, and it refuses a `BaseIO` post of the
 application. -/
 def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
   let now ← config.clock.nowMs
-  let subs : Conc.OnceRef Subscriptions ← Conc.OnceRef.new { next := 0, entries := [] }
+  let subs : Conc.OnceRef Subscriptions ← Conc.OnceRef.new { entries := [] }
   let events : Conc.Chan Input ← Conc.Chan.new 64
   host.setHandler (handler events)
   let tasks ← Conc.TaskSet.new
@@ -486,7 +503,9 @@ def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
   tasks.spawn <| loop { host, config, subs, events, alarm, tasks, outbound, closing, drops }
     { router := initialState config.params now
       pending := []
-      nextTick := now + config.params.heartbeatInterval }
+      nextTick := now + config.params.heartbeatInterval
+      ticks := 0
+      gossipIndex := 0 }
   let post : Core.Event → BaseIO Bool := fun e => do
     if ← closing.get then return false
     events.trySend (.event e)
@@ -494,15 +513,8 @@ def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
     publish := fun topic payload => post (.publish (messageOf topic payload))
     subscribe := fun topic callback => do
       if ← closing.get then return false
-      -- The cell changes first, so a delivery after the event finds the
-      -- callback. A refused event takes this one registration back.
-      let id ← subs.updateGet fun s =>
-        (s.next,
-          { next := s.next + 1
-            entries := s.entries ++ [{ id := s.next, topic, callback }] })
       let sent ← post (.subscribe topic)
-      if !sent then
-        subs.update fun s => { s with entries := s.entries.filter (fun e => e.id != id) }
+      if sent then subs.update fun s => { entries := s.entries ++ [{ topic, callback }] }
       return sent
     unsubscribe := fun topic => do
       if ← closing.get then return false
