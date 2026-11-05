@@ -923,8 +923,6 @@ theorem decodeFrame?Truncated (bytes : List Nat)
 /-- The rpc cap fits the uvarint prefix. -/
 theorem rpcCapLeMaxLen :
     Constants.rpcCap ≤ Streams.Framing.Prefix.maxLen .uvarint := by
-  simp only [Constants.rpcCap, Streams.Framing.Prefix.maxLen,
-    Streams.Mock.Varint.maxBytes]
   decide
 
 /-- The frame steps are inverse for a valid RPC under the cap. -/
