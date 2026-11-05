@@ -4,6 +4,7 @@ import Tests.Concurrency
 import Tests.Protobuf
 import Tests.Bytes
 import Tests.Varint
+import Tests.Snappy
 import Tests.Streams
 import Tests.Backend
 import Tests.HazmatPins
@@ -30,6 +31,7 @@ def main : IO UInt32 := do
   Tests.Protobuf.run r
   Bytes.runTests r
   Tests.Varint.run r
+  Tests.Snappy.run r
   Tests.Streams.run r
   Tests.Backend.run r
   Tests.HazmatPins.run r

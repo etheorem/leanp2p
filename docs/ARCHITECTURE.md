@@ -88,11 +88,16 @@ forms (the SEC1/SPKI/PKCS#1 choices and the key-type protobuf) belong
 to `libp2p/identity`. `crypto/backend` exposes only the primitives
 (§4.6).
 
-The repository is one Lake package. Each leaf is one `lean_lib`, and
-the `Crypto` facade is one more, rooted at the group directory (§3.6).
-If external users appear, a later mechanical move can split the
-packages into separate repositories. Until then, version skew is a
-bigger risk than coupling.
+The repository has one primary Lake package. Each leaf is one `lean_lib`,
+with `Crypto` as another library rooted at the group directory (§3.6).
+When `lakefile.toml` cannot express a native target
+(`docs/PRINCIPLES.md` §4.2), a leaf may keep one small package-local Lake
+helper. The root requires it by path. The helper builds only that leaf's
+native artifacts, exposes no public Lean API, and shares the repository's
+version boundary. The leaf retains the public API, and the root
+`lakefile.toml` remains authoritative. If external users appear, a later
+mechanical move can split the packages into separate repositories. Until
+then, version skew is a bigger risk than coupling.
 
 **What `cli/` is for.** `cli/` holds everything whose job ends at
 `main`: executable entry points, command-line and config parsing, and
@@ -367,7 +372,7 @@ A function fails in exactly one of three ways, and its type says which:
 |---|---|---|
 | protocol failure | `Except E α`, `E` an inductive the package owns | the peer, or our own input, broke the spec |
 | end of stream | `Option α` from a read, `none` | the peer finished; an orderly event |
-| fault | `IO.Error`, thrown | the system failed: a socket error, an allocation failure, an FFI fault |
+| fault | `IO.Error`, thrown | the system failed: a socket error, a recoverable allocation failure, an FFI fault |
 
 Rules:
 
@@ -419,6 +424,16 @@ type of each binding states what the C function does:
 - Every `ByteArray` argument is borrowed (`@&`). The Lean side checks
   sizes into proof-carrying newtypes (§3.7) before the call, so the
   shim validates nothing twice.
+
+**Runtime allocation exhaustion.** Recoverable allocation failures in
+`IO` or `Async` remain `IO.Error` (§3.5). A pure deterministic binding
+has no such channel. If the Lean runtime allocator is exhausted or a
+native scratch allocation fails, the shim follows Lean's non-returning
+out-of-memory behavior. A failed scratch allocation calls
+`lean_internal_panic_out_of_memory`.
+Exhaustion is neither a protocol failure nor an input failure, and the
+shim must not encode it as success or as a package-owned error. Every
+ordinary return still satisfies the purity contract above.
 
 **The facade.** Callers import `Crypto`, the root module of the group
 at `packages/crypto/Crypto.lean`. No caller imports `crypto/backend`,

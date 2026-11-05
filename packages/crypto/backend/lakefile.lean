@@ -1,5 +1,6 @@
 /-
-The `crypto/backend` package: the one `lakefile.lean` of the repository.
+The `crypto/backend` package: one of the package-local Lake helpers of
+the repository (root ARCHITECTURE §2).
 
 The declarative `lakefile.toml` cannot compile a C file. The shim
 `c/p2pcrypto.c` needs a `buildO` target and pkg-config discovery of the

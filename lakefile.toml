@@ -66,6 +66,12 @@ git = "https://github.com/etheorem/etheorem"
 rev = "169cf718a7d149a2973aa4e6468994720a6f356e"
 subDir = "packages/hazmat/LeanHazmatSecp256k1"
 
+# The native helper builds the Snappy static archive. This file stays
+# the root configuration. The helper adds no Lean library.
+[[require]]
+name = "snappyNative"
+path = "packages/codec/snappy/native"
+
 [[lean_lib]]
 name = "Conc"
 srcDir = "packages/base/conc"
@@ -98,6 +104,9 @@ globs = ["Proto.*"]
 name = "Snappy"
 srcDir = "packages/codec/snappy"
 roots = ["Snappy"]
+# The library waits for the production block-only archive and links it.
+needs = ["snappyNative/snappy"]
+moreLinkObjs = ["snappyNative/snappy"]
 
 [[lean_lib]]
 name = "Crypto"
