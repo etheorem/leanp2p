@@ -2778,23 +2778,23 @@ private def checks (r : Runner) : Async Unit := do
     | .ok () => r.check "shutdown join stays a success" true
     | .error _ => r.check "shutdown join stays a success" false
 
-  -- Accept envelopes survive reset.
+  -- The queued stream is still accepted. Its read reports reset.
   do
     let pair ← ends 10
     let sess ← start .responder pair.dialer
     pair.peer.write (control .open openNotData)
     pair.peer.write (control .reset resetNotData)
     match ← sess.accept with
-    | none => r.check "an accepted stream survives reset" false
+    | none => r.check "accept returns the queued stream and its read reports reset" false
     | some stream =>
       match ← stream.read with
       | .error .reset =>
-        r.check "an accepted stream survives reset" true
-      | _ => r.check "an accepted stream survives reset" false
+        r.check "accept returns the queued stream and its read reports reset" true
+      | _ => r.check "accept returns the queued stream and its read reports reset" false
     sess.close
     discard <| sess.join
 
-  -- Live permits return, so the cap can be filled twice.
+  -- A full live set is reset. The next open throws if no permit returns.
   do
     let pair ← ends 11
     let drainOwner ← TaskSet.new
@@ -2807,7 +2807,6 @@ private def checks (r : Runner) : Async Unit := do
       stream.reset
     let extra ← mustOpen sess
     extra.reset
-    r.check "a live permit returns and another open proceeds" true
     sess.close
     discard <| sess.join
     drainOwner.joinAll
@@ -2887,6 +2886,10 @@ private def openFrame (id : UInt32) : ByteArray :=
 
 private def dataFrame (id : UInt32) (b : UInt8) : ByteArray :=
   Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[b]⟩
+
+/-- One zero-length reset for `id`. -/
+private def resetFrame (id : UInt32) : ByteArray :=
+  Header.encodeB { kind := .reset, streamId := id, length := 0 }
 
 /-- The next peer frame is one data byte `b` for `id`. -/
 private def peerReadsData (c : Connection) (pending : ByteArray) (id : UInt32)
@@ -3307,6 +3310,110 @@ private def runAcceptBacklog (r : Runner) : Async Unit := do
   | .ok (), .error e => throw e
   | .ok (), .ok () => pure ()
 
+/-- A peer reset ends stream 1 after its buffered byte.
+A second reset of id 1 draws no answer. Stream 3 stays usable. -/
+private def runPeerReset (r : Runner) : Async Unit := do
+  let pair ← ends 53
+  let mut opened : Option MuxSession := none
+  let outcome : Except IO.Error Unit ←
+    try
+      let mut opensOk := false
+      let mut readOk := false
+      let mut writeReset := false
+      let mut siblingRead := false
+      let mut outboundOk := false
+      let mut healthy := false
+      match ← (test.open .initiator pair.dialer .empty).run with
+      | .error _ => pure ()
+      | .ok sess =>
+        opened := some sess
+        match ← (sess.openStream testId).run with
+        | .error _ => pure ()
+        | .ok stream1 =>
+          match ← (sess.openStream testId).run with
+          | .error _ => pure ()
+          | .ok stream3 =>
+            let (h1, rest1) ← takeHeader pair.peer .empty
+            let (h2, rest2) ← takeHeader pair.peer rest1
+            opensOk :=
+              h1.kind == Kind.open && h1.streamId == 1 && h1.length == 0 &&
+                h2.kind == Kind.open && h2.streamId == 3 && h2.length == 0 &&
+                rest2.isEmpty
+            if opensOk then
+              pair.peer.write (dataFrame 1 5 ++ resetFrame 1)
+              let dataRead ← stream1.read
+              let resetRead ← stream1.read
+              let eofRead ← stream1.read
+              readOk :=
+                match dataRead, resetRead, eofRead with
+                | .ok (some bytes), .error .reset, .ok none => bytes == ⟨#[5]⟩
+                | _, _, _ => false
+            if opensOk && readOk then
+              match ← stream1.write ⟨#[7]⟩ with
+              | .error .reset => writeReset := true
+              | _ => pure ()
+            if opensOk && readOk && writeReset then
+              pair.peer.write (resetFrame 1)
+              pair.peer.write (dataFrame 3 8)
+              siblingRead :=
+                match ← stream3.read with
+                | .ok (some bytes) => bytes == ⟨#[8]⟩
+                | _ => false
+              match ← stream3.write ⟨#[9]⟩ with
+              | .error _ => pure ()
+              | .ok () =>
+                let (frameOk, _) ← peerReadsData pair.peer .empty 3 9
+                outboundOk := frameOk
+        let finished := opensOk && readOk && writeReset && siblingRead && outboundOk
+        sess.close
+        match ← sess.join with
+        | .ok () => healthy := finished
+        | .error _ => pure ()
+      r.check "the initiator opens streams 1 and 3" opensOk
+      r.check "stream 1 reads its byte, then reset, then eof" readOk
+      r.check "a write on stream 1 returns reset" writeReset
+      r.check "stream 3 reads its byte after the second reset" siblingRead
+      r.check "the next outbound frame is stream 3 data" outboundOk
+      r.check "a peer reset leaves the session healthy" healthy
+      pure (.ok ())
+    catch e =>
+      pure (.error e)
+  match outcome with
+  | .error _ =>
+    match opened with
+    | some sess =>
+      try
+        sess.close
+      catch _ =>
+        pure ()
+      try
+        discard <| sess.join
+      catch _ =>
+        pure ()
+    | none =>
+      try
+        pair.dialer.close
+      catch _ =>
+        pure ()
+  | .ok () =>
+    match opened with
+    | some _ => pure ()
+    | none =>
+      try
+        pair.dialer.close
+      catch _ =>
+        pure ()
+  let peerClosed : Except IO.Error Unit ←
+    try
+      pair.peer.close
+      pure (.ok ())
+    catch e =>
+      pure (.error e)
+  match outcome, peerClosed with
+  | .error e, _ => throw e
+  | .ok (), .error e => throw e
+  | .ok (), .ok () => pure ()
+
 private def checks (r : Runner) : Async Unit := do
   r.check "Mux.test.id is Mux.testId" (decide (test.id = testId))
   r.check "the test protocol id is /leanp2p/test-mux/1.0.0"
@@ -3321,6 +3428,7 @@ private def checks (r : Runner) : Async Unit := do
   runReaderFault r
   runMalformed r
   runAcceptBacklog r
+  runPeerReset r
 
 /-- The public `Mux.test` boundary over the sim connection. -/
 def run (r : Runner) : IO Unit := do
@@ -3341,6 +3449,11 @@ def runHostile (r : Runner) : IO Unit := do
 def runAccept (r : Runner) : IO Unit := do
   r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
   Async.run (runAcceptBacklog r)
+
+/-- The public peer-reset path through `Mux.test.open`. -/
+def runReset (r : Runner) : IO Unit := do
+  r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
+  Async.run (runPeerReset r)
 
 end Tests.Mux.Public
 
