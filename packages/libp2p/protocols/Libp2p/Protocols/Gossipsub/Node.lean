@@ -26,21 +26,22 @@ frames and chunks before EOF (root CLAUDE.md, "partial def").
 
 ## Ownership
 
-The task set of the node owns the loop task, and `stop` joins it. The host
+The task set of the node owns the loop, alarm and writer tasks. Stop joins them. The host
 owns the handler tasks of the inbound streams. Nothing cancels a task:
 `stop` closes the event queue, and the close wakes the parked loop. The
-router state and the pending gossip are local to the loop, so no cell
-guards them. The subscription table is the one shared cell, and it changes
-through `OnceRef.update` (root ARCHITECTURE §4.1).
+router state and pending gossip are local to the loop. Shared registries,
+subscriptions and the closing flag change through OnceRef.update or
+updateGet (root ARCHITECTURE §4.1). Only the first stop caller joins.
 
 ## Recorded decisions
 
 - **The stop field runs in Async.** The brief gives it a BaseIO type.
   TaskSet.joinAll runs in Async, because joining can park. This field keeps
   that type and leaves the blocking run to the application edge.
-- **Actions return the next stream table and pending sends.** This follows
-  the yamux performAll discipline. These actions use Async because opening
-  and writing streams can park. The loop assigns each returned state.
+- **Actions never park.** Each send offers a frame to a peer queue with 32
+  slots. One writer task owns that peer's stream. A full queue drops the
+  frame, as go does for a full peer queue. Node.dropped reports these drops.
+  Actions return the next pending list, and the loop assigns that answer.
 - **The spread index counts sends within each heartbeat.** Config describes
   this index, while the brief's loop sketch increments it once per tick.
   Each delayed send gets its own index, and the next heartbeat starts at 0.
@@ -68,16 +69,12 @@ through `OnceRef.update` (root ARCHITECTURE §4.1).
   explicit spread because issue #23 names the trickle regressions. The delay
   applies only to heartbeat IHAVEs. Publish, forward, graft and hello sends
   leave at once.
-- **The loop keeps one outbound stream per peer.** The pinned go pubsub
-  version a01777894f4c resets the previous inbound stream on a duplicate
-  open (comm.go, lines 55 to 65). Its sender keeps one stream per peer
-  (lines 181 to 233). Each action returns the updated stream table. A failed
-  write resets and removes its stream, then retries once on a fresh stream.
-  A peer leave closes its stream. The loop closes all streams on exit.
-- **A slow peer can park the loop.** A peer that stops reading parks the loop
-  inside write until it reads or its session ends. Go writes from a per-peer
-  goroutine with a bounded queue and drops on a full queue. This loop has no
-  such queue yet. Opening a stream can also park the loop.
+- **Each peer has one writer task.** The pinned go pubsub version a01777894f4c
+  resets duplicate inbound streams (comm.go, lines 55 to 65). Its sender uses
+  one stream and a bounded queue per peer (lines 181 to 233). Our writer
+  writes frames in queue order. A failed write closes the queue and posts
+  peerLeft. Stop resets installed streams to wake parked writes and joins
+  the writer tasks. The host must end a newStream call when its session ends.
 - **The inbound handler serves consecutive frames.** Go keeps one reader
   loop per stream (comm.go, lines 75 to 120). Go and rust write many RPCs on
   one stream. A one-frame rule would break interop on the second RPC. The
@@ -146,6 +143,8 @@ structure Node where
   field runs in `Async` because a join parks, and a parked `BaseIO` action would
   hold a thread. A second call does nothing. -/
   stop : Conc.Async Unit
+  /-- The number of refused outbound frames. -/
+  dropped : BaseIO Nat
 
 /-! ## One outbound RPC -/
 
@@ -162,74 +161,47 @@ beside the code that sends it. -/
 def subOptRpc (t : TopicId) (on : Bool) : Rpc.RPC :=
   { subscriptions := [{ subscribe := on, topicid := t.name }], publish := [], control := none }
 
-/-- The outbound streams owned by the loop, one per peer. Each send returns
-its next table, so the loop assigns from the answer. -/
-abbrev Outbound := List (Peer × Streams.Stream)
-
-/-- Retire a peer's outbound stream. Reset wakes both directions. -/
-private def retire (streams : Outbound) (peer : Peer) : Conc.Async Outbound := do
-  for (p, stream) in streams do
-    if p = peer then stream.reset
-  return streams.filter (fun e => e.1 != peer)
-
-/-- Close and drop a peer's stream when the peer leaves. The half-close
-wakes the peer's reader with EOF after its queued bytes. -/
-private def closePeer (streams : Outbound) (peer : Peer) : Conc.Async Outbound := do
-  for (p, stream) in streams do
-    if p = peer then stream.close
-  return streams.filter (fun e => e.1 != peer)
-
-/-- Write one frame and return the stream table and success flag. A failed
-write resets and removes its stream before the caller can retry. -/
-private def writeFrame (streams : Outbound) (peer : Peer) (stream : Streams.Stream)
-    (frame : List Nat) : Conc.Async (Outbound × Bool) := do
-  let sent ← try
-    match ← stream.write (Bytes.ofNatList frame) with
-    | .ok () => pure true
-    | .error _ => pure false
-  catch _ => pure false
-  if sent then return (streams, true)
-  return (← retire streams peer, false)
-
-/-- Try at most attempts writes. A failed open ends the action. A failed
-write removes its stream, so the next attempt opens a fresh stream. -/
-private def sendFrame (host : HostSeam) (streams : Outbound) (to : Peer)
-    (frame : List Nat) : Nat → Conc.Async Outbound
-  | 0 => pure streams
-  | attempts + 1 => do
-    let stream? ← match streams.find? (fun e => e.1 == to) with
-      | some (_, stream) => pure (some stream)
-      | none =>
-        try
-          match ← host.newStream to [Constants.meshsubId] with
-          | .ok (_, stream) => pure (some stream)
-          | .error _ => pure none
-        catch _ => pure none
-    let some stream := stream? | return streams
-    let streams := (to, stream) :: streams.filter (fun e => e.1 != to)
-    let (streams, sent) ← writeFrame streams to stream frame
-    if sent then return streams
-    sendFrame host streams to frame attempts
-
-/-- Send one RPC through the peer's stream and return the next stream table.
-An RPC over Constants.rpcCap opens no stream. A failed write retries once
-on a fresh stream. A failed open drops the action. The host reports send
-failures at integration. -/
-def sendRpc (host : HostSeam) (streams : Outbound) (to : Peer) (rpc : Rpc.RPC) :
-    Conc.Async Outbound := do
-  let some frame := Rpc.encodeFrame? rpc | return streams
-  sendFrame host streams to frame 2
-
-/-- Half-close each outbound stream when the loop ends. The peer's read
-wakes at EOF, and its host joins the inbound handler. -/
-private def closeOutbound (streams : Outbound) : Conc.Async Unit := do
-  for (_, stream) in streams do
-    stream.close
-
 /-- The one input queue carries core events and alarm wakes. -/
 inductive Input where
   | event (e : Core.Event)
   | wake (now : Millis)
+
+/-- One peer's bounded writer queue and its currently open stream. -/
+structure Outbound where
+  /-- At most 32 encoded frames wait for this peer. -/
+  queue : Conc.Chan ByteArray
+  /-- Stop resets this stream to wake a parked write. -/
+  stream : Conc.OnceRef (Option Streams.Stream)
+
+/-- Close a queue and reset its stream to wake its writer. -/
+private def endOutbound (ob : Outbound) : Conc.Async Unit := do
+  (ob.queue.close : BaseIO Unit)
+  if let some stream ← (ob.stream.get : BaseIO (Option Streams.Stream)) then
+    stream.reset
+
+/-- One writer owns the peer stream. It writes queued frames in order and
+closes the stream at the end. A failed write closes the queue and reports
+peerLeft. Stop resets an installed stream; a late open checks closing too. -/
+private def writer (host : HostSeam) (closing : Conc.OnceRef Bool)
+    (events : Conc.Chan Input) (peer : Peer) (ob : Outbound) : Conc.Async Unit := do
+  let fail : Conc.Async Unit := do
+    (ob.queue.close : BaseIO Unit)
+    discard <| events.send (.event (.peerLeft peer))
+  try
+    match ← host.newStream peer [Constants.meshsubId] with
+    | .error _ => fail
+    | .ok (_, stream) =>
+      (ob.stream.set (some stream) : BaseIO Unit)
+      if ← (closing.get : BaseIO Bool) then stream.reset
+      repeat
+        match ← ob.queue.recv with
+        | none => break
+        | some frame =>
+          if let .error _ ← stream.write frame then
+            fail
+            break
+      stream.close
+  catch _ => fail
 
 /-! ## The inbound handler -/
 
@@ -330,6 +302,40 @@ private structure Env where
   events : Conc.Chan Input
   /-- The owned alarm task posts wakes on events. -/
   alarm : Conc.Alarm
+  /-- The owner of the loop, alarm and writers. -/
+  tasks : Conc.TaskSet
+  /-- The peer writer registry. Only the loop adds entries. -/
+  outbound : Conc.OnceRef (List (Peer × Outbound))
+  /-- The first stop caller sets this flag. -/
+  closing : Conc.OnceRef Bool
+  /-- Frames refused by a full or closed outbound queue. -/
+  drops : Conc.OnceRef Nat
+
+/-- Encode and offer one RPC to a peer's queue. This operation never parks.
+A full queue drops its frame. Each peer has one writer and one stream. -/
+private def enqueue (env : Env) (peer : Peer) (rpc : Rpc.RPC) : BaseIO Unit := do
+  if ← env.closing.get then return ()
+  let some frame := Rpc.encodeFrame? rpc | return ()
+  let table ← env.outbound.get
+  let ob ← match table.find? (fun e => e.1 == peer) with
+    | some (_, ob) => pure ob
+    | none => do
+      let ob : Outbound := { queue := ← Conc.Chan.new 32, stream := ← Conc.OnceRef.new none }
+      env.outbound.update (fun table => (peer, ob) :: table)
+      env.tasks.spawn (writer env.host env.closing env.events peer ob)
+      pure ob
+  if ← env.closing.get then
+    ob.queue.close
+    return ()
+  if !(← ob.queue.trySend (Bytes.ofNatList frame)) then env.drops.update (· + 1)
+
+/-- Retire a peer writer after its disconnect event. -/
+private def removePeer (env : Env) (peer : Peer) : BaseIO Unit := do
+  let removed ← env.outbound.updateGet fun table =>
+    (table.filter (fun e => e.1 == peer), table.filter (fun e => e.1 != peer))
+  for (_, ob) in removed do
+    ob.queue.close
+    env.tasks.spawn (endOutbound ob)
 
 /-- One gossip send that waits for its due time. -/
 private structure Pending where
@@ -344,8 +350,6 @@ private structure Pending where
 private structure LoopState where
   /-- The router state. -/
   router : Core.State
-  /-- The outbound streams owned by this loop. -/
-  streams : Outbound
   /-- The gossip sends that wait for their due time. -/
   pending : List Pending
   /-- The time of the next heartbeat. -/
@@ -355,9 +359,8 @@ private structure LoopState where
 sends. `gossipAt` is the time of the tick when a tick made the actions. The
 `i`-th IHAVE send of that tick waits for `trickle i` milliseconds, and every
 other action runs now. -/
-private def perform (env : Env) (streams : Outbound) (gossipAt : Option Millis)
-    (actions : List Core.Action) : Conc.Async (Outbound × List Pending) := do
-  let mut streams := streams
+private def perform (env : Env) (gossipAt : Option Millis)
+    (actions : List Core.Action) : BaseIO (List Pending) := do
   let mut delayed : Array Pending := #[]
   let mut gossipIndex := 0
   for action in actions do
@@ -370,23 +373,23 @@ private def perform (env : Env) (streams : Outbound) (gossipAt : Option Millis)
           let delay := env.config.trickle gossipIndex
           gossipIndex := gossipIndex + 1
           if delay = 0 then
-            streams ← sendRpc env.host streams to rpc
+            enqueue env to rpc
           else
             delayed := delayed.push { due := now + delay, peer := to, rpc := rpc }
         else
-          streams ← sendRpc env.host streams to rpc
-      | none => streams ← sendRpc env.host streams to rpc
-  return (streams, delayed.toList)
+          enqueue env to rpc
+      | none => enqueue env to rpc
+  return delayed.toList
 
 /-- One core step, then its actions. Only an RPC that does not decode makes
 the core answer `.error`. That answer keeps the state, and the loop runs on. -/
-private def stepAndAct (env : Env) (st : LoopState) (event : Core.Event) : Conc.Async LoopState := do
+private def stepAndAct (env : Env) (st : LoopState) (event : Core.Event) : BaseIO LoopState := do
   if let .rpc peer bytes := event then
     (env.config.onRpc peer bytes : BaseIO Unit)
   let st ← match event with
     | .peerLeft peer => do
-      let streams ← closePeer st.streams peer
-      pure { st with streams, pending := st.pending.filter (fun p => p.peer != peer) }
+      removePeer env peer
+      pure { st with pending := st.pending.filter (fun p => p.peer != peer) }
     | _ => pure st
   match Core.step env.config.params st.router event with
   | .error (.decode _) => return st
@@ -394,33 +397,31 @@ private def stepAndAct (env : Env) (st : LoopState) (event : Core.Event) : Conc.
     let gossipAt := match event with
       | .tick now _ => some now
       | _ => none
-    let (streams, delayed) ← perform env st.streams gossipAt actions
-    return { st with router, streams, pending := st.pending ++ delayed }
+    let delayed ← perform env gossipAt actions
+    return { st with router, pending := st.pending ++ delayed }
 
 /-- Tell every known peer about a subscription change (module doc). -/
 private def announce (env : Env) (st : LoopState) (event : Core.Event) :
-    Conc.Async LoopState := do
+    BaseIO LoopState := do
   let record? := match event with
     | .subscribe t => some (subOptRpc t true)
     | .unsubscribe t => some (subOptRpc t false)
     | _ => none
-  let mut streams := st.streams
   if let some rpc := record? then
     for (peer, _) in st.router.peers do
-      streams ← sendRpc env.host streams peer rpc
-  return { st with streams }
+      enqueue env peer rpc
+  return st
 
 /-- The next wake is the first due send or the next heartbeat. -/
 private def dueOf (st : LoopState) : Millis :=
   st.pending.foldl (fun due p => Nat.min due p.due) st.nextTick
 
 /-- Send due gossip before the heartbeat shifts the message cache. -/
-private def onWake (env : Env) (st : LoopState) (now : Millis) : Conc.Async LoopState := do
+private def onWake (env : Env) (st : LoopState) (now : Millis) : BaseIO LoopState := do
   let (due, later) := st.pending.partition (fun p => decide (p.due ≤ now))
-  let mut streams := st.streams
   for p in due.mergeSort (fun a b => decide (a.due ≤ b.due)) do
-    streams ← sendRpc env.host streams p.peer p.rpc
-  let st := { st with streams, pending := later }
+    enqueue env p.peer p.rpc
+  let st := { st with pending := later }
   if st.nextTick ≤ now then
     let st ← stepAndAct env st (.tick now (st.router.peers.map (·.1)))
     return { st with nextTick := now + env.config.params.heartbeatInterval }
@@ -435,13 +436,14 @@ private def loop (env : Env) (st0 : LoopState) : Conc.Async Unit := do
   repeat
     match ← env.events.recv with
     | none => break
-    | some (.wake now) => st ← onWake env st now
+    | some (.wake now) => st ← (onWake env st now : BaseIO LoopState)
     | some (.event e) =>
-      st ← stepAndAct env st e
-      st ← announce env st e
+      st ← (stepAndAct env st e : BaseIO LoopState)
+      st ← (announce env st e : BaseIO LoopState)
     (env.alarm.set (dueOf st) : BaseIO Unit)
   (env.alarm.close : BaseIO Unit)
-  closeOutbound st.streams
+  for (_, ob) in ← (env.outbound.get : BaseIO (List (Peer × Outbound))) do
+    (ob.queue.close : BaseIO Unit)
 
 /-- The router state of a node with no peers at time `now`. -/
 private def initialState (p : Core.Params) (now : Millis) : Core.State :=
@@ -477,32 +479,44 @@ def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
   host.setHandler (handler events)
   let tasks ← Conc.TaskSet.new
   let alarm ← Conc.Alarm.new
+  let outbound ← Conc.OnceRef.new ([] : List (Peer × Outbound))
+  let closing ← Conc.OnceRef.new false
+  let drops ← Conc.OnceRef.new 0
   tasks.spawn <| alarm.run config.clock (fun now => events.send (.wake now))
-  tasks.spawn <| loop { host, config, subs, events, alarm }
+  tasks.spawn <| loop { host, config, subs, events, alarm, tasks, outbound, closing, drops }
     { router := initialState config.params now
-      streams := []
       pending := []
       nextTick := now + config.params.heartbeatInterval }
+  let post : Core.Event → BaseIO Bool := fun e => do
+    if ← closing.get then return false
+    events.trySend (.event e)
   return {
-    publish := fun topic payload => events.trySend (.event (.publish (messageOf topic payload)))
+    publish := fun topic payload => post (.publish (messageOf topic payload))
     subscribe := fun topic callback => do
+      if ← closing.get then return false
       -- The cell changes first, so a delivery after the event finds the
       -- callback. A refused event takes this one registration back.
       let id ← subs.updateGet fun s =>
         (s.next,
           { next := s.next + 1
             entries := s.entries ++ [{ id := s.next, topic, callback }] })
-      let sent ← events.trySend (.event (.subscribe topic))
+      let sent ← post (.subscribe topic)
       if !sent then
         subs.update fun s => { s with entries := s.entries.filter (fun e => e.id != id) }
       return sent
     unsubscribe := fun topic => do
+      if ← closing.get then return false
       subs.update fun s => { s with entries := s.entries.filter (fun e => e.topic != topic) }
-      events.trySend (.event (.unsubscribe topic))
-    peerJoined := fun peer proto => events.trySend (.event (.peerJoined peer proto))
-    peerLeft := fun peer => events.trySend (.event (.peerLeft peer))
+      post (.unsubscribe topic)
+    peerJoined := fun peer proto => post (.peerJoined peer proto)
+    peerLeft := fun peer => post (.peerLeft peer)
+    dropped := drops.get
     stop := do
-      (events.close : BaseIO Unit)
-      tasks.joinAll }
+      let first ← (closing.updateGet (fun was => (!was, true)) : BaseIO Bool)
+      if first then
+        (events.close : BaseIO Unit)
+        for (_, ob) in ← (outbound.get : BaseIO (List (Peer × Outbound))) do
+          endOutbound ob
+        tasks.joinAll }
 
 end Libp2p.Protocols.Gossipsub.Node
