@@ -104,8 +104,8 @@ in the codec group wrapping upstream `google/snappy`.
     the negative record.
   - A bad frame fails its handler and resets its stream. A body that does
     not decode leaves the loop running.
-  - The handler serves consecutive frames in any chunking. It checks the
-    length before it appends body bytes, and EOF between frames is clean.
+  - The handler serves every frame of a stream, in any chunking, and resets
+    the stream on a bad frame.
   - Each peer has a writer task and a 32-slot queue. Two publishers run in
     parallel with one stream each and zero adjacent inversions per peer.
     A full queue drops frames, and the suite reports the drop count.
