@@ -2798,35 +2798,118 @@ private def runLeftover (r : Runner) : Async Unit := do
   sess.close
   discard <| sess.join
 
-/-- Close, repeated join, and a parked accept. -/
+/-- Two public closes. `accept` returns `none`, both joins succeed, and the peer read ends. -/
 private def runClose (r : Runner) : Async Unit := do
   let pair ← ends 44
   let sess ← openSession .initiator pair.dialer
-  let started : Chan Unit ← Chan.new 1
-  let box : Chan Bool ← Chan.new 1
+  sess.close
+  sess.close
+  match ← sess.accept with
+  | none => r.check "accept after repeated public close returns none" true
+  | some stream =>
+    stream.reset
+    r.check "accept after repeated public close returns none" false
+  match ← sess.join with
+  | .ok () => r.check "repeated public close joins once" true
+  | .error _ => r.check "repeated public close joins once" false
+  match ← sess.join with
+  | .ok () => r.check "a second join after repeated close succeeds" true
+  | .error _ => r.check "a second join after repeated close succeeds" false
+  match ← pair.peer.read with
+  | none => r.check "repeated public close ends the peer read" true
+  | some _ => r.check "repeated public close ends the peer read" false
+
+/-- The first open id from one fresh public session, after a clean join. -/
+private def firstOpenId (n : Nat) (role : Role) : Async (Option UInt32) := do
+  let pair ← ends n
+  let sess ← openSession role pair.dialer
+  let id ←
+    match ← (sess.openStream testId).run with
+    | .error _ => pure (none : Option UInt32)
+    | .ok _ =>
+      let (h, _) ← takeHeader pair.peer .empty
+      if h.kind == Kind.open && h.length == 0 then
+        pure (some h.streamId)
+      else
+        pure none
+  sess.close
+  match ← sess.join with
+  | .ok () => return id
+  | .error _ => return none
+
+/-- Two fresh sessions of one role both issue that role's first id. -/
+private def runIdRestart (r : Runner) : Async Unit := do
+  let initiatorA ← firstOpenId 45 .initiator
+  let initiatorB ← firstOpenId 46 .initiator
+  r.check "two initiator sessions both open stream id 1"
+    (initiatorA == some 1 && initiatorB == some 1)
+  let responderA ← firstOpenId 47 .responder
+  let responderB ← firstOpenId 48 .responder
+  r.check "two responder sessions both open stream id 2"
+    (responderA == some 2 && responderB == some 2)
+
+/-- Both ends open together. Each accepts the other stream and reads its payload. -/
+private def runConcurrentOpens (r : Runner) : Async Unit := do
+  let pair ← ends 49
+  let initiator ← openSession .initiator pair.dialer
+  let responder ← openSession .responder pair.peer
+  let initiatorOpen : Chan (Except Mock.Core.Error Stream) ← Chan.new 1
+  let responderOpen : Chan (Except Mock.Core.Error Stream) ← Chan.new 1
   let workers ← TaskSet.new
   workers.spawn do
-    discard <| started.send ()
-    match ← sess.accept with
-    | none => discard <| box.send true
-    | some stream =>
-      stream.reset
-      discard <| box.send false
-  discard <| started.recv
-  sess.close
+    let result ← (initiator.openStream testId).run
+    match ← initiatorOpen.send result with
+    | .ok () => pure ()
+    | .error _ => throw <| IO.userError "initiator open result was not delivered"
+  workers.spawn do
+    let result ← (responder.openStream testId).run
+    match ← responderOpen.send result with
+    | .ok () => pure ()
+    | .error _ => throw <| IO.userError "responder open result was not delivered"
   workers.joinAll
-  match ← box.recv with
-  | some true => r.check "a closed session wakes accept" true
-  | _ => r.check "a closed session wakes accept" false
-  match ← sess.join with
-  | .ok () => r.check "public close joins once" true
-  | .error _ => r.check "public close joins once" false
-  match ← sess.join with
-  | .ok () => r.check "a second public join returns the same success" true
-  | .error _ => r.check "a second public join returns the same success" false
-  match ← pair.peer.read with
-  | none => r.check "public close ends the peer read" true
-  | some _ => r.check "public close ends the peer read" false
+  match ← initiatorOpen.recv, ← responderOpen.recv with
+  | some (.ok openedByInitiator), some (.ok openedByResponder) =>
+    r.check "both ends open a stream together" true
+    match ← initiator.accept, ← responder.accept with
+    | some acceptedByInitiator, some acceptedByResponder =>
+      r.check "each end accepts the opposite open" true
+      let wroteInitiator ← openedByInitiator.write ⟨#[3]⟩
+      let wroteResponder ← openedByResponder.write ⟨#[4]⟩
+      let gotResponder ← acceptedByResponder.read
+      let gotInitiator ← acceptedByInitiator.read
+      let initiatorOk :=
+        match wroteInitiator with
+        | .ok () => true
+        | .error _ => false
+      let responderOk :=
+        match wroteResponder with
+        | .ok () => true
+        | .error _ => false
+      let readResponder :=
+        match gotResponder with
+        | .ok (some bytes) => bytes == ⟨#[3]⟩
+        | _ => false
+      let readInitiator :=
+        match gotInitiator with
+        | .ok (some bytes) => bytes == ⟨#[4]⟩
+        | _ => false
+      r.check "concurrent streams carry distinct payloads"
+        (initiatorOk && responderOk && readResponder && readInitiator)
+    | _, _ =>
+      r.check "each end accepts the opposite open" false
+      r.check "concurrent streams carry distinct payloads" false
+  | some (.error _), _
+  | _, some (.error _)
+  | none, _
+  | _, none =>
+    r.check "both ends open a stream together" false
+    r.check "each end accepts the opposite open" false
+    r.check "concurrent streams carry distinct payloads" false
+  initiator.close
+  responder.close
+  match ← initiator.join, ← responder.join with
+  | .ok (), .ok () => r.check "both public sessions join after the exchange" true
+  | _, _ => r.check "both public sessions join after the exchange" false
 
 private def checks (r : Runner) : Async Unit := do
   r.check "Mux.test.id is Mux.testId" (decide (test.id = testId))
@@ -2837,6 +2920,8 @@ private def checks (r : Runner) : Async Unit := do
   runRoundTrip r
   runLeftover r
   runClose r
+  runIdRestart r
+  runConcurrentOpens r
 
 /-- The public `Mux.test` boundary over the sim connection. -/
 def run (r : Runner) : IO Unit := do
