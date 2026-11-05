@@ -11,9 +11,9 @@ import (
 	pb "github.com/libp2p/go-libp2p-pubsub/pb"
 )
 
-func strPtr(s string) *string     { return &s }
-func boolPtr(b bool) *bool        { return &b }
-func uint64Ptr(u uint64) *uint64  { return &u }
+func strPtr(s string) *string    { return &s }
+func boolPtr(b bool) *bool       { return &b }
+func uint64Ptr(u uint64) *uint64 { return &u }
 
 type CaseJSON struct {
 	Name      string     `json:"name"`
@@ -78,7 +78,7 @@ type IwantFields struct {
 //
 // Run from this directory with the Go toolchain the gate image carries:
 //
-//	go run . ../../../../Tests/fixtures/gossipsub-rpc-go.json
+//	go run . ../../../../../Tests/fixtures/gossipsub-rpc-go.json
 func main() {
 	var cases []CaseJSON
 
@@ -456,7 +456,7 @@ func main() {
 		}
 	}
 
-	outPath := "../../../../Tests/fixtures/gossipsub-rpc-go.json"
+	outPath := "../../../../../Tests/fixtures/gossipsub-rpc-go.json"
 	if len(os.Args) > 1 {
 		outPath = os.Args[1]
 	}

@@ -68,7 +68,7 @@ private def isStable (rpc : Rpc.RPC) : Bool :=
   | .error _ => false
 
 /-- The `fields` object of one case, when the case carries one. -/
-private def fieldsOf (_r : Runner) (_name : String) (c : Json) : IO (Option Json) :=
+private def fieldsOf (c : Json) : IO (Option Json) :=
   match c.getObjVal? "fields" with
   | .ok v => return some v
   | .error _ => return none
@@ -144,7 +144,7 @@ private def checkCase (r : Runner) (c : Json) : IO Unit := do
   | none => pure ()
   | some rpc =>
     r.check s!"{name} re-encodes stably" (isStable rpc)
-    if let some f ← fieldsOf r name c then
+    if let some f ← fieldsOf c then
       checkSubs r name f rpc
       checkPubs r name f rpc
       checkControl r name f rpc

@@ -122,7 +122,7 @@ structure Config where
   params : Core.Params := Core.defaults
   /-- The clock of the loop's timer. -/
   clock : Conc.Clock := Conc.Clock.system
-  /-- The delay of the `i`-th gossip send of one heartbeat, in milliseconds.
+  /-- The delay of the run-wide `i`-th delayed gossip send, in milliseconds.
   The caller fixes it, so a test gets exact times. -/
   trickle : Nat → Millis := fun _ => 0
   /-- Replayable peer order for the numbered heartbeat. -/
