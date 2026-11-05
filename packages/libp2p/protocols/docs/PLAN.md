@@ -90,13 +90,13 @@ in the codec group wrapping upstream `google/snappy`.
   field tables of the vendored gossipsub spec, both directions.
 - The router core as transcript tests, `Event.tick` advancing the
   heartbeat: mesh graft and prune transitions, and iwant/ihave
-  bookkeeping, at the level the root names (root PLAN W6.4).
+  bookkeeping (root PLAN W6.4).
 - The signing-policy tests, once unit 3b records the choice against the
   two axes of the pubsub spec.
 - Unit 3b owns the trickle regressions that issue #23's done-when names.
-  The pure `step` decides which peer receives which gossip on a tick. The
-  loop owns the delay that spreads those messages across the heartbeat
-  interval. `Tests/Gossipsub/Node.lean` pins that delay on a test clock.
+  Tests/Gossipsub/Node.lean pins the IHAVE deadlines on a test clock.
+  The checks cover configured delays across heartbeats and the default
+  zero-delay schedule.
 - The loop suite, `Tests/Gossipsub/Node.lean`, runs over the in-memory
   switch of `Mock/Host.lean`:
   - One publish crosses two nodes and reaches the callback.
@@ -106,14 +106,21 @@ in the codec group wrapping upstream `google/snappy`.
     not decode leaves the loop running.
   - The handler serves consecutive frames in any chunking. It checks the
     length before it appends body bytes, and EOF between frames is clean.
-  - The node reuses one outbound stream per peer. A failed write resets its
-    stream and retries once on a fresh stream. Two peers use two streams.
-    A peer leave closes its stream, and stop closes the outbound streams.
+  - Each peer has a writer task and a 32-slot queue. Two publishers run in
+    parallel with one stream each and zero adjacent inversions per peer.
+    A full queue drops frames, and the suite reports the drop count.
+  - A parked peer writer leaves the loop free. Stop resets its stream,
+    closes the peer queues and alarm, and joins the owned tasks.
+  - The handler registers its opener before the first RPC. Repeat joins
+    emit no hello. Subscription records precede grafts.
+  - The replayable hash order changes across heartbeat counters.
+  - Pending gossip holds at most 256 sends. Excess sends increment the
+    drop count. Due sends leave before the heartbeat shifts the cache.
   - The receipt observer sees duplicates before validation and delivery.
   - The default gossip delay is zero. Tests supply an explicit spread.
   - A heartbeat sends the graft, and a later publish reaches the mesh.
-  - With a configured spread, the i-th IHAVE of a heartbeat leaves at its
-    delay and no earlier.
+  - With a configured spread, each IHAVE leaves at its run-wide indexed
+    delay and no earlier. The check crosses two heartbeat intervals.
   - A publish with no peers opens no stream and delivers nothing locally.
   - `stop` joins the loop, a later post answers `false`, and the switch
     closes.

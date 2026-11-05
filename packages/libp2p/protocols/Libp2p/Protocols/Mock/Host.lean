@@ -16,8 +16,17 @@ signatures. The real host package replaces this module at integration.
 
 The module also declares `HostSeam`, the two calls the gossipsub loop
 makes, and `Switch`, an in-memory double of that seam. The field names
-follow PR #61 (`Host.newStream`, `Host.setHandler`), so the swap at
-integration touches one file.
+follow PR #61 (Host.newStream, Host.setHandler). The consumer builds the
+seam from a host h with these closures:
+
+```lean
+let seam : HostSeam :=
+  { newStream := fun peer ids => h.newStream peer ids
+    setHandler := fun handler => h.setHandler handler }
+```
+
+The switch retains its pipes until close. It serves finite test runs. A
+long-running stress test needs a double that retires closed streams.
 -/
 
 set_option autoImplicit false

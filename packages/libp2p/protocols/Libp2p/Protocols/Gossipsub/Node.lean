@@ -26,8 +26,8 @@ frames and chunks before EOF (root CLAUDE.md, "partial def").
 
 ## Ownership
 
-The task set of the node owns the loop, alarm and writer tasks. Stop joins them. The host
-owns the handler tasks of the inbound streams. Nothing cancels a task:
+The task set of the node owns the loop, alarm and writer tasks. Stop joins
+them. The host owns the handler tasks of the inbound streams. Nothing cancels a task:
 `stop` closes the event queue, and the close wakes the parked loop. The
 router state and pending gossip are local to the loop. Shared registries,
 subscriptions and the closing flag change through OnceRef.update or
@@ -81,6 +81,7 @@ updateGet (root ARCHITECTURE §4.1). Only the first stop caller joins.
   loop per stream (comm.go, lines 75 to 120). Go and rust write many RPCs on
   one stream. A one-frame rule would break interop on the second RPC. The
   handler bounds each frame before appending bytes and preserves frame order.
+  A zero-length frame decodes as an empty RPC and reaches the core.
 - **The receipt observer runs before the core step.** The interop harness
   logs every received message, including duplicates (gossipsub-interop,
   test-specs/implementation.md, lines 71 to 78). Its go participant logs
@@ -368,8 +369,8 @@ private structure LoopState where
 
 /-- Run the actions of one core step, in order, and answer the delayed
 sends. `gossipAt` is the time of the tick when a tick made the actions. The
-`i`-th IHAVE send of that tick waits for `trickle i` milliseconds, and every
-other action runs now. -/
+run-wide i-th IHAVE waits for trickle i milliseconds. Every other action
+runs now. -/
 private def perform (env : Env) (gossipAt : Option Millis) (index : Nat)
     (actions : List Core.Action) : BaseIO (List Pending × Nat) := do
   let mut delayed : Array Pending := #[]
