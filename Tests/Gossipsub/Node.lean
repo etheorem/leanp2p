@@ -337,15 +337,18 @@ private def handlerChecks (r : Tests.Runner) : Async Unit := do
   -- A prefix that never ends.
   let longPrefix? ← sendOpen seamA pb [List.replicate 12 0x80]
   r.check "node.handler.long-prefix-fails" (← failsOnOpenStream tasksB longPrefix?)
+  -- An oversized chunk is refused before the handler appends it.
+  let tooLarge? ← sendOpen seamA pb [List.replicate (Constants.rpcCap + 6) 0]
+  r.check "node.handler.oversized-chunk-fails" (← failsOnOpenStream tasksB tooLarge?)
   -- The stream ends inside a frame.
   discard <| send seamA pb [Streams.Framing.encodeLength .uvarint 5 ++ [1]]
   r.check "node.handler.end-inside-a-frame-fails" (← joinFails tasksB)
   -- The stream ends inside a prefix.
   discard <| send seamA pb [[0x80]]
   r.check "node.handler.end-inside-a-prefix-fails" (← joinFails tasksB)
-  -- A stream with no frame ends clean.
+  -- EOF before a complete frame is a protocol error.
   discard <| send seamA pb []
-  r.check "node.handler.empty-stream-is-clean" (!(← joinFails tasksB))
+  r.check "node.handler.empty-stream-fails" (← joinFails tasksB)
   -- A frame whose body does not decode: the handler is clean, and the core
   -- answers the error to the loop.
   r.check "node.handler.body-does-not-decode"
@@ -357,12 +360,16 @@ private def handlerChecks (r : Tests.Runner) : Async Unit := do
   discard <| send seamA pb [frameOf (Core.publishRpc (msgOf ta [1]))]
   let got ← within inbox
   r.check "node.handler.loop-survives-a-bad-body" (got == some (msgOf ta [1]))
-  -- Two frames in one chunk are two RPCs.
+  -- Trailing bytes in the same read reject the whole frame.
   discard <| send seamA pb
     [frameOf (Core.publishRpc (msgOf ta [2])) ++ frameOf (Core.publishRpc (msgOf ta [3]))]
+  r.check "node.handler.trailing-frame-fails" (← joinFails tasksB)
+  r.check "node.handler.trailing-frame-delivers-nothing" (← quiet inbox)
+  discard <| send seamA pb [frameOf (Core.publishRpc (msgOf ta [2]))]
   let two ← within inbox
+  discard <| send seamA pb [frameOf (Core.publishRpc (msgOf ta [3]))]
   let three ← within inbox
-  r.check "node.handler.two-frames-in-one-chunk"
+  r.check "node.handler.separate-streams-deliver"
     (two == some (msgOf ta [2]) && three == some (msgOf ta [3]))
   -- One frame in single bytes is one RPC.
   discard <| send seamA pb ((frameOf (Core.publishRpc (msgOf ta [4]))).map (fun x => [x]))

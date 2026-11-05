@@ -104,7 +104,8 @@ in the codec group wrapping upstream `google/snappy`.
     the negative record.
   - A bad frame fails its handler and resets its stream. A body that does
     not decode leaves the loop running.
-  - The handler serves every frame of a stream, in any chunking.
+  - The handler serves one frame in any chunking. Trailing bytes fail the
+    handler, and the buffer cap is checked before an append.
   - A heartbeat sends the graft, and a later publish reaches the mesh.
   - The `i`-th IHAVE of a heartbeat leaves at `trickle i`, and no earlier.
   - A publish with no peers opens no stream and delivers nothing locally.

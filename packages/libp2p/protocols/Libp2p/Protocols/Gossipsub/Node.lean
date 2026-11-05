@@ -20,9 +20,9 @@ application and the host. The clock seam carries the heartbeat and the
 delayed gossip. The loop parks in `select` over the two, so the timer costs
 no task, and a `TestClock` drives every time decision of a test.
 
-`loop` and `readFrames` are `partial`. Each runs until a close reaches what
-it parks on, and no measure bounds the number of events or chunks before
-that close (root CLAUDE.md, "`partial def`").
+`loop` and `readFrame` are `partial`. A peer controls the number of events
+and chunks. No measure bounds the wait for a complete frame or a close
+(root CLAUDE.md, "`partial def`").
 
 ## Ownership
 
@@ -35,6 +35,16 @@ through `OnceRef.update` (root ARCHITECTURE §4.1).
 
 ## Recorded decisions
 
+- **The stop field runs in Async.** The brief gives it a BaseIO type.
+  TaskSet.joinAll runs in Async, because joining can park. This field keeps
+  that type and leaves the blocking run to the application edge.
+- **The spread index counts sends within each heartbeat.** Config describes
+  this index, while the brief's loop sketch increments it once per tick.
+  Each delayed send gets its own index, and the next heartbeat starts at 0.
+- **A refused subscribe removes its callback.** The cell changes before the
+  post, so a refused post removes that registration by its unique id.
+- **The queue carries Core.Event directly.** The loop owns all delayed sends,
+  so no external sender needs the brief's unused send message constructor.
 - **No signer.** The core validates with `strictNoSign` (`Core.validationOk`),
   which requires `from` and `seqno` to be absent. So `publish` signs nothing
   and never writes the peer id of the node.
@@ -56,8 +66,8 @@ through `OnceRef.update` (root ARCHITECTURE §4.1).
   `newStream` parks also parks the loop. Two RPCs to one peer can reorder,
   because each stream has its own handler task. The unit 3c gate decides if
   this shape stays.
-- **The inbound handler reads frames until the end of the stream.** A peer
-  that keeps one stream open and writes many frames gets every frame served.
+- **The inbound handler serves one frame per stream.** Bytes after the first
+  frame in the same read are a protocol error, as the unit 3b brief requires.
 - **The host posts `peerJoined` before it serves a stream of that peer.** The
   core ignores an RPC from an unknown peer (`Core.rpcStep`), so an earlier
   stream loses its RPC.
@@ -71,9 +81,9 @@ namespace Libp2p.Protocols.Gossipsub.Node
 
 open Mock.Host (HostSeam)
 
-/-- The delay of the `i`-th gossip send of a heartbeat: a fixed spread below
-one second, so two nodes do not line up and a run replays. The multiplier
-is a prime, so the delays do not repeat with a short period. -/
+/-- The delay of the i-th gossip send of a heartbeat: a fixed spread below
+one second. Each run replays the same delays. Nodes with the same schedule
+can align their sends. -/
 def defaultTrickle (i : Nat) : Millis :=
   (i * 7919 + 1) % 1000
 
@@ -144,61 +154,39 @@ def sendRpc (host : HostSeam) (to : Peer) (rpc : Rpc.RPC) : Conc.Async Unit := d
 
 /-! ## The inbound handler -/
 
-/-- The bytes of `buf` from `pos` that `Rpc.decodeFrame?` needs for its answer.
-`none` asks for another chunk.
-
-The prefix decides, so the decoder reads each frame once, and a peer that
-sends many small chunks costs no repeated decode. A length over the cap, or
-a bad prefix, needs only the prefix bytes. So the handler keeps at most one
-frame under the cap and one chunk (root ARCHITECTURE §5.1). -/
-private def frameWindow (buf : ByteArray) (pos : Nat) : Option Nat :=
-  let head := Bytes.toNatList (buf.extract pos (pos + Varint.maxBytes))
-  match Streams.Framing.decodeLength? .uvarint head with
-  | .ok (len, rest) =>
-    let whole := (head.length - rest.length) + len
-    if Constants.rpcCap < len then some head.length
-    else if pos + whole ≤ buf.size then some whole
-    else none
-  | .error .truncated => none
-  | .error .malformed => some head.length
-
-/-- Post every frame of the stream to the queue, until the stream ends.
-
-`pos` is the start of the next frame in `buf`, so a chunk that holds many
-frames costs one pass over its bytes. The answer is `.error` for a bad frame,
-for an end of stream inside a frame, and for a failed read. A closed queue
-means the node stops, and the handler returns. -/
-private partial def readFrames (events : Conc.Chan Core.Event) (peer : Peer)
-    (stream : Streams.Stream) (buf : ByteArray) (pos : Nat) :
+/-- Read one frame and post its payload. The buffer stays under the RPC cap
+plus five prefix bytes. The size check runs before an append allocates a new
+buffer. A bad prefix, trailing bytes, or EOF inside the frame fails the
+handler. A closed event queue means the node stops. -/
+private partial def readFrame (events : Conc.Chan Core.Event) (peer : Peer)
+    (stream : Streams.Stream) (buf : ByteArray) :
     Conc.Async (Except Mock.Core.Error Unit) := do
-  match frameWindow buf pos with
-  | some n =>
-    match Rpc.decodeFrame? (Bytes.toNatList (buf.extract pos (pos + n))) with
-    | .ok (some (payload, _)) =>
-      -- Park: the loop frees a slot, or `stop` closes the queue. The window
-      -- holds one frame, so the rest is empty and the next frame starts at
-      -- `pos + n`.
-      match ← events.send (.rpc peer payload) with
-      | .ok () => readFrames events peer stream buf (pos + n)
-      | .error _ => return .ok ()
-    | .ok none => return .error (.protocol "the RPC frame ended early")
+  -- Park: the peer writes, half-closes, or resets.
+  match ← stream.read with
+  | .error e => return .error (Mock.Core.mapStreamError e)
+  | .ok none => return .error (.protocol "the stream ended before an RPC frame")
+  | .ok (some chunk) =>
+    if Constants.rpcCap + 5 < buf.size + chunk.size then
+      return .error (.protocol "the RPC buffer exceeds the cap")
+    let buf := buf ++ chunk
+    match Rpc.decodeFrame? (Bytes.toNatList buf) with
+    | .ok (some (payload, rest)) =>
+      if !rest.isEmpty then
+        return .error (.protocol "the stream has bytes after its RPC frame")
+      -- Park: the loop frees a slot, or stop closes the queue.
+      discard <| events.send (.rpc peer payload)
+      return .ok ()
+    | .ok none => readFrame events peer stream buf
     | .error _ => return .error (.protocol "the RPC frame is malformed")
-  | none =>
-    -- Park: the peer writes, half-closes, or resets.
-    match ← stream.read with
-    | .error e => return .error (Mock.Core.mapStreamError e)
-    | .ok none =>
-      return if pos = buf.size then .ok ()
-        else .error (.protocol "the stream ended inside an RPC frame")
-    | .ok (some chunk) => readFrames events peer stream (buf.extract pos buf.size ++ chunk) 0
 
-/-- The handler of `Constants.meshsubId`. Each frame becomes one `Event.rpc`
-with the opener of the stream as its sender. A protocol error resets the
-stream and fails this handler. The loop keeps running. -/
+/-- The handler of Constants.meshsubId. It serves one frame per stream.
+Trailing bytes in the same read are a protocol error. The handler returns
+as soon as it posts the frame, so it leaves later reads to the host. A
+protocol error resets the stream. The loop keeps running. -/
 def handler (events : Conc.Chan Core.Event) : Mock.Core.StreamHandler where
   id := Constants.meshsubId
   handle peer stream := ExceptT.mk do
-    let answer ← readFrames events peer stream ByteArray.empty 0
+    let answer ← readFrame events peer stream ByteArray.empty
     match answer with
     | .ok () => stream.close
     | .error _ => stream.reset
