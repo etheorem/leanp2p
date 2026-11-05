@@ -17,7 +17,7 @@ group is §7, row 10). The spike has no req/resp or gossipsub code.
 |---|---|
 | `Libp2p/Protocols.lean` | the root module; one import line per public submodule |
 | `Libp2p/Protocols/Constants.lean` | the protocol ids and the caps: `/ipfs/id/1.0.0`, `/ipfs/id/push/1.0.0`, `/ipfs/ping/1.0.0`, the `/eth2/.../ssz_sn` pattern of §8, gossipsub's `/meshsub/1.1.0`, one message cap per protocol, and the protocol version that the identify responder writes; other modules read these values from this module and do not repeat the literals (§3.8, §3.4) |
-| `Libp2p/Protocols/Identify.lean` | the `Identify` message with its `ProtoMessage` instance (§3.2), `Identify.Error`, the validate, the client that reads and validates one response, and the handler values for identify and push |
+| `Libp2p/Protocols/Identify.lean` | the `Identify` message with its `ProtoMessage` instance (§3.2), `Identify.Error`, the validate, the client that reads and validates one response, the push sender, and the handler values for identify and push |
 | `Libp2p/Protocols/Ping.lean` | `Ping.Error`, the echo handler, and the initiator that sends 32 bytes and awaits the echo |
 | `Libp2p/Protocols/Mock/{Identity,Core,Host}.lean` | the mocks of the unmerged dependencies (RULES.md, "Working ahead of the tree"); the integration deletes them |
 | `Libp2p/Protocols/ReqResp/Frame.lean` | the `/eth2/.../ssz_sn` framing, a uvarint length over a snappy-compressed chunk, as a `Codec` with a `LawfulCodec` instance (§3.2); the snappy call goes through the `codec/snappy` binding (root PLAN W6.2); the codec feeds the core |
@@ -56,8 +56,13 @@ package; §4.9 names no echo, so no module line covers it.
   two handler values serve inbound streams and register under their
   ids. The responder builds the message from the host's identity,
   addresses, protocol list, observed address, and agent version, as the
-  spike's `respond` does. The push sender is not in this package yet;
-  root W5.7 lists identify (+ push). A received push updates the
+  spike's `respond` does. `Identify.pushTo` announces the same record
+  on the stream that the host opened under `pushId`, and then
+  half-closes. The host owns the schedule: go's identify service pushes
+  one record per local address or protocol set change (the spike's
+  `vendor/go-libp2p/p2p/protocol/identify/id.go`, the `loop` and
+  `sendPushes` functions), so the sender starts no timer and the host
+  decides when the local record changed. A received push updates the
   peerstore through the host. The push stores the addresses. The
   peerstore surface of the host doc holds addresses only, so a push's
   protocols list has no store yet. Go's push handler stores both. A

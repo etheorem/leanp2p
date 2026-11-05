@@ -519,11 +519,12 @@ def pushHandler (store : Mock.Host.Peerstore) (expected : Mock.Identity.PeerId)
     handle := fun s => ExceptT.mk ((Except.mapError mapIdentifyError) <$>
       push store expected clock timeoutMs s) }
 
-/-- The responder body. Write one length-delimited message and
-half-close. -/
-def respondTo (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+/-- Write one length-delimited message and half-close. The
+responder and the push sender share this body: both announce the same
+record, and only the protocol id of the stream differs. -/
+private def writeRecord (key : Mock.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
-    (spr : Option (List Nat) := none) (s : Streams.Stream) :
+    (spr : Option (List Nat)) (s : Streams.Stream) :
     Conc.Async (Except Mock.Core.Error Unit) := do
   match respond? key addrs protocols observed agent spr with
   | .error e => return .error (mapIdentifyError e)
@@ -537,6 +538,29 @@ def respondTo (key : Mock.Identity.PubKey) (addrs : List (List Nat))
           | .ok () =>
               discard s.close
               return .ok ()
+
+/-- The responder body. Write one length-delimited message and
+half-close. -/
+def respondTo (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+    (protocols : List String) (observed : Option (List Nat)) (agent : String)
+    (spr : Option (List Nat) := none) (s : Streams.Stream) :
+    Conc.Async (Except Mock.Core.Error Unit) :=
+  writeRecord key addrs protocols observed agent spr s
+
+/-- The push sender: announce this peer's record on the stream that the
+host opened under `pushId`, then half-close.
+
+The host owns the schedule. Go's identify service subscribes to
+`EvtLocalAddressesUpdated` and `EvtLocalProtocolsUpdated` and pushes
+one record per event (the spike's `vendor/go-libp2p/p2p/protocol/identify/id.go`,
+the `loop` and `sendPushes` functions). This package sends one record
+per call and starts no timer, so the host decides when the local record
+changed. -/
+def pushTo (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+    (protocols : List String) (observed : Option (List Nat)) (agent : String)
+    (spr : Option (List Nat) := none) (s : Streams.Stream) :
+    Conc.Async (Except Mock.Core.Error Unit) :=
+  writeRecord key addrs protocols observed agent spr s
 
 /-- The responder handler value. -/
 def respondHandler (key : Mock.Identity.PubKey) (addrs : List (List Nat))
