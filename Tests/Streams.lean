@@ -5,12 +5,18 @@ import Streams.Mock.Varint
 import Streams.Mock.Multiaddr
 
 /-!
-# Streams suite (unit W4.1)
+# Streams suite (units W4.1 and W4.2)
 
-The checks of `packages/net/streams/docs/PLAN.md`, "Test milestones
-(unit 1)", and the two contracts of ARCHITECTURE §4.7 that the sim
-transport can hold: close wakes, and no reader strand. The checks come
-from the documents.
+The checks of `packages/net/streams/docs/PLAN.md`, "Test milestones"
+of units 1 and 2, and the two contracts of ARCHITECTURE §4.7: close
+wakes, and no reader strand. The sim transport holds them first, and
+the TCP checks hold them again over loopback. The checks come from the
+documents.
+
+The TCP checks open real sockets on `127.0.0.1` only, so no packet
+leaves the machine. A few of them wait a bounded time on the real
+clock, because the kernel decides when a reset or a released port
+takes effect. Each one says why at its site.
 
 No answer depends on the order in which the scheduler runs the tasks.
 The suite follows the rules of `Tests.Concurrency`: a check on a parked
@@ -845,11 +851,10 @@ private def deadlineChecks (r : Runner) : Async Unit := do
     server.close
     tc.close
 
-/-! ## The TCP stub -/
+/-! ## TCP -/
 
-/-- The TCP value of unit 1: the address mapping, and the answers of the
-stub. -/
-private def tcpStubChecks (r : Runner) : Async Unit := do
+/-- The TCP address mapping. -/
+private def tcpAddressChecks (r : Runner) : Async Unit := do
   -- A TCP multiaddr maps to its socket address, and back.
   for (text, shown) in [("/ip4/127.0.0.1/tcp/4001", "127.0.0.1:4001"),
       ("/ip6/::1/tcp/9000", "[::1]:9000"), ("/ip6/2001:db8::7/tcp/65535", "[2001:db8::7]:65535")] do
@@ -865,13 +870,292 @@ private def tcpStubChecks (r : Runner) : Async Unit := do
     let m ← ma text
     r.check s!"{text} is not a TCP address" (Tcp.socketAddress? m).isNone
     r.check s!"the TCP transport does not handle {text}" (!Tcp.transport.handles m)
-  -- The stub throws on a dial and a listen, of a TCP address and of any
-  -- other.
-  for text in ["/ip4/127.0.0.1/tcp/4001", "/memory/7"] do
-    let m ← ma text
     let dialThrew ← try discard <| Tcp.transport.dial m; pure false catch _ => pure true
     let listenThrew ← try discard <| Tcp.transport.listen m; pure false catch _ => pure true
-    r.check s!"the TCP stub throws on a dial and a listen of {text}" (dialThrew && listenThrew)
+    r.check s!"a dial and a listen of {text} throw" (dialThrew && listenThrew)
+
+/-- A connected TCP pair over loopback, on a port that the system picks:
+the dialer's end and the listener's end. The listener closes before the
+answer, and the pair stays open. -/
+private def tcpPair (clock : Clock := Clock.system) : Async (Connection × Connection) := do
+  let tcp := Tcp.transport clock
+  let l ← tcp.listen (← ma "/ip4/127.0.0.1/tcp/0")
+  let accepted : Chan (Option Connection) ← Chan.new 1
+  let ts ← TaskSet.new
+  -- The accept parks until the dial below connects.
+  ts.spawn do discard <| accepted.send (← l.accept)
+  let some client ← tcp.dial l.addr | throw <| IO.userError "tcp dial refused"
+  ts.joinAll
+  let some (some server) ← accepted.recv | throw <| IO.userError "tcp accept failed"
+  l.close
+  return (client, server)
+
+/-- A TCP connection whose peer is gone with a reset: the peer's end
+holds unread bytes when its last reference goes, so the runtime closes
+its handle, and the kernel answers with an RST. Only the dialer's end
+leaves this function. -/
+private def tcpResetPeer : Async Connection := do
+  let (client, server) ← tcpPair
+  client.write (b "never read")
+  -- The peer's end goes out of scope here, unread.
+  let _ := server
+  return client
+
+/-- Wait for a native promise of the socket API of the runtime. -/
+private def awaitRaw {α : Type} (p : IO.Promise (Except IO.Error α)) : Async (Except IO.Error α) :=
+  try .ok <$> Std.Async.Async.ofPromise (pure p) catch e => pure (.error e)
+
+/-- A TCP connection whose peer end is a raw socket of the runtime: the
+dialer's `Connection`, and the accepted socket. The raw end reads below
+the transport, so a check can see an RST that `Connection.read` answers
+as EOF. -/
+private def tcpRawPeer : Async (Connection × Tcp.Socket) := do
+  let listener ← Std.Internal.UV.TCP.Socket.new
+  listener.bind (.v4 ⟨Std.Net.IPv4Addr.ofParts 127 0 0 1, 0⟩)
+  listener.listen 1
+  let some addr := Tcp.multiaddrOf (← listener.getSockName)
+    | throw <| IO.userError "the raw listener has no multiaddr"
+  let accepted ← listener.accept
+  let some client ← Tcp.transport.dial addr | throw <| IO.userError "tcp dial refused"
+  -- The dial has connected, so the accept resolves.
+  match ← awaitRaw accepted with
+  | .ok server => return (client, server)
+  | .error e => throw e
+
+/-- A loopback address where a connect hangs, and the sockets that keep
+it so. A raw listener with a backlog of 0 never accepts, and the helper
+fills its accept queue with raw connects until one stays pending. A
+kernel drops the SYN of a connect to a full queue, so every connect
+after that one hangs too, and no packet leaves the machine. The helper
+counts the queue, since its length differs between kernels. `none` when
+8 connects all complete: the platform does not stall a connect this
+way.
+
+The helper polls each connect for 500 ms of real time. A task parked on
+a connect that never ends would have no close to wake it (PRINCIPLES
+3.1), so the helper parks on nothing but its own timer. -/
+private def stalledAddr : Async (Option (Multiaddr × Array Tcp.Socket)) := do
+  let listener ← Std.Internal.UV.TCP.Socket.new
+  listener.bind (.v4 ⟨Std.Net.IPv4Addr.ofParts 127 0 0 1, 0⟩)
+  listener.listen 0
+  let sa ← listener.getSockName
+  let some addr := Tcp.multiaddrOf sa | return none
+  let mut held : Array Tcp.Socket := #[listener]
+  for _ in [0:8] do
+    let c ← Std.Internal.UV.TCP.Socket.new
+    let p ← c.connect sa
+    held := held.push c
+    let mut pending := true
+    for _ in [0:50] do
+      if ← IO.hasFinished p.result? then
+        pending := false
+        break
+      select #[← Park.sleep 10 ()]
+    if pending then return some (addr, held)
+  return none
+
+/-- The TCP transport over loopback (unit 2 milestones). -/
+private def tcpChecks (r : Runner) : Async Unit := do
+  -- Dial, listen, and echo. The listener names the port that the system
+  -- picked. 256 KiB crosses many reads and writes, and the echo writes
+  -- back while the client still writes, so the back-pressure runs both
+  -- ways.
+  do
+    let tcp := Tcp.transport
+    let l ← tcp.listen (← ma "/ip4/127.0.0.1/tcp/0")
+    r.check "a TCP listener on port 0 names the port it got"
+      (l.addr != (← ma "/ip4/127.0.0.1/tcp/0"))
+    let owner ← TaskSet.new
+    owner.spawn (Sim.serveEcho l owner)
+    let some c ← tcp.dial l.addr | throw <| IO.userError "tcp dial refused"
+    r.check "the TCP dialer's remote address is the listener's" (c.remoteAddr == l.addr)
+    let big := ByteArray.mk (Array.ofFn (n := 256 * 1024) fun i => UInt8.ofNat (i.val % 251))
+    let writer ← TaskSet.new
+    writer.spawn (c.write big)
+    let echoed ← c.readExactly big.size
+    writer.joinAll
+    r.check "TCP echo returns 256 KiB whole" (echoed.any fun (x, _) => x == big)
+    c.close
+    l.close
+    owner.joinAll
+
+  -- Close wakes the parked read with EOF, a second close does nothing,
+  -- and the peer reads the FIN as EOF.
+  do
+    let (client, server) ← tcpPair
+    let got : OnceRef (Option (Option ByteArray)) ← OnceRef.new none
+    let ts ← TaskSet.new
+    ts.spawn do got.set (some (← client.read))
+    client.close
+    ts.joinAll
+    r.check "TCP close wakes a parked read with EOF" ((← got.get).any (·.isNone))
+    client.close
+    r.check "a second TCP close does nothing" ((← client.read).isNone)
+    r.check "the TCP peer reads the FIN as EOF" ((← server.read).isNone)
+    server.close
+
+  -- A write after the teardown throws, and the read stays at EOF. The
+  -- path of a failed write runs the same teardown as `close`.
+  do
+    let (client, server) ← tcpPair
+    client.close
+    let thrown ← try client.write (b "late"); pure false catch _ => pure true
+    r.check "a TCP write after the teardown throws" thrown
+    r.check "the TCP read stays at EOF after the teardown" ((← client.read).isNone)
+    server.close
+
+  -- A write that fails on the socket: the peer reset, so the kernel
+  -- refuses our sends. The writes go on until one throws. On loopback
+  -- the RST arrives at once, and the bound only stops a broken run from
+  -- looping forever. The failed write tears the connection down, so the
+  -- read then sees EOF.
+  do
+    let client ← tcpResetPeer
+    let chunk := ByteArray.mk (Array.replicate 65536 0x5a)
+    let mut failed := false
+    for _ in [0:1000] do
+      try client.write chunk catch _ => failed := true
+      if failed then break
+    r.check "a TCP write to a reset peer throws" failed
+    r.check "the failed TCP write tore the connection down: the read sees EOF"
+      ((← client.read).isNone)
+
+  -- A connect that hangs fails at the dial deadline. The address is a
+  -- loopback listener with a full accept queue (`stalledAddr`), so the
+  -- kernel drops our SYN, and only the deadline can end the dial.
+  match ← stalledAddr with
+  | none =>
+    r.skip "a TCP connect that hangs fails at the dial deadline"
+      "8 connects to a full backlog-0 queue all completed: this platform does not stall them"
+  | some (addr, held) =>
+    let tc ← TestClock.new
+    let answer : OnceRef (Option String) ← OnceRef.new none
+    let ts ← TaskSet.new
+    ts.spawn do
+      let res ← try
+          discard <| (Tcp.transport tc.clock).dial addr
+          pure "connected"
+        catch
+          | .timeExpired .. => pure "expired"
+          | e => pure s!"other: {e}"
+      answer.set (some res)
+    r.check "the TCP dial arms its connect deadline" (← tc.nextTimer)
+    tc.advance unauthDeadlineMs
+    ts.joinAll
+    -- `held` is named here, so the sockets that fill the queue live
+    -- through the dial.
+    r.check s!"a TCP connect that hangs fails at the dial deadline ({held.size} sockets fill the queue)"
+      ((← answer.get) == some "expired")
+    tc.close
+
+  -- A teardown with a write in flight to a peer that stops reading. The
+  -- write would never complete, and its request would hold the socket
+  -- forever, so the teardown aborts it. The peer then drains what reached
+  -- it and meets the reset. Without the abort, the drain would let the
+  -- writes complete and end with the FIN, as EOF. The peer is a raw
+  -- socket, since `Connection.read` answers the reset as EOF too. The
+  -- writer gets 300 ms of real time to fill the buffers and park.
+  do
+    let (client, server) ← tcpRawPeer
+    let chunk := ByteArray.mk (Array.replicate (1 <<< 20) 0x5a)
+    let ts ← TaskSet.new
+    ts.spawn do
+      try
+        for _ in [0:256] do client.write chunk
+      catch _ => pure ()
+    select #[← Park.sleep 300 ()]
+    client.close
+    ts.joinAll
+    r.check "TCP close wakes a write parked on a peer that stops reading" true
+    let mut reset := false
+    for _ in [0:100000] do
+      match ← awaitRaw (← server.recv? 65536) with
+      | .ok (some _) => pure ()
+      | .ok none => break
+      | .error _ =>
+        reset := true
+        break
+    r.check "the teardown aborted the stuck write: the peer meets a reset" reset
+
+  -- The peer's reset ends the read as EOF (module doc of `Streams.Tcp`,
+  -- "The peer's reset"). The peer of `tcpResetPeer` closes with unread
+  -- bytes, so its kernel answers with an RST. The read gets one second
+  -- of real time. Past it, the close wakes the read, and the check tells
+  -- the two apart by the cell that the read fills before the close.
+  do
+    let client ← tcpResetPeer
+    let got : OnceRef (Option (Except String (Option ByteArray))) ← OnceRef.new none
+    let ts ← TaskSet.new
+    ts.spawn do
+      let r ← try .ok <$> client.read catch e => pure (.error (toString e))
+      got.set (some r)
+    for _ in [0:100] do
+      if (← got.get).isSome then break
+      select #[← Park.sleep 10 ()]
+    let answer ← got.get
+    client.close
+    ts.joinAll
+    let seen := match answer with
+      | none => "no answer within 1 s"
+      | some (.ok none) => "EOF"
+      | some (.ok (some b)) => s!"{b.size} bytes"
+      | some (.error e) => s!"a fault: {e}"
+    r.check s!"a TCP read that meets the peer's reset answers EOF (it answered {seen})"
+      (match answer with | some (.ok none) => true | _ => false)
+    r.check "the reset tore the connection down: the read stays at EOF"
+      ((← client.read).isNone)
+
+  -- A listener close wakes the parked accept with none.
+  do
+    let l ← Tcp.transport.listen (← ma "/ip4/127.0.0.1/tcp/0")
+    let woke : OnceRef (Option Bool) ← OnceRef.new none
+    let ts ← TaskSet.new
+    ts.spawn do woke.set (some (← l.accept).isNone)
+    l.close
+    ts.joinAll
+    r.check "TCP listener close wakes a parked accept with none" ((← woke.get) == some true)
+
+  -- A closed listener stops listening: a dial is refused, and the port
+  -- takes a new listener. The runtime closes the released handle on the
+  -- libuv loop, a moment after `close`, so the check tries again for up
+  -- to one second in real time. The listener value stays in scope, so
+  -- the release comes from `close` alone.
+  do
+    let l ← Tcp.transport.listen (← ma "/ip4/127.0.0.1/tcp/0")
+    l.close
+    let mut refused := false
+    for _ in [0:100] do
+      if (← Tcp.transport.dial l.addr).isNone then
+        refused := true
+        break
+      select #[← Park.sleep 10 ()]
+    r.check "a TCP dial with no listener (a closed one) returns none" refused
+    let again ← try
+        let l2 ← Tcp.transport.listen l.addr
+        l2.close
+        pure true
+      catch _ => pure false
+    r.check "the port of a closed TCP listener takes a new listener" again
+    -- A use after the checks: the value is still held through them.
+    r.check "the closed listener still names its address" (l.addr == l.addr)
+
+  -- A silent peer: the read of the unauthenticated phase parks, the
+  -- deadline closes the connection, the read ends, and the peer reads
+  -- the FIN.
+  do
+    let tc ← TestClock.new
+    let (client, server) ← tcpPair
+    let answer : OnceRef (Option (Except Conc.Error (Option ByteArray))) ← OnceRef.new none
+    let ts ← TaskSet.new
+    ts.spawn do answer.set (some (← client.withinUnauthDeadline tc.clock client.read))
+    r.check "the TCP phase arms its deadline" (← tc.nextTimer)
+    tc.advance unauthDeadlineMs
+    ts.joinAll
+    r.check "a silent TCP peer fails at the deadline"
+      (match ← answer.get with | some (.error .deadlineExpired) => true | _ => false)
+    r.check "the expiry sent the FIN, and the TCP peer reads EOF" ((← server.read).isNone)
+    server.close
+    tc.close
 
 /-- Seeded random socket addresses, IPv4 and IPv6 in turns. -/
 private def randomSockets (count : Nat) (g : StdGen) : List Std.Net.SocketAddress :=
@@ -911,7 +1195,7 @@ private def tcpMappingChecks (r : Runner) : IO Unit := do
     fails.isEmpty
 
 def Streams.run (r : Runner) : IO Unit := do
-  r.section "streams" "(packages/net/streams/docs/PLAN.md, test milestones, unit 1)"
+  r.section "streams" "(packages/net/streams/docs/PLAN.md, test milestones, units 1 and 2)"
   mockChecks r
   let all : Async Unit := do
     simChecks r
@@ -921,7 +1205,8 @@ def Streams.run (r : Runner) : IO Unit := do
     framingChecks r
     streamChecks r
     deadlineChecks r
-    tcpStubChecks r
+    tcpAddressChecks r
+    tcpChecks r
   all.run
   harnessChecks r
   tcpMappingChecks r

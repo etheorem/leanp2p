@@ -11,7 +11,7 @@ import Streams.Tcp
 # Streams
 
 Connections, buffered readers, and framing (ARCHITECTURE §4.7): the
-`Transport` seam with the sim and the TCP stub as its two values, the
+`Transport` seam with the sim and TCP as its two values, the
 `BufReader` and `Framing` reads, and the `Stream` seam over a muxer
 loop. The package docs are under `docs/` beside this file.
 

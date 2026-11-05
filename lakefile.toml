@@ -39,6 +39,14 @@ testDriver = "tests"
 name = "Backend"
 path = "packages/crypto/backend"
 
+# `net/streams/shim` is a nested Lake package for the same reason. Its
+# `lakefile.lean` builds the C abort of the TCP transport. It provides
+# the `StreamsShim` library, and it links against the toolchain's own
+# `libuv.a`.
+[[require]]
+name = "StreamsShim"
+path = "packages/net/streams/shim"
+
 # The etheorem hazmat pins (root ARCHITECTURE §4.6, PLAN W3.2). Each is
 # one single-family package, never the `LeanHazmat` umbrella, so the
 # build compiles only the families it uses. All sit at one monorepo
@@ -66,6 +74,12 @@ git = "https://github.com/etheorem/etheorem"
 rev = "169cf718a7d149a2973aa4e6468994720a6f356e"
 subDir = "packages/hazmat/LeanHazmatSecp256k1"
 
+# The native helper builds the Snappy static archive. This file stays
+# the root configuration. The helper adds no Lean library.
+[[require]]
+name = "snappyNative"
+path = "packages/codec/snappy/native"
+
 [[lean_lib]]
 name = "Conc"
 srcDir = "packages/base/conc"
@@ -87,6 +101,7 @@ globs = ["Varint.*"]
 name = "Multiformats"
 srcDir = "packages/codec/multiformats"
 roots = ["Multiformats"]
+globs = ["Multiformats.*"]
 
 [[lean_lib]]
 name = "Proto"
@@ -98,16 +113,21 @@ globs = ["Proto.*"]
 name = "Snappy"
 srcDir = "packages/codec/snappy"
 roots = ["Snappy"]
+# The library waits for the production block-only archive and links it.
+needs = ["snappyNative/snappy"]
+moreLinkObjs = ["snappyNative/snappy"]
 
 [[lean_lib]]
 name = "Crypto"
 srcDir = "packages/crypto"
 roots = ["Crypto"]
+globs = ["Crypto.*"]
 
 [[lean_lib]]
 name = "CryptoPure"
 srcDir = "packages/crypto/pure"
 roots = ["CryptoPure"]
+globs = ["CryptoPure.*"]
 
 [[lean_lib]]
 name = "Streams"

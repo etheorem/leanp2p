@@ -4,6 +4,9 @@ import Tests.Concurrency
 import Tests.Protobuf
 import Tests.Bytes
 import Tests.Varint
+import Tests.Snappy
+import Tests.Multiformats
+import Tests.MultiaddrWire
 import Tests.Streams
 import Tests.Backend
 import Tests.HazmatPins
@@ -11,6 +14,10 @@ import Tests.BackendX509
 import Tests.BackendStrict
 import Tests.BackendSoak
 import Tests.Keys
+import Tests.PeerIds
+import Tests.Hashes
+import Tests.Facade
+import Tests.CryptoCross
 
 /-!
 # Test entry point
@@ -30,6 +37,9 @@ def main : IO UInt32 := do
   Tests.Protobuf.run r
   Bytes.runTests r
   Tests.Varint.run r
+  Tests.Snappy.run r
+  Tests.Multiformats.run r
+  Tests.MultiaddrWire.run r
   Tests.Streams.run r
   Tests.Backend.run r
   Tests.HazmatPins.run r
@@ -37,4 +47,8 @@ def main : IO UInt32 := do
   Tests.BackendStrict.run r
   Tests.BackendSoak.run r
   Tests.Keys.run r
+  Tests.PeerIds.run r
+  Tests.Hashes.run r
+  Tests.Facade.run r
+  Tests.CryptoCross.run r
   r.summary

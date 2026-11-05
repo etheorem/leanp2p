@@ -39,6 +39,14 @@ private def isRejected {α : Type} [Pb.ProtoMessage α] (bytes : ByteArray) : Bo
   | .error _ => true
   | .ok _ => false
 
+private def checkDerivation (r : Runner) (name : String) (key : PrivKey)
+    (expected : ByteArray) : IO Unit := do
+  match derivePubKey key with
+  | .error error => r.check s!"public key derives {name}: {repr error}" false
+  | .ok publicKey =>
+      r.check s!"public key derives fixture {name}"
+        (publicKey.keyType == key.keyType && publicKey.raw == expected)
+
 -- Read fixture components independently of the production DER writer. This
 -- helper only slices test data; no production decoder uses it.
 private def derPayload? (bytes : ByteArray) (pos : Nat) : Option (ByteArray × Nat) := do
@@ -161,6 +169,21 @@ def Keys.run (r : Runner) : IO Unit := do
     checkPublic r s!"go {name} public"
       (← unhex name (← jStr "keys-go-libp2p.json" entry "pubHex"))
       (← unhex name (← jStr "keys-go-libp2p.json" entry "pubRawHex"))
+    match unmarshalPrivKey? (← unhex name (← jStr "keys-go-libp2p.json" entry "privHex")) with
+    | .error error => r.check s!"derivation fixture decodes {name}: {repr error}" false
+    | .ok key =>
+        checkDerivation r name key
+          (← unhex name (← jStr "keys-go-libp2p.json" entry "pubRawHex"))
+
+  let rfc ← loadJson "keys-rfc8032.json"
+  for entry in (← jArr "keys-rfc8032.json" rfc "ed25519") do
+    let name ← jStr "keys-rfc8032.json" entry "name"
+    let seed ← unhex name (← jStr "keys-rfc8032.json" entry "seedHex")
+    let publicKey ← unhex name (← jStr "keys-rfc8032.json" entry "pubHex")
+    for raw in [seed, seed ++ publicKey, seed ++ publicKey ++ publicKey] do
+      match PrivKey.ofData? .ed25519 raw with
+      | none => r.check s!"RFC private key accepted {name}, length {raw.size}" false
+      | some key => checkDerivation r s!"RFC {name}, length {raw.size}" key publicKey
 
   for (name, code, raw) in [
       ("31-byte Ed25519 public", 1, ByteArray.mk (Array.replicate 31 0)),

@@ -13,7 +13,7 @@ each `open` of `Streams.Mock.Multiformats` becomes an `open` of
 ## What the mock covers
 
 The mock is narrow. It knows four protocols: `ip4`, `ip6`, `tcp`, and
-`memory`. The sim and the TCP stub use these four and no other
+`memory`. The sim and the TCP transport use these four and no other
 (`vendor/multiaddr/protocols.csv` gives the codes and the sizes). The
 real package parses the full protocol table, and its text parser is
 strict (§4.4). The mock parser accepts the four forms below and

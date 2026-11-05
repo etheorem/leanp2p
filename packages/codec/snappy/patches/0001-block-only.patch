@@ -1,0 +1,263 @@
+--- a/snappy.cc
++++ b/snappy.cc
+@@ -74,6 +74,9 @@
+ #include <cstdint>
+ #include <cstdio>
+ #include <cstring>
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++#include <cstdlib>
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+ #include <limits>
+ #include <memory>
+ #include <string>
+@@ -764,9 +767,26 @@
+          MaxCompressedLength(max_fragment_size);
+ }
+
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++// malloc is aligned for uint16_t. A failed allocation aborts. The
++// caller never observes a null workspace.
++static char* AllocateOwnedWorkspaceOrAbort(size_t bytes) {
++  char* buffer = static_cast<char*>(std::malloc(bytes));
++  if (buffer == nullptr) {
++    std::abort();
++  }
++  return buffer;
++}
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
++
+ WorkingMemory::WorkingMemory(size_t input_size)
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
+     : WorkingMemory(input_size,
++                    AllocateOwnedWorkspaceOrAbort(RequiredSize(input_size))) {
++#else
++    : WorkingMemory(input_size,
+                     std::allocator<char>().allocate(RequiredSize(input_size))) {
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+   owns_mem_ = true;
+ }
+
+@@ -785,7 +805,11 @@
+
+ WorkingMemory::~WorkingMemory() {
+   if (owns_mem_) {
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++    std::free(mem_);
++#else
+     std::allocator<char>().deallocate(mem_, size_);
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+   }
+ }
+
+@@ -1972,9 +1996,19 @@
+   return InternalCompress(reader, writer, options, ctx->working_memory_);
+ }
+
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++CompressionContext::CompressionContext() : owns_working_memory_(true) {
++  void* mem = std::malloc(sizeof(internal::WorkingMemory));
++  if (mem == nullptr) {
++    std::abort();
++  }
++  working_memory_ = new (mem) internal::WorkingMemory(kBlockSize);
++}
++#else
+ CompressionContext::CompressionContext()
+     : working_memory_(new internal::WorkingMemory(kBlockSize)),
+       owns_working_memory_(true) {}
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+
+ size_t CompressionContext::WorkspaceSize() {
+   return sizeof(internal::WorkingMemory) +
+@@ -1997,7 +2031,12 @@
+ void CompressionContext::Reset() {
+   if (working_memory_ == nullptr) return;
+   if (owns_working_memory_) {
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++    working_memory_->~WorkingMemory();
++    std::free(working_memory_);
++#else
+     delete working_memory_;
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+   } else {
+     working_memory_->~WorkingMemory();
+   }
+@@ -2382,6 +2421,7 @@
+   return InternalUncompress(compressed, &output);
+ }
+
++#if !defined(LEANP2P_SNAPPY_BLOCK_ONLY)
+ bool Uncompress(const char* compressed, size_t compressed_length,
+                 std::string* uncompressed) {
+   size_t ulength;
+@@ -2397,6 +2437,7 @@
+   return RawUncompress(compressed, compressed_length,
+                        string_as_array(uncompressed));
+ }
++#endif  // !LEANP2P_SNAPPY_BLOCK_ONLY
+
+ // A Writer that drops everything on the floor and just does validation
+ class SnappyDecompressionValidator {
+@@ -2496,6 +2537,7 @@
+   *compressed_length = (writer.CurrentDestination() - compressed);
+ }
+
++#if !defined(LEANP2P_SNAPPY_BLOCK_ONLY)
+ size_t Compress(const char* input, size_t input_length,
+                 std::string* compressed) {
+   return Compress(input, input_length, compressed, CompressionOptions{});
+@@ -2536,6 +2578,7 @@
+   compressed->erase(compressed_length);
+   return compressed_length;
+ }
++#endif  // !LEANP2P_SNAPPY_BLOCK_ONLY
+
+ // -----------------------------------------------------------------------
+ // Sink interface
+@@ -2719,6 +2762,7 @@
+   return true;
+ }
+
++#if !defined(LEANP2P_SNAPPY_BLOCK_ONLY)
+ class SnappySinkAllocator {
+  public:
+   explicit SnappySinkAllocator(Sink* dest) : dest_(dest) {}
+@@ -2802,5 +2846,6 @@
+                                      uncompressed_len);
+   }
+ }
++#endif  // !LEANP2P_SNAPPY_BLOCK_ONLY
+
+ }  // namespace snappy
+--- a/snappy-sinksource.cc
++++ b/snappy-sinksource.cc
+@@ -28,6 +28,9 @@
+
+ #include <stddef.h>
+ #include <cstring>
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++#include <cstdlib>
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+
+ #include "snappy-sinksource.h"
+
+@@ -37,6 +40,34 @@
+
+ Sink::~Sink() = default;
+
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++void Sink::Append(const char*, size_t) { std::abort(); }
++
++void Sink::operator delete(void*) noexcept { std::abort(); }
++
++void Sink::operator delete(void*, size_t) noexcept { std::abort(); }
++
++size_t Source::Available() const { std::abort(); }
++
++const char* Source::Peek(size_t*) { std::abort(); }
++
++void Source::Skip(size_t) { std::abort(); }
++
++void Source::operator delete(void*) noexcept { std::abort(); }
++
++void Source::operator delete(void*, size_t) noexcept { std::abort(); }
++
++void ByteArraySource::operator delete(void*) noexcept { std::abort(); }
++
++void ByteArraySource::operator delete(void*, size_t) noexcept { std::abort(); }
++
++void UncheckedByteArraySink::operator delete(void*) noexcept { std::abort(); }
++
++void UncheckedByteArraySink::operator delete(void*, size_t) noexcept {
++  std::abort();
++}
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
++
+ char* Sink::GetAppendBuffer(size_t length, char* scratch) {
+   // TODO: Switch to [[maybe_unused]] when we can assume C++17.
+   (void)length;
+--- a/snappy-sinksource.h
++++ b/snappy-sinksource.h
+@@ -38,9 +38,21 @@
+  public:
+   Sink() { }
+   virtual ~Sink();
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++  // The virtual destructor emits a deleting destructor. These
++  // deallocation functions abort if that destructor runs.
++  static void operator delete(void*) noexcept;
++  static void operator delete(void*, size_t) noexcept;
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+
+   // Append "bytes[0,n-1]" to this.
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++  // A pure virtual would leave __cxa_pure_virtual in the vtable.
++  // The block-only body aborts.
++  virtual void Append(const char* bytes, size_t n);
++#else
+   virtual void Append(const char* bytes, size_t n) = 0;
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+
+   // Returns a writable buffer of the specified length for appending.
+   // May return a pointer to the caller-owned scratch buffer which
+@@ -112,9 +124,17 @@
+  public:
+   Source() { }
+   virtual ~Source();
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++  static void operator delete(void*) noexcept;
++  static void operator delete(void*, size_t) noexcept;
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+
+   // Return the number of bytes left to read from the source
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++  virtual size_t Available() const;
++#else
+   virtual size_t Available() const = 0;
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+
+   // Peek at the next flat region of the source.  Does not reposition
+   // the source.  The returned region is empty iff Available()==0.
+@@ -129,12 +149,20 @@
+   // if this ByteSource is a view on a substring of a larger source).
+   // The caller is responsible for ensuring that it only reads the
+   // Available() bytes.
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++  virtual const char* Peek(size_t* len);
++#else
+   virtual const char* Peek(size_t* len) = 0;
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+
+   // Skip the next n bytes.  Invalidates any buffer returned by
+   // a previous call to Peek().
+   // REQUIRES: Available() >= n
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++  virtual void Skip(size_t n);
++#else
+   virtual void Skip(size_t n) = 0;
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+
+  private:
+   // No copying
+@@ -147,6 +175,10 @@
+  public:
+   ByteArraySource(const char* p, size_t n) : ptr_(p), left_(n) { }
+   ~ByteArraySource() override;
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++  static void operator delete(void*) noexcept;
++  static void operator delete(void*, size_t) noexcept;
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+   size_t Available() const override;
+   const char* Peek(size_t* len) override;
+   void Skip(size_t n) override;
+@@ -160,6 +192,10 @@
+  public:
+   explicit UncheckedByteArraySink(char* dest) : dest_(dest) { }
+   ~UncheckedByteArraySink() override;
++#if defined(LEANP2P_SNAPPY_BLOCK_ONLY)
++  static void operator delete(void*) noexcept;
++  static void operator delete(void*, size_t) noexcept;
++#endif  // LEANP2P_SNAPPY_BLOCK_ONLY
+   void Append(const char* data, size_t n) override;
+   char* GetAppendBuffer(size_t len, char* scratch) override;
+   char* GetAppendBufferVariable(

@@ -39,7 +39,7 @@ def getSub? (num : Nat) (fs : Fields) : Except Error (Option Fields) := do
 /-- A valid UTF-8 reading of the last payload, when available. -/
 def getStr? (num : Nat) (fs : Fields) : Option String := do
   let bs ← getBytes? num fs
-  Mock.Bytes.toString? (Mock.Bytes.ofNatList bs)
+  Bytes.toString? (Bytes.ofNatList bs)
 
 /-- All integer occurrences keep their order and ignore other wire types. -/
 def getAllVarints (num : Nat) (fs : Fields) : List Nat :=
@@ -54,7 +54,7 @@ def getAllBytes (num : Nat) (fs : Fields) : List (List Nat) :=
 /-- Repeated string readings retain the order of the valid UTF-8 payloads. -/
 def getAllStrs (num : Nat) (fs : Fields) : List String :=
   (getAllBytes num fs).filterMap fun bs =>
-    Mock.Bytes.toString? (Mock.Bytes.ofNatList bs)
+    Bytes.toString? (Bytes.ofNatList bs)
 
 /-- Presence does not depend on the entry's wire type or payload length. -/
 def hasField (num : Nat) (fs : Fields) : Bool :=

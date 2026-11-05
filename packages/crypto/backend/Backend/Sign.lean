@@ -173,9 +173,10 @@ def rsaVerify (spki msg sig : ByteArray) : Bool := rsaVerifyRaw spki msg sig
 
 /-! ## ECDSA P-256
 
-Signing and public-key derivation stay here. Verification here is the
-interim fallback until the facade routes it to `LeanHazmatP256`
-(root ARCHITECTURE §4.6). -/
+Signing and public-key derivation stay here. The facade routes
+verification to `LeanHazmatP256` (root ARCHITECTURE §4.6). The verifier
+here is the reference of the route's differential test, and one facade
+line restores the route to it. -/
 
 @[extern "leanp2p_p256_public"]
 private opaque p256PublicRaw (priv : @& ByteArray) : Option ByteArray

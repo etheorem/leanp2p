@@ -1,0 +1,14 @@
+repository = "https://github.com/google/snappy"
+release = "1.3.1"
+commit = "9c28114a38866f6deeaa826db918293bc28ae410"
+
+files = [
+  "COPYING",
+  "pristine/snappy.cc",
+  "pristine/snappy.h",
+  "pristine/snappy-internal.h",
+  "pristine/snappy-sinksource.cc",
+  "pristine/snappy-sinksource.h",
+  "pristine/snappy-stubs-internal.h",
+  "pristine/snappy-stubs-public.h.in",
+]

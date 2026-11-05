@@ -75,7 +75,7 @@ vendor verify included.
 |---|---|---|---|---|
 | W2.1 | `codec/varint` | P0 | W1.2 | encoder, decoder, and theorems; an over-long varint is a protocol error (`malformed`) |
 | W2.2 | `codec/proto` | P0 | W1.2, W2.1 | `Fields`, encode/decode, last-wins singular lookups, round-trip theorem; the `ProtoMessage` class (ARCHITECTURE §3.2) |
-| W2.3 | `codec/multiformats` | P0 | W1.2, W2.1 | multihash, multibase, base58, CID, multiaddr (full table, strict text parser, binary codec, operations API) |
+| W2.3 | `codec/multiformats` | P0 | W1.2, W2.1 | multihash, checked multibase, base58, CID, multiaddr (full table, strict text parser, exact canonical binary codec, peer text view, checked operations API); contract details: ARCHITECTURE §4.4 |
 
 ## W3: crypto (parallel with W2)
 

@@ -1,6 +1,7 @@
 import Libp2p.Identity.Keys
 import Crypto
-import Multiformats
+import Multiformats.Cid
+import Multiformats.Multiaddr.Value
 
 /-!
 # Peer IDs
@@ -20,19 +21,18 @@ open Multiformats
 
 namespace PeerId
 
-/-- The identity owns the accepted hash functions and SHA-256 digest size. -/
+/-- Peer IDs and multiaddr's p2p component accept the same multihash shapes. -/
 def Valid (hash : Multihash) : Prop :=
-  hash.code = 0 ∨ (hash.code = 0x12 ∧ hash.length = peerIdDigestSize)
+  Multiaddr.validPeerHash hash = true
 
 instance (hash : Multihash) : Decidable (Valid hash) :=
-  inferInstanceAs (Decidable (hash.code = 0 ∨
-    (hash.code = 0x12 ∧ hash.length = peerIdDigestSize)))
+  inferInstanceAs (Decidable (Multiaddr.validPeerHash hash = true))
 
-/-- Parsing records the alphabet so printing preserves the accepted string. -/
+/-- Keep the accepted CID spelling, including any case variations. -/
 inductive TextForm where
   | legacy
-  | cid (base : Multibase.Base)
-  deriving DecidableEq, BEq, Hashable, Ord, Repr
+  | cid (text : String)
+  deriving DecidableEq, Repr
 
 /-- Keep dependency failures distinct from peer-specific shape rejections. -/
 inductive Error where
@@ -43,28 +43,37 @@ inductive Error where
 
 end PeerId
 
-/-- A checked peer multihash, with the representation chosen at its boundary. -/
+/-- A checked peer multihash, with the representation chosen at its boundary.
+The private constructor keeps parsed text tied to the identity it decoded. -/
 structure PeerId where
+  private mk ::
   multihash : Multihash
   valid : PeerId.Valid multihash
   textForm : PeerId.TextForm := .legacy
   deriving DecidableEq, Repr
 
+private def PeerId.identityKey (peer : PeerId) : Nat × List Nat :=
+  (peer.multihash.code.toCode, peer.multihash.digest)
+
 /-- Runtime equality identifies peers independently of their text representation.
 Structural equality still includes `textForm`, so this is not `LawfulBEq`. -/
-instance : BEq PeerId := ⟨fun left right => left.multihash == right.multihash⟩
+instance : BEq PeerId := ⟨fun left right => left.identityKey == right.identityKey⟩
 
 /-- Peerstore keys hash the same identity equally across text forms. -/
-instance : Hashable PeerId := ⟨fun peer => hash peer.multihash⟩
+instance : Hashable PeerId := ⟨fun peer => hash peer.identityKey⟩
 
 /-- Ordering uses the same identity as runtime equality, ignoring presentation. -/
-instance : Ord PeerId := ⟨fun left right => compare left.multihash right.multihash⟩
+instance : Ord PeerId where
+  compare left right :=
+    -- Lean provides pair ordering as a value, so select it locally.
+    letI : Ord (Nat × List Nat) := lexOrd
+    compare left.identityKey right.identityKey
 
 namespace PeerId
 
 /-- Check the peer-specific rule once, after the general multihash decoder. -/
-def ofMultihash? (hash : Multihash) (form : TextForm := .legacy) : Except Error PeerId :=
-  if h : Valid hash then .ok ⟨hash, h, form⟩ else .error .invalidMultihash
+def ofMultihash? (hash : Multihash) : Except Error PeerId :=
+  if h : Valid hash then .ok ⟨hash, h, .legacy⟩ else .error .invalidMultihash
 
 /-- Bare multihash bytes are the binary peer ID, without a CID wrapper. -/
 def toBytes (peer : PeerId) : ByteArray := peer.multihash.toByteArray
@@ -77,24 +86,29 @@ def ofBytes? (bytes : ByteArray) : Except Error PeerId := do
 def ofPublicKey (key : PubKey) : Except Error PeerId := do
   let encoded := marshalPubKey key
   let hash ← if encoded.size ≤ maxInlineKeySize then
-      Multihash.ofDigest? 0 encoded |>.mapError Error.encoding
+      Multihash.ofDigest? .identity (Bytes.toNatList encoded) |>.mapError Error.encoding
     else do
       let digest ← Crypto.sha256 encoded |>.mapError Error.crypto
-      Multihash.ofDigest? 0x12 digest |>.mapError Error.encoding
+      Multihash.ofDigest? .«sha2-256» (Bytes.toNatList digest) |>.mapError Error.encoding
   ofMultihash? hash
 
 /-- Explicit legacy conversion leaves the recorded form unchanged. -/
 def toBase58 (peer : PeerId) : String := Base58.encode peer.toBytes
 
-/-- Explicit CIDv1 conversion defaults to unpadded lower-case base32. -/
-def toCidString (peer : PeerId) (base : Multibase.Base := .base32) : String :=
-  Multibase.encode base (Cid.toByteArray (.v1 Cid.codecLibp2pKey peer.multihash))
+/-- Convert to a chosen CIDv1 base, reporting that base's encoding errors. -/
+def toCidString? (peer : PeerId) (base : Multibase.Base) : Except Error String :=
+  Multibase.encode base (Cid.toByteArray (.v1 .«p2p-key» peer.multihash))
+    |>.mapError Error.encoding
+
+/-- The default CIDv1 form is total, unpadded lower-case base32. -/
+def toCidString (peer : PeerId) : String :=
+  Multibase.encodeBase32 (Cid.toByteArray (.v1 .«p2p-key» peer.multihash))
 
 /-- Print the stored representation; this operation is total on checked IDs. -/
 def toString (peer : PeerId) : String :=
   match peer.textForm with
   | .legacy => peer.toBase58
-  | .cid base => peer.toCidString base
+  | .cid text => text
 
 instance : ToString PeerId := ⟨PeerId.toString⟩
 
@@ -104,13 +118,13 @@ def ofString? (text : String) : Except Error PeerId := do
   if text.startsWith "1" || text.startsWith "Qm" then
     ofBytes? (← Base58.decode? text |>.mapError Error.encoding)
   else do
-    let (base, bytes) ← Multibase.decode? text |>.mapError Error.encoding
+    let (_, bytes) ← Multibase.decode? text |>.mapError Error.encoding
     let cid ← Cid.ofByteArray? bytes |>.mapError Error.encoding
     match cid with
-    | .v1 codec hash =>
-        if codec != Cid.codecLibp2pKey then throw .invalidCid
-        ofMultihash? hash (.cid base)
-    | .v0 _ => throw .invalidCid
+    | .v1 .«p2p-key» hash =>
+        let peer ← ofMultihash? hash
+        return { peer with textForm := .cid text }
+    | _ => throw .invalidCid
 
 /-- The newtype exposes its checked invariant without a repeated runtime test. -/
 theorem valid_multihash (peer : PeerId) : Valid peer.multihash := peer.valid

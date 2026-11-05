@@ -19,8 +19,9 @@ discipline and the no-reader-strand contract (§4.7), the framing caps
 | `Streams/BufReader.lean` | `BufReader`, exact-length reads with a buffer over one connection, with the theorems of its offset arithmetic |
 | `Streams/Framing.lean` | `Framing`, length-prefix reads: the `Prefix` shapes, the `Frame` codec with its `LawfulCodec` proof, the `ByteArray` path, and the IO read; the caps of §5.1 apply before allocation |
 | `Streams/Stream.lean` | `Stream`, the application view over a muxer loop, with `prependBytes`; `Completions`, the tag table, as a pure state with its theorems; `LoopPort`, what a muxer shell gives one stream |
-| `Streams/Tcp.lean` | the TCP transport, the production `Transport` value, over `Std.Async.TCP` (§9, delta 7); the mapping between a multiaddr and a socket address. Unit 1 makes it a stub whose `dial` and `listen` throw, and unit 2 gives it the sockets |
+| `Streams/Tcp.lean` | the TCP transport, the production `Transport` value, over the libuv sockets that `Std.Async.TCP` exports (§9, delta 7); the mapping between a multiaddr and a socket address |
 | `Streams/Sim.lean` | the in-memory sim, the test `Transport` value, with the dial/listen/echo harness and the byte-splitting hostile mode |
+| `shim/` | a nested Lake package, as `crypto/backend` is: `StreamsShim.abort`, which ends every pending request of a TCP socket, and `StreamsShim.econnreset`, the platform's `ECONNRESET` (see "Decisions") |
 | `Streams/Mock/Bytes.lean` | the mock of `base/bytes` until W1.2 merges (see "The mocks") |
 | `Streams/Mock/Varint.lean` | the mock of `codec/varint` until W2.1 merges, with two mock axioms |
 | `Streams/Mock/Multiaddr.lean` | the mock of the multiaddr surface of `codec/multiformats` until W2.3 merges |
@@ -28,8 +29,10 @@ discipline and the no-reader-strand contract (§4.7), the framing caps
 All declarations live in the `Streams` namespace. The root module
 re-exports the public submodules, including `Sim.lean` (§10, row 9), so
 a suite imports one name. `Streams/Tcp.lean` is the only module that
-touches `Std.Async.TCP` (§9, delta 7): a second transport or a
-toolchain API change touches one module.
+calls the sockets of `Std.Async.TCP` (§9, delta 7): a second transport
+or a toolchain API change touches one module. The shim names the
+socket type for its binding, and its C file checks the toolchain
+version (see "Decisions").
 
 The spike modules `Net/{Transport,Tcp}.lean`,
 `Conn/{Reader,Frame,Stream}.lean`, and `Sim.lean` are the reference
@@ -116,10 +119,19 @@ The names are §7 row 8's. The types follow §3.1.
 
 1. **The TCP close discipline** (§4.7, verbatim): libuv drops
    cancelled promises, so `close` resolves the promise of the parked
-   read itself. A double resolve is a no-op. `close` also sends a FIN
-   to the peer. A failed write tears the connection down: the local
-   read sees EOF, and the peer gets a FIN. The reason is PRINCIPLES
-   3.1: never cancel; wake by close.
+   read itself. A double resolve is a no-op. `close` also ends the
+   connection toward the peer. With no write in flight, it sends a
+   FIN. With a write in flight, it sends an RST: a write to a peer
+   that stops reading never completes, the FIN waits behind it, and
+   the write request holds the socket and its descriptor. A failed
+   write tears the connection down: the local read sees EOF, and the
+   peer gets a FIN or an RST by the same rule. The reason is
+   PRINCIPLES 3.1: never cancel; wake by close. The package keeps it
+   in `Streams/Tcp.lean`: the state cell of a connection holds the
+   promise of every parked read and write, and the one teardown of
+   `close`, of a failed write, and of a failed read resolves them all
+   before it releases the socket. The shim decision below gives the
+   RST path.
 2. **No reader strand** (§4.7, verbatim): the stage that over-reads
    owns those bytes and hands them on as data. Every upgrade stage
    takes the leftover `ByteArray` of the previous stage and returns
@@ -152,6 +164,80 @@ The names are §7 row 8's. The types follow §3.1.
 - **The TCP transport binds `Std.Async.TCP` here and nowhere else**
   (§9, delta 7). The toolchain ships it over libuv in v4.34, and the
   wrapper module is the only file a toolchain move can break.
+- **TCP binds the native promises.** `Std.Async.TCP` turns each libuv
+  promise into an `Async` value at once, so a close could not reach
+  it. `Streams/Tcp.lean` calls the native socket of
+  `Std.Internal.UV.TCP`, which the public module exports. It holds the
+  promise of every parked read, write, accept, and connect, and it
+  resolves the promise itself before `cancelRecv` or `cancelAccept`
+  lets libuv drop it. The native socket has no close call: the
+  runtime closes the handle when the last reference to the socket
+  goes. So the socket lives in the state cell alone, and `close` takes
+  it out. A closed listener then refuses the next connect, and its
+  port is free. A connection hands its socket to the continuation of
+  `shutdown`, so the handle closes after the FIN. The checks: "TCP
+  close wakes a parked read with EOF", "TCP listener close wakes a
+  parked accept with none", and "the port of a closed TCP listener
+  takes a new listener" (`Tests/Streams.lean`).
+- **A C shim aborts stuck TCP requests.** Every pending connect,
+  write, and shutdown request of the runtime holds the socket too: each
+  one takes a reference (`vendor/lean4/src/runtime/uv/tcp.cpp`, lines
+  149, 241, and 645), and the finalizer that runs `uv_close` runs only
+  after the last one goes (line 45). A write to a peer that stops
+  reading never completes, so its socket and descriptor would live
+  forever, and a hostile peer could exhaust our descriptors. The v4.34
+  API has no close call, no send cancel, and no `TCP_USER_TIMEOUT`.
+  `shim/c/tcpabort.c` reads the descriptor with `uv_fileno` and calls
+  `shutdown(SHUT_RDWR)` and `connect(AF_UNSPEC)`. The kernel fails the
+  pending requests, each one drops its reference, and the runtime's
+  own finalizer closes the handle. The shim never calls `uv_close`,
+  because the finalizer must stay its only caller. It relies on one
+  runtime fact: the first field of `lean_uv_tcp_socket_object` is the
+  `uv_tcp_t` pointer (`vendor/lean4/src/runtime/uv/tcp.h`, line 26).
+  An `#error` on every toolchain but v4.34 makes a
+  bump check that fact again. The socket argument is borrowed (`@&`,
+  PRINCIPLES 4.1). The teardown aborts when a write is in flight, and
+  the peer gets an RST (§4.7). With no write in flight, it takes the
+  FIN path. A dial that outlives its deadline aborts its connect. A
+  `Socket.close` in the runtime would replace the shim. The check:
+  "the teardown aborted the stuck write: the peer meets a reset".
+- **The peer's reset ends the read as EOF.** §3.5 sorts the channels
+  by meaning. End of stream is "the peer finished; an orderly event",
+  and a fault is "the system failed". A peer that sends an RST has
+  finished, and our system has not failed. So a TCP read that meets
+  the peer's reset answers `none`, after the teardown that every
+  failed read runs. Only `ECONNRESET` on a read counts. The runtime
+  gives `EPIPE`, `ENETDOWN`, and `ENETRESET` the same constructor
+  (`resourceVanished`), and those stay faults. So the read compares
+  the errno with the platform's value from the shim
+  (`shim/c/tcperrno.c`). A write to a reset connection stays a fault,
+  the "write to a closed connection" of the `Connection` contract.
+  The references close and read the same way:
+  - go-libp2p closes every TCP connection with an RST. It sets the
+    linger to 0 on each dialed connection
+    (`vendor/go-libp2p/p2p/transport/tcp/tcp.go`, lines 278 to 281:
+    "When linger is 0, connections are _reset_ instead of closed with
+    a FIN") and on each accepted one (line 93, with the 0 of line
+    335).
+  - go-yamux treats a reset by the peer as it treats EOF when it reads
+    a frame header: it logs neither one as an error
+    (`vendor/go-yamux/session.go`, lines 723 to 727).
+  - nim-libp2p turns every error of a TCP read into an EOF
+    (`vendor/nim-libp2p/libp2p/stream/chronosstream.nim`, lines 78 to
+    80, "Stream EOF"), and its remote reset is a kind of EOF
+    (`vendor/nim-libp2p/libp2p/stream/lpstream.nim`, lines 55 and
+    57).
+
+  The checks: "a TCP read that meets the peer's reset answers EOF" and
+  "the reset tore the connection down: the read stays at EOF".
+- **A TCP dial has its own deadline** (§5.4). A connect to an address
+  that drops the SYN waits for the kernel timeout, which is minutes
+  long. The dial bounds the connect by `unauthDeadlineMs` on the
+  transport's `Clock`. On expiry it resolves the connect promise
+  itself and throws `timeExpired`. A refused connect (`ECONNREFUSED`,
+  which libuv reports as `noSuchThing`) answers `none`. The check: "a
+  TCP connect that hangs fails at the dial deadline", over a loopback
+  listener whose full accept queue drops the SYN.
 - **The sim is the second `Transport` value from the start** (§3.1).
   Every suite above the transport runs on it, and only the transport
   suite touches real TCP (PRINCIPLES 1.4). Its byte-splitting mode
@@ -242,7 +328,7 @@ and imports nothing from the real package.
   statement (etheorem/leanp2p#34). They are the only axioms of the
   package beyond the three standard axioms of Lean.
 - The multiaddr mock knows four protocols: `ip4`, `ip6`, `tcp`, and
-  `memory`. The sim and the TCP stub use these four alone.
+  `memory`. The sim and the TCP transport use these four alone.
 
 When a unit merges, the package deletes its mock and changes each
 `open` of the mock namespace to the real one. The suite checks the
@@ -276,6 +362,10 @@ the swap.
   `base/conc`, and the byte model and `DecodeError` from `base/bytes`.
   It uses nothing from `crypto`. Until W1.2, W2.1, and W2.3 merge, the
   mocks of "The mocks" replace those three packages.
+- One C shim, `shim/`, built by its own `lakefile.lean` (PRINCIPLES
+  4.2). It compiles against the toolchain's `lean.h`, and it links
+  against the `libuv.a` that the toolchain links into every
+  executable, so it needs no system library.
 - No protocol knowledge: no multistream message, no Noise frame, no
   yamux header. `Framing` knows the length-prefix shape alone, and the
   protocol layers own their message forms.

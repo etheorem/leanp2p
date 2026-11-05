@@ -88,11 +88,16 @@ forms (the SEC1/SPKI/PKCS#1 choices and the key-type protobuf) belong
 to `libp2p/identity`. `crypto/backend` exposes only the primitives
 (§4.6).
 
-The repository is one Lake package. Each leaf is one `lean_lib`, and
-the `Crypto` facade is one more, rooted at the group directory (§3.6).
-If external users appear, a later mechanical move can split the
-packages into separate repositories. Until then, version skew is a
-bigger risk than coupling.
+The repository has one primary Lake package. Each leaf is one `lean_lib`,
+with `Crypto` as another library rooted at the group directory (§3.6).
+When `lakefile.toml` cannot express a native target
+(`docs/PRINCIPLES.md` §4.2), a leaf may keep one small package-local Lake
+helper. The root requires it by path. The helper builds only that leaf's
+native artifacts, exposes no public Lean API, and shares the repository's
+version boundary. The leaf retains the public API, and the root
+`lakefile.toml` remains authoritative. If external users appear, a later
+mechanical move can split the packages into separate repositories. Until
+then, version skew is a bigger risk than coupling.
 
 **What `cli/` is for.** `cli/` holds everything whose job ends at
 `main`: executable entry points, command-line and config parsing, and
@@ -124,6 +129,10 @@ carries two documents of its own:
   and their order. It lists the dependencies on units of other
   packages, by the unit id from the root `PLAN.md`. It also names the
   test and vector milestones that close each unit.
+
+The `Crypto` facade has no leaf directory, and it carries the same pair
+at `packages/crypto/docs/`. The pair records the routes, the `Rng`
+seam, and the W3.3 cross-check.
 
 The hierarchy is strict. Package docs refine the root docs and never
 contradict them. A contract change starts at the root, and the package
@@ -367,7 +376,7 @@ A function fails in exactly one of three ways, and its type says which:
 |---|---|---|
 | protocol failure | `Except E α`, `E` an inductive the package owns | the peer, or our own input, broke the spec |
 | end of stream | `Option α` from a read, `none` | the peer finished; an orderly event |
-| fault | `IO.Error`, thrown | the system failed: a socket error, an allocation failure, an FFI fault |
+| fault | `IO.Error`, thrown | the system failed: a socket error, a recoverable allocation failure, an FFI fault |
 
 Rules:
 
@@ -419,6 +428,16 @@ type of each binding states what the C function does:
 - Every `ByteArray` argument is borrowed (`@&`). The Lean side checks
   sizes into proof-carrying newtypes (§3.7) before the call, so the
   shim validates nothing twice.
+
+**Runtime allocation exhaustion.** Recoverable allocation failures in
+`IO` or `Async` remain `IO.Error` (§3.5). A pure deterministic binding
+has no such channel. If the Lean runtime allocator is exhausted or a
+native scratch allocation fails, the shim follows Lean's non-returning
+out-of-memory behavior. A failed scratch allocation calls
+`lean_internal_panic_out_of_memory`.
+Exhaustion is neither a protocol failure nor an input failure, and the
+shim must not encode it as success or as a package-owned error. Every
+ordinary return still satisfies the purity contract above.
 
 **The facade.** Callers import `Crypto`, the root module of the group
 at `packages/crypto/Crypto.lean`. No caller imports `crypto/backend`,
@@ -641,6 +660,33 @@ parsers are strict: a leading `/`, no empty segments, no `_` digit
 separators, no leading-zero IPv4 octets. Percent codecs operate on the
 UTF-8 bytes of the text.
 
+`Multiaddr` contains canonical wire data and carries its validation
+proof. Its `LawfulCodec` instance proves exact value equality, as §3.2
+requires. `Multiaddr.parse?` returns this canonical value.
+`Multiaddr.parseText?` returns a `Multiaddr.Text` view that also keeps
+the parsed peer spelling. The view prints a parsed CID-form peer id in
+that form. Canonical and binary-decoded addresses print the bare
+base58 peer id. The wire format has no spelling bit, so storing that
+bit inside the value covered by the exact codec law would contradict
+the law.
+
+`Multibase.encode : Base → ByteArray → Except Multiformats.Error String`
+reports Proquint's domain error for an odd byte count. Proquint encodes
+whole 16-bit words. The compatibility name `encode?` has the same type.
+
+Address operations that construct values return `Except Error`:
+`encapsulate`, `join`, `split`, `decapsulate` and `decapsulateCode`.
+Appending can exceed the address cap or place a component after a Unix
+path. Splitting or truncating can detach an IPv6 zone from its address.
+The check applies to the result as well as the inputs. Lookup and
+collection operations keep their direct result types.
+
+Empty binary addresses roundtrip exactly and display as `/`. The text
+parser rejects both empty text and `/`, as the captured Go cases require.
+Text roundtrips apply when the nonempty printed form fits the text
+input cap. Binary roundtrips apply to every validated value, including
+addresses whose expanded text exceeds that cap.
+
 ### 4.5 `codec/proto`: protobuf wire codec
 
 Encode and decode over the byte model, with lengths framed by
@@ -731,8 +777,12 @@ Two contracts live here, and no change may drop them:
 
 - **TCP close discipline.** libuv drops cancelled promises, so `close`
   resolves the promise of the parked read itself. A double resolve is a
-  no-op. `close` also sends a FIN to the peer. A failed write tears the
-  connection down: the local read sees EOF, and the peer gets a FIN.
+  no-op. `close` also ends the connection toward the peer. With no
+  write in flight, it sends a FIN. With a write in flight, it sends an
+  RST: a write to a peer that stops reading never completes, the FIN
+  waits behind it, and the write request holds the socket and its
+  descriptor. A failed write tears the connection down: the local read
+  sees EOF, and the peer gets a FIN or an RST by the same rule.
 - **No reader strand.** The stage that over-reads owns those bytes and
   hands them on *as data*. Every upgrade stage takes the leftover
   `ByteArray` of the previous stage and returns its own, so the types
@@ -920,7 +970,7 @@ The build order, one `packages/<group>/<pkg>` per step:
 | 4 | `codec/proto` | `Crypto/Pb.lean` | `Fields`, `encodeFields(B)`, `decodeFields(B?)`, `get{Varint,Bytes,Sub,Str}?` (last-wins), `getAll*`, `hasField` | round-trip theorem, message-vector suite (field tables stay in libp2p) | deterministic encoding by construction |
 | 5 | `codec/multiformats` | `Crypto/{Multihash,Multibase,Base58,Cid}.lean`, `Net/Multiaddr.lean` | as named, plus `Multiaddr.parse?/toString/toByteArray/ofByteArray?`, operations API | RFC/multiformats vector suites + go/js CSVs + fuzz corpora + proved round-trips | the strictness rules carry over (leading `/`, no empty segments, percent = UTF-8 bytes) |
 | 6 | `crypto/pure` | `Crypto/{Sha256,Sha512,Sha1,Hmac,Hkdf}.lean` | digests, HMAC, HKDF | RFC vector suites + cross-checks against the production path | cross-checked against the production path at the IO edge |
-| 7 | `crypto/backend` | `Crypto/OpenSsl.lean`, `c/p2pcrypto.c` | Ed25519/X25519/RSA sign+verify, SHA-1/SHA-512/HMAC/HKDF, ChaCha20-Poly1305 seal/open, X.509 helpers, randomness and key generation, plus secp256k1, ECDSA P-256 signing and derivation, the interim fallback bindings (SHA-256, P-256 verification), and the pins for LeanHazmatSecp256k1/P256/Sha256/Keccak with the v4.34 build checks; every `ByteArray` argument **borrowed** (`@&`) | fixture suites + verifier-strictness regressions (key type, RSA 2048-8192, low-S, X.509 validity + critical exts) | key *marshalings* go to `libp2p/identity` (§4.6); P-256 verification and keccak-256 route to the etheorem hazmat packages, secp256k1 verification stays on the shim for low-S, and SHA-256 stays on the interim fallback while its pin is out (§4.6) |
+| 7 | `crypto/backend` | `Crypto/OpenSsl.lean`, `c/p2pcrypto.c` | Ed25519/X25519/RSA sign+verify, SHA-1/SHA-512/HMAC/HKDF, ChaCha20-Poly1305 seal/open, X.509 helpers, randomness and key generation, plus secp256k1, ECDSA P-256 signing and derivation, the interim SHA-256 fallback binding, the P-256 verifier, the reference of the differential test of the facade route, and the pins for LeanHazmatSecp256k1/P256/Sha256/Keccak with the v4.34 build checks; every `ByteArray` argument **borrowed** (`@&`) | fixture suites + verifier-strictness regressions (key type, RSA 2048-8192, low-S, X.509 validity + critical exts) | key *marshalings* go to `libp2p/identity` (§4.6); P-256 verification and keccak-256 route to the etheorem hazmat packages, secp256k1 verification stays on the shim for low-S, and SHA-256 stays on the interim fallback while its pin is out (§4.6) |
 | 8 | `net/streams` | `Net/{Transport,Tcp}.lean`, `Conn/{Reader,Frame,Stream}.lean`, `Sim.lean` | `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` (+`prependBytes`), sim harness | TCP suite (dial/listen, mss over TCP, noise over TCP, muxers over TCP), silent-peer teardown | contracts: libuv close-wakes discipline; failed write = teardown; no reader strand (each stage hands its leftover on as data, §4.7) |
 | 9 | `net/yamux` | `Conn/Yamux.lean` | header codec, session, muxer entry | yamux suite + hostile-frame regressions + interop prereqs | depends only on `Connection` from `net/streams`; caps, window enforcement, SYN-only creation, stream retirement, and wake hand-off carry over as contracts |
 | 10 | `libp2p/*` | everything else in the spike (`Host.lean`, `Conn/{Upgrade,Security,Noise,TlsExt,Mplex}.lean`, `Crypto/{Keys,PeerId,Messages}.lean`, `Protocol/*`, `Peer/*`) | see §4.9 | node suite + noise suite + keys suite + interop prereqs | build order inside: identity → core → security/noise ∥ mux (yamux) → negotiate → host → protocols; mplex last (deferred for consensus, §8) |

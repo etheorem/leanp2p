@@ -1,0 +1,55 @@
+{
+  "_provenance": {
+    "generatedBy": "packages/codec/snappy/tools/go-fixtures/main.go",
+    "module": "github.com/golang/snappy",
+    "version": "v0.0.4",
+    "api": "Encode/Decode",
+    "format": "raw Snappy block, not framed stream"
+  },
+  "goEncode": [
+    {
+      "name": "empty",
+      "inputHex": "",
+      "compressedHex": "00"
+    },
+    {
+      "name": "one byte",
+      "inputHex": "42",
+      "compressedHex": "010042"
+    },
+    {
+      "name": "short text",
+      "inputHex": "736e61707079",
+      "compressedHex": "0614736e61707079"
+    },
+    {
+      "name": "repetitive",
+      "inputHex": "6161616161616161616161616161616161616161616161616161616161616161",
+      "compressedHex": "2000617a0100"
+    },
+    {
+      "name": "binary",
+      "inputHex": "00017f80feff0010",
+      "compressedHex": "081c00017f80feff0010"
+    },
+    {
+      "name": "pseudo-random",
+      "inputHex": "8d3d5f21117e271400404feed6f46ab61f64fd9ff9b860445c438dbc75b10fa5718c30174b2a6c7c9ce902a244a56c7d5c5386f8ad307853671bcc3c74b4d506",
+      "compressedHex": "40f03f8d3d5f21117e271400404feed6f46ab61f64fd9ff9b860445c438dbc75b10fa5718c30174b2a6c7c9ce902a244a56c7d5c5386f8ad307853671bcc3c74b4d506"
+    }
+  ],
+  "nativeEncode": [
+    {
+      "name": "text",
+      "inputHex": "68656c6c6f2068656c6c6f2068656c6c6f2068656c6c6f",
+      "compressedHex": "171468656c6c6f20420600",
+      "record": "native backend regression"
+    },
+    {
+      "name": "binary",
+      "inputHex": "00017f80feff0010",
+      "compressedHex": "081c00017f80feff0010",
+      "record": "native backend regression"
+    }
+  ]
+}

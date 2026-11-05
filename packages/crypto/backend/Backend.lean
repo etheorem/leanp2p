@@ -14,6 +14,6 @@ it. Production callers import the `Crypto` facade, never this root
 live under `docs/` beside this file.
 
 This directory is a nested Lake package with its own `lakefile.lean`,
-because the C build is the one target the root `lakefile.toml` cannot
+because the C build is a target the root `lakefile.toml` cannot
 express.
 -/
