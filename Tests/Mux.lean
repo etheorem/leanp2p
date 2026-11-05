@@ -1,11 +1,13 @@
 import Tests.Support
 import Libp2p.Mux
+import Libp2p.Mux.Mock.Core
 import Libp2p.Mux.Test.Wire
 
 /-!
 # Mux suite (unit W5.4)
 
-The constant checks, and the private test-wire codec and parser
+The constant checks, the temporary core seam, and the private
+test-wire codec and parser
 (`packages/libp2p/mux/docs/ARCHITECTURE.md`).
 -/
 
@@ -402,6 +404,63 @@ def run (r : Runner) : IO Unit := do
 
 end Tests.Mux.Wire
 
+namespace Tests.Mux.Seam
+
+open Libp2p.Mux
+open Libp2p.Mux.Mock.Core
+
+/-- The detail carried by one seam error. -/
+private def detail : Error → String
+  | .protocol d => d
+  | .authentication d => d
+  | .timeout d => d
+  | .closed d => d
+
+example (s : MuxSession) :
+    ProtocolId → ExceptT Error Conc.Async Streams.Stream :=
+  s.openStream
+
+example (s : MuxSession) : Conc.Async (Option Streams.Stream) :=
+  s.accept
+
+example (s : MuxSession) : IO Unit :=
+  s.close
+
+example (s : MuxSession) : Conc.Async (Except Error Unit) :=
+  s.join
+
+example (m : Muxer) :
+    Role → Streams.Connection → ByteArray → ExceptT Error Conc.Async MuxSession :=
+  m.open
+
+/-- A value with `Mux.testId` and the seam fields. It runs no session. -/
+example : Muxer := {
+  id := testId
+  «open» := fun _ _ _ =>
+    pure {
+      openStream := fun _ => throw (Error.closed "unused")
+      accept := pure none
+      close := pure ()
+      join := pure (.ok ())
+    }
+}
+
+/-- The temporary seam types. -/
+def run (r : Runner) : IO Unit := do
+  r.section "mux core seam" "packages/libp2p/mux/Libp2p/Mux/Mock/Core.lean"
+  r.check "the two roles are distinct"
+    (decide (Role.initiator ≠ Role.responder))
+  let p := Error.protocol "wire"
+  let a := Error.authentication "wire"
+  let t := Error.timeout "wire"
+  let c := Error.closed "wire"
+  r.check "the four error arms keep their detail and stay distinct"
+    (detail p == "wire" && detail a == "wire" && detail t == "wire" && detail c == "wire"
+      && decide (p ≠ a) && decide (p ≠ t) && decide (p ≠ c)
+      && decide (a ≠ t) && decide (a ≠ c) && decide (t ≠ c))
+
+end Tests.Mux.Seam
+
 namespace Tests
 
 open Libp2p.Mux
@@ -421,5 +480,6 @@ def Mux.run (r : Runner) : IO Unit := do
       && yamuxId.toString != testId.toString
       && mplexId.toString != testId.toString)
   Mux.Wire.run r
+  Mux.Seam.run r
 
 end Tests
