@@ -23,10 +23,6 @@ sub-split below, with the reasons.
 
 Unit 0 is done.
 
-Unit 3b owns the trickle regressions that issue #23's done-when names. The pure `step` decides
-which peer receives which gossip on a tick. The randomised delay that spreads those messages
-across the heartbeat interval belongs to the loop, and the regression is a test of that loop.
-
 The splits follow the deliverable size. Unit 2a is pure codec work that
 starts when the snappy binding exists, and unit 2b needs the host's
 streams for the core's loop and the exchange, so the two wait on
@@ -97,6 +93,23 @@ in the codec group wrapping upstream `google/snappy`.
   bookkeeping, at the level the root names (root PLAN W6.4).
 - The signing-policy tests, once unit 3b records the choice against the
   two axes of the pubsub spec.
+- Unit 3b owns the trickle regressions that issue #23's done-when names.
+  The pure `step` decides which peer receives which gossip on a tick. The
+  loop owns the delay that spreads those messages across the heartbeat
+  interval. `Tests/Gossipsub/Node.lean` pins that delay on a test clock.
+- The loop suite, `Tests/Gossipsub/Node.lean`, runs over the in-memory
+  switch of `Mock/Host.lean`:
+  - One publish crosses two nodes and reaches the callback.
+  - A subscribe after the join reaches the peer, and an unsubscribe sends
+    the negative record.
+  - A bad frame fails its handler and resets its stream. A body that does
+    not decode leaves the loop running.
+  - The handler serves every frame of a stream, in any chunking.
+  - A heartbeat sends the graft, and a later publish reaches the mesh.
+  - The `i`-th IHAVE of a heartbeat leaves at `trickle i`, and no earlier.
+  - A publish with no peers opens no stream and delivers nothing locally.
+  - `stop` joins the loop, a later post answers `false`, and the switch
+    closes.
 - The gate (unit 3c): the interop suite against go and rust runs with
   no behavior difference, per root PLAN W6.4. This is a live suite over
   foreign nodes, and it closes the unit where no vector file can.
