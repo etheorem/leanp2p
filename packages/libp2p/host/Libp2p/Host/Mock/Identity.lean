@@ -63,7 +63,7 @@ opaque PeerId.ofPubKey (_k : PubKey) : Except Error PeerId :=
   .error (.unavailable "libp2p/identity (W5.1): peer id derivation")
 
 /-- The peer id of its binary form, the value of a `/p2p` component. -/
-opaque PeerId.ofBytes? (_b : List Nat) : Except Error PeerId :=
+opaque PeerId.ofBytes? (_b : ByteArray) : Except Error PeerId :=
   .error (.unavailable "libp2p/identity (W5.1): peer id parse")
 
 end Libp2p.Host.Mock.Identity
