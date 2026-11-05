@@ -1,6 +1,7 @@
 import Std
 import Conc
 import Streams
+import Libp2p.Protocols.Mock.Identity
 
 /-!
 # Core seam mock
@@ -30,10 +31,15 @@ inductive Error where
   deriving DecidableEq, BEq, Repr
 
 /-- The handler seam: the id it registers under, and the callback a
-served stream reaches. -/
+served stream reaches. The host looks a handler up by the protocol id
+alone, and it knows the peer at the call site, so the seam carries the
+peer. A gossipsub handler needs that id, because the core scores and
+filters by the sender of each RPC. -/
 structure StreamHandler where
+  /-- The id the handler serves. -/
   id : ProtocolId
-  handle : Streams.Stream → ExceptT Error Conc.Async Unit
+  /-- The offered stream and the peer that opened it. -/
+  handle : Identity.PeerId → Streams.Stream → ExceptT Error Conc.Async Unit
 
 /-- One map from a stream error to the coarse error, shared by every
 handler of this package. `closed` stays closed, `reset` is a protocol
