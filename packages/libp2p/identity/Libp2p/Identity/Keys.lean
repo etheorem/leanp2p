@@ -59,18 +59,6 @@ open Bytes
 
 /-! ## The `Keys` message -/
 
-/-- The byte model of `d` has one entry per byte. -/
-theorem lengthToNatList (d : ByteArray) : (toNatList d).length = d.size := by
-  unfold toNatList
-  rw [List.length_map, Array.length_toList]
-  rfl
-
-/-- Every entry of the byte model of `d` is a byte. -/
-theorem ltOfMemToNatList {d : ByteArray} {x : Nat} (h : x ∈ toNatList d) : x < 256 := by
-  simp only [toNatList, List.mem_map] at h
-  obtain ⟨b, _, rfl⟩ := h
-  exact b.toNat_lt
-
 /-- One `PublicKey` or `PrivateKey` message: the key type and the `Data`
 bytes, as the wire carries them. `dataLt` is the varint budget of the
 `Data` length prefix (`Pb.Value.Valid`), so `toFields` builds a
