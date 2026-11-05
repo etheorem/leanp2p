@@ -20,7 +20,7 @@ structure Multihash where
   digest : List Nat
   valid : ∀ b ∈ digest, b < 256
   bounded : digest.length ≤ maxDigestBytes
-  deriving DecidableEq, Repr
+  deriving DecidableEq, Repr, Hashable, Ord
 
 namespace Multihash
 

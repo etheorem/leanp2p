@@ -887,6 +887,46 @@ RFC_ED25519 = [
 ]
 
 
+def nim_const(src: str, name: str) -> str:
+    """The value of a `name = "…"` line in a nim const block."""
+    return re.search(rf'^\s+{name} = "([^"]*)"', src, re.M).group(1)
+
+
+def extract_peer_id_texts() -> None:
+    # nim, "CIDv1 text support": the base32 CIDv1 text parses to the id of
+    # the legacy text. "Reject invalid PeerId text forms": each text fails.
+    nim = read("vendor/nim-libp2p", "tests/libp2p/test_peer_id.nim")
+    support = nim[nim.index('test "CIDv1 text support"'):nim.index('test "Reject invalid PeerId text forms"')]
+    reject = nim[nim.index('test "Reject invalid PeerId text forms"'):nim.index('test "Reject PeerId with trailing bytes"')]
+    legacy = nim_const(support, "legacyPeerId")
+    consts = {n: nim_const(reject, n) for n in ["legacyPeerId", "wrongCodecCid", "malformedCid"]}
+    rejected = []
+    for arg in re.findall(r"PeerId\.init\(([^)]*)\)\.isErr\(\)", reject):
+        m = re.fullmatch(r'"([^"]*)"', arg) or re.fullmatch(r'"([^"]*)" & (\w+)', arg)
+        if m and m.re.groups == 2:
+            rejected.append(m.group(1) + consts[m.group(2)])
+        elif m:
+            rejected.append(m.group(1))
+        else:
+            rejected.append(consts[arg])
+    assert len(rejected) == 6, f"expected 6 rejected nim texts, got {rejected}"
+    write_json("peerid-text-nim.json", {
+        "_provenance": prov("vendor/nim-libp2p", "tests/libp2p/test_peer_id.nim",
+                            "test \"CIDv1 text support\"; test \"Reject invalid PeerId text forms\""),
+        "accepted": [{"text": nim_const(support, "cidBase32"), "legacy": legacy}],
+        "rejected": [{"text": t} for t in rejected],
+    })
+    # go, TestIDEncoding: a CID under another content codec is no peer id.
+    go = read("vendor/go-libp2p", "core/peer/peer_test.go")
+    example = re.search(r'exampleCid := "([^"]+)"', go).group(1)
+    write_json("peerid-text-go.json", {
+        "_provenance": prov("vendor/go-libp2p", "core/peer/peer_test.go",
+                            "TestIDEncoding, exampleCid"),
+        "accepted": [],
+        "rejected": [{"text": example}],
+    })
+
+
 def extract_rfc_crypto() -> None:
     write_json("hashes-rfc.json", {
         "_provenance": {
@@ -1182,6 +1222,7 @@ def main() -> None:
     extract_multibase()
     extract_mss()
     extract_peer_keys()
+    extract_peer_id_texts()
     extract_rfc_crypto()
     extract_protobuf_messages()
     extract_go_libp2p_fixtures()

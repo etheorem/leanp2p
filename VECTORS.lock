@@ -105,8 +105,8 @@ dir = "vendor/nim-libp2p"
 repo = "https://github.com/vacp2p/nim-libp2p"
 commit = "3dce083d1c9900d4d98878faaffe5c872b65ec48"
 branch = "master"
-paths = ["/libp2p/stream/chronosstream.nim", "/libp2p/stream/lpstream.nim", "/libp2p/muxers/yamux/yamux.nim", "/LICENSE*"]
-used-for = "chronosstream.nim and lpstream.nim: a TCP read error as EOF, and the remote reset as a kind of EOF (net/streams, the peer's reset); yamux.nim: the reset that clears the unread bytes (net/yamux)"
+paths = ["/libp2p/stream/chronosstream.nim", "/libp2p/stream/lpstream.nim", "/libp2p/muxers/yamux/yamux.nim", "/tests/libp2p/test_peer_id.nim", "/LICENSE*"]
+used-for = "chronosstream.nim and lpstream.nim: a TCP read error as EOF, and the remote reset as a kind of EOF (net/streams, the peer's reset); yamux.nim: the reset that clears the unread bytes (net/yamux); test_peer_id.nim: the peer id texts of peerid-text-nim.json (libp2p/identity)"
 
 [[vendor]]
 dir = "vendor/rust-yamux"
