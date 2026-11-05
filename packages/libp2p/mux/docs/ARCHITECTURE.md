@@ -23,6 +23,7 @@ same node code ran under both muxers in-process and over loopback TCP
 | `Libp2p/Mux/Mplex.lean` | the mplex message codec and `Mux.mplex` (P2, §8); the spike reference is `Conn/Mplex.lean` (§10 row 15, §7 row 10). Planned |
 | `Libp2p/Mux/Test.lean` | `Mux.test : Muxer`, the independent test session under `Mux.testId`. Planned |
 | `Libp2p/Mux/Test/Wire.lean` | the private header, frame, and incremental parser. Present. Internal, and tests import it directly |
+| `Libp2p/Mux/Test/State.lean` | the pure owner-loop state and its transitions. Present. Internal, and tests import it directly. A transition returns actions for the runtime shell |
 | `Libp2p/Mux/Mock/Core/ProtocolId.lean` | the temporary `ProtocolId`. Present. `Constants.lean` imports only this module, so the constants stay free of `Conc` and `Streams` |
 | `Libp2p/Mux/Mock/Core.lean` | the temporary `Role`, `Error`, `Muxer`, and `MuxSession` that let W5.4 compile before W5.2. Present. The public root does not import it |
 
@@ -32,9 +33,9 @@ live in `Libp2p.Mux.Test.Wire`.
 
 `Libp2p/Mux.lean`, `Libp2p/Mux/Constants.lean`,
 `Libp2p/Mux/Mock/Core/ProtocolId.lean`, `Libp2p/Mux/Mock/Core.lean`,
-and `Libp2p/Mux/Test/Wire.lean` are in the tree. `Yamux.lean`,
-`Mplex.lean`, and `Test.lean` are the remaining modules of this
-package.
+`Libp2p/Mux/Test/Wire.lean`, and `Libp2p/Mux/Test/State.lean` are in
+the tree. `Yamux.lean`, `Mplex.lean`, and `Test.lean` are the
+remaining modules of this package.
 
 ## Public surface
 
@@ -88,6 +89,65 @@ both mock modules. The imports then move to the `Libp2p.Core` modules
 that own the same names. The private test protocol is not part of
 the mock.
 
+### Owner-loop state
+
+`Test/State.lean` is the pure state the owner loop steps. It holds
+the parser, `nextLocal`, `nextRemote`, the live table, one
+unacknowledged send, the admitted write queues, and the terminal
+cause. A transition returns that state and an ordered list of
+actions. The runtime shell performs the list in order.
+
+`sendFrame` and `sendChunk` are intents. The pre-send state stays in
+place until `ackSend` or `failSend`. `ackSend` commits the successful
+write and emits its resolutions and permit returns. `failSend` claims
+the writer fault with the caught `IO.Error`. It releases that send's
+resources once. A later claim does not release them again. An
+impossible acknowledgement or scheduler step returns `InvariantError`
+and leaves the caller's state in place. The shell throws
+`InvariantError.toIOError`. A peer error is `Core.Error`. A
+connection fault is the `IO.Error` stored on the terminal cause.
+Scheduling and writes states the one-send rule.
+
+Each admitted write stores the `Nat` tag from `Streams.Completions`.
+A chunk intent and a write resolution both carry that tag. The answer
+is `Except Streams.Error Unit`, the completion-table value. A
+write-permit action names the stream. An empty write registers a tag,
+takes no write permit, enters no queue, and resolves from the port
+mode the shell just read.
+
+The shell calls `classifyRemote` before it reserves a live permit or
+an accept permit. It reserves both only for an open that classifies
+as the next remote id. It passes `gotAccept` only when the accept
+channel has a free slot. Both reservations install the stream.
+`enqueueAccept` transfers the accept reservation into the runtime
+accept envelope. The consumer of that envelope returns the permit,
+including after `closeAccept` and after the owner has returned.
+Reset, fin, and removal from the live table do not return it. A
+refusal is a reset intent. `ackSend` retires that id and returns each
+permit the refusal still holds. A zero, wrong-parity, duplicate, or
+future open is classified first, so that open acquires no permit.
+`pull` returns at most one parser budget of frames and does not admit
+them. `inboundEnd` does not run while the parser still holds a
+complete frame.
+
+A reader or writer fault stores its `IO.Error`. The terminal action
+carries that cause. `Cause.fault?` is the value passed to
+`Outcome.recordFault`. A later fault does not replace it.
+
+`setPort` publishes `halfClosed`, `reset`, or `sessionClosed` before
+`closeWritePermits` for the same id. `closeInbox` is the read side
+and stays a separate action. A clean close and a capacity refusal
+emit no `setPort`. A port that is already `reset` stays `reset` when
+the session closes, and that close does not close the write-permit
+channel again. Absence from the live table is retirement.
+
+The state does not store a waiting caller, a channel, a task, or an
+atomic cell. A local open in a transition already holds a live permit.
+A write already holds a write permit. `reset` replaces an open or
+half-closed write mode, and a repeated reset stays reset.
+`sessionClosed` does not become `reset`. A reset mode stays reset
+when the session closes.
+
 ### Private frame
 
 The header is nine bytes. The payload follows it.
@@ -136,12 +196,16 @@ odd id `2^32 - 1` and the last even id `2^32 - 2` may each be issued
 once. After `nextLocal` or `nextRemote` exceeds `UInt32.max`, the
 session issues no new id and accepts no new id.
 
-When a remote open matches that next id, the session adds two to
-`nextRemote`. If the accept backlog and the live-stream cap both have
-room, the stream enters the live table. If either cap is full, the
-session sends reset and does not add a live stream. That id is then
-retired. The new value of `nextRemote` remains the next id a remote
-open may match.
+When a remote open matches that next id, the owner loop reserves one
+live permit and one accept permit. The accept permit comes from a
+channel of `acceptBacklogCap` tokens, so a full backlog never reserves
+it. If both succeed, the stream enters the live table, `nextRemote`
+advances by two, and `enqueueAccept` transfers the accept reservation
+into the runtime accept envelope. If either reservation fails, the
+session sends reset. After that send returns, `nextRemote` advances
+by two and each acquired permit is returned. The refused id stays out
+of the live table. The live cap and the accept cap are consulted only
+for a valid remote open.
 
 A local open that is waiting for admission does not read or advance
 `nextLocal`. It exposes no id. The session takes the id only when
@@ -164,8 +228,11 @@ No new write succeeds. The session does not echo a received reset.
 Admitted writes complete with `Streams.Error.reset`. Bytes already
 accepted into the inbox stay readable. After those bytes drain, one
 read returns `Streams.Error.reset`. The following read returns
-`.ok none`. The stream handle may still drain that inbox after the
-id has retired.
+`.ok none`. The session records reset on the stream port before it
+closes the inbox. The stream handle may still drain that inbox after
+the id has retired. Session close records session close on the port
+before the inbox closes. A port that already records reset stays
+reset. A clean close and a refused remote open leave the port unset.
 
 A received fin closes the remote write direction. The inbox closes
 at that fin. Bytes already queued stay readable. The application
@@ -283,20 +350,42 @@ ready, keeps the loop runnable when no new event is queued. The loop
 parks only when a queued event, a complete buffered frame, and a
 ready outbound chunk are all absent.
 
+The owner performs one `sendFrame` or `sendChunk`. It then calls
+`ackSend` or `failSend`. Only then does it dequeue and apply another
+event. The event stays queued while the send is open. `pump` emits
+nothing during that send. `resetLocal`, `resetRemote`, `openRemote`,
+`dataRemote`, `finRemote`, and `apply` return
+`InvariantError.sendInFlight` if they are called in that window. A
+correct shell never observes that error. If it does, the shell
+throws `InvariantError.toIOError`.
+
+`openLocal` is the caller-owned exception. The call already holds a
+live permit, so it completes that opener with `closed` and returns
+the permit. The in-flight send stays. `openRemote` is reserved before
+the call. `sendInFlight` from `openRemote` is unreachable when the
+shell follows this order. When that error is returned, the caller
+still owns those permits and releases them while the invariant is
+thrown.
+
 Streams that have admitted bytes take turns. Writes on one stream
 keep their admission order. One logical write is split into private
-chunks. It resolves only after its last `Connection.write` returns.
-An empty write on an open stream succeeds at once and registers no
-completion.
+chunks. The state records each chunk only after `ackSend`. The write
+resolves when its last chunk is acknowledged. An empty write registers
+a completion tag, takes no write permit, and resolves at once from the
+port mode.
 
 A stream admits at most the admitted-write cap of writes. A further
-writer waits, and the call stays open. A local half-close stops
-admission. Writes already admitted flush. The session sends fin
-after that flush returns. A flush that throws follows the
-`Connection.write` rule below, and no fin is sent. A write that is
-still waiting for admission completes with `Streams.Error.closed`.
-It does not stay parked. A write that arrives after the half-close,
-including an empty write, completes with `Streams.Error.closed`.
+writer waits outside the admitted queue, on the write-permit channel.
+Half-close, reset, and session shutdown publish the port mode and
+then close that channel. The actions are `setPort` and then
+`closeWritePermits`. A later close of the same stream emits neither
+again. The waiting writer wakes and completes from the port cell:
+`closed` after half-close or session shutdown, and `reset` after
+reset. A local half-close stops admission. Writes already admitted
+flush. The session sends fin after that flush is acknowledged. A
+flush that throws follows the `Connection.write` rule below, and no
+fin is sent. A write that arrives after the half-close, including an
+empty write, completes with `Streams.Error.closed`.
 
 `Connection.write` throws `IO.Error` and tears the connection down.
 The logical `Stream.write` has no arm for that error. The loop
@@ -315,9 +404,17 @@ leaves the live table.
 
 ### Accept and backpressure
 
-The accept backlog queues at most its cap of inbound streams. Each
-live stream queues at most the inbound frame credit of unread frames.
-The owner loop does not park on a stream inbox.
+The accept backlog holds at most its cap of inbound streams. The
+runtime accept channel is that backlog. `enqueueAccept` puts one
+envelope on it, and the envelope owns the accept reservation.
+`accept` receives the envelope and returns the reservation.
+`Chan.close` leaves queued envelopes readable, so `accept` can still
+receive them after `closeAccept` and after the owner has returned. A
+drain of that channel returns each envelope's reservation once.
+Reset, fin, and ordinary stream teardown do not return it and do not
+remove the envelope. Each live stream queues at most the inbound
+frame credit of unread frames. The owner loop does not park on a
+stream inbox.
 
 A full inbox resets that live stream only. A remote open that finds
 the accept backlog or the live-stream cap full follows the refusal
@@ -325,7 +422,9 @@ rule in Stream ids. The session stays up. A local open past the
 live-stream cap waits. Stream ids records that this wait takes no id.
 
 After terminal shutdown has linearized, `accept` returns no newly
-accepted stream. A stream accepted immediately before that point may
+accepted stream. Entries already buffered stay readable. The caller
+that receives one, or that drains the channel, returns its
+reservation. A stream accepted immediately before that point may
 still be returned. The caller then sees its inbox close.
 
 ### Resources
