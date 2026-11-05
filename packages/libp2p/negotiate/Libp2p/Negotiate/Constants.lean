@@ -12,8 +12,8 @@ set_option autoImplicit false
 
 namespace Libp2p.Negotiate
 
-/-- The multistream 1.0.0 protocol id. The only string literal of the
-package (root §3.4). -/
+/-- The multistream 1.0.0 protocol id. The only protocol id literal of
+the package (root §3.4). -/
 def protocolId : Mock.Core.ProtocolId := ⟨"/multistream/1.0.0"⟩
 
 /-- The 1 KiB multistream cap (root §5.1, contract 1 of the package

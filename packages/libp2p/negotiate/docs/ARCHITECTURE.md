@@ -23,11 +23,9 @@ All declarations live in the `Libp2p.Negotiate` namespace, and the root
 module re-exports the public submodules. The 30 s upgrade deadline is
 owned by `net/streams` and lives in `Streams/Constants.lean` (the
 streams pair, contracts; the security pair, contract 7). This package
-imports it and wires it; it keeps no copy.
-
-W4.1 has merged. Until the integration drops `Mock/Streams.lean`, the
-mock holds that value, so the copy lives there. The swap deletes the
-mock with it.
+imports it and wires it; it keeps no copy. The connection, buffered
+reader, and stream types come from `Streams.Conn`, `Streams.BufReader`,
+and `Streams.Stream`.
 
 ## Public surface
 
@@ -40,9 +38,13 @@ mock with it.
   `\n` (the spike's `lsPayload`, kept).
 - The core surface: `State`, `Event`, `Action`, and `step` (§3.3).
   `State` holds the role, the responder's ordered supported list, the
-  input buffer, and the phase. `Event.bytes` carries raw bytes, and the
-  core decodes them, so the malformed-versus-incomplete call stays in
-  the core (§3.1). `Event.propose` posts the id the initiator dials.
+  initiator's remaining proposals, the input buffer, and the phase.
+  `Event.bytes` carries raw bytes, and the core decodes them, so the
+  malformed-versus-incomplete call stays in
+  the core (§3.1). `Event.propose` records one id and writes the
+  coalesced first frame. It acts only on an initiator in the header
+  phase with an empty list. The upgrader does not send it:
+  `initiatorStart` seeds the whole ordered list.
   `Action.write` emits framed bytes, and `Action.select` ends the
   negotiation with the chosen `ProtocolId` and the leftover. A failure
   leaves `step` through its `Except` channel, as §3.3 states, so
@@ -62,9 +64,8 @@ mock with it.
   fresh dial, where no earlier stage can leave bytes. It is non-empty
   when an accept path peeked before it handed the connection over, or
   when the transport delivers bytes together with the connection. The
-  output: the `MuxSession` and the verified remote `PeerId`; a pair or
-  a small structure is a refinement this package fixes at
-  implementation time. Errors surface as `Core.Error` (§3.5).
+  output is the pair of the `MuxSession` and the verified remote
+  `PeerId`. Errors surface as `Core.Error` (§3.5).
 
 ## The muxer-selection decision
 
@@ -77,9 +78,10 @@ order, and the responder answers `na` until a known id arrives. The
 spike's extension path (`Upgrade.matchMuxers` over
 `SecureConn.remoteMuxers`, with go's initiator-preference rule) stays
 out: it would need a recorded `libp2p/core` refinement to carry the
-bytes, and no root contract reads the extension. Interop is covered: a
-go peer that selects from the extensions sees an empty advertisement
-from us, and both sides fall back to the wire negotiation, the spike's
+bytes, and no root contract reads the extension. Interop relies on the
+fallback, and W5.9 tests it against go-libp2p: a go peer that selects
+from the extensions sees an empty advertisement from us, and both sides
+fall back to the wire negotiation, the spike's
 own fallback rule (the security pair records the same reasoning).
 `MuxSession.openStream` carrying a `ProtocolId` (the mux pair,
 decisions) is a stream-level label, and it plays no part in
@@ -121,8 +123,8 @@ connection-level selection.
    The lists are parameters, and a new `SecurityProtocol` or `Muxer`
    value lands with no edit to the upgrader (PRINCIPLES 1.3).
 8. **Errors map to `Core.Error` once, at the upgrade boundary** (§3.5).
-   The core reports `Negotiate.Error`; `Upgrade.lean` lifts it with one
-   `Except.mapError`, and a failed identity check reports
+   The core reports `Negotiate.Error`; `Upgrade.lean` maps it through
+   one function, `mapNegotiateError`, and a failed identity check reports
    `Core.Error.authentication`. The host matches on `Core.Error` alone.
 
 ## Decisions
@@ -136,8 +138,9 @@ connection-level selection.
   document listed `Action.error`. Root §3.3 fixes the core shape as
   `step : State → Event → Except ProtocolError (State × List Action)`,
   so a failure leaves through the `Except` channel and never as an
-  action. The spike wrote `na` and then failed on a bad first header;
-  this core returns the error and writes nothing.
+  action. In phase `headerPending`, this core returns the error and
+  writes nothing. The upgrader starts its responder in `negotiating`,
+  so a bad first frame there reads as a proposal and draws `na`.
 - **Wire-based muxer selection, against the spike's extension
   selection.** The section above records it.
 - **The identity check sits between the handshake and the muxer stage,
@@ -172,8 +175,9 @@ connection-level selection.
   pair's rule (the security pair records the same import). No import of
   `libp2p/security`, `libp2p/mux`, `libp2p/host`, or
   `libp2p/protocols`: the ordered lists carry the implementations.
-- From the net group, `net/streams` for `Connection`, `BufReader`, and
-  `readExactly` (§2: libp2p → net), recorded per the core pair's rule.
+- From the net group, `net/streams` for `Connection`, `BufReader`,
+  `Stream`, and the deadline constant (§2: libp2p → net), recorded per
+  the core pair's rule.
   The negotiation shell reads raw chunks through its own `BufReader`,
   one reader per stage (§4.7, §5.6). The frame decode and the cap live
   in the core, so the package has no `Framing` import.

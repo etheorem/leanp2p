@@ -10,14 +10,13 @@ multistream-select (root §3.3). One `Event.bytes` feeds raw bytes, and
 the core decodes exactly one frame per call, so the
 malformed-versus-incomplete call stays in the core (§3.1). A decoded
 frame goes through a private `classify` step that names the answer,
-then a private `act` step that performs it. Every theorem about choice
-lives in `classify`; every theorem about writes and phase lives in
-`act`.
+then a private `act` step that performs it. The theorems about the
+chosen id reason over `classify`; the theorems about writes and phase
+reason over `act`.
 
 The step returns `Except Error (State × List Action)`, the root §3.3
-shape. `Action.error` of the package docs stays out: the error channel
-carries the failure (root §3.5), and no contract asks for an error
-action.
+shape. `Action` has no error constructor (package docs, "Decisions"):
+the `Except` channel carries the failure (root §3.5).
 -/
 
 set_option autoImplicit false
@@ -99,8 +98,9 @@ def Reply.toMsg : Reply → Msg
 /-- The message form of the reply recognition. -/
 def Reply.ofMsg? (m : Msg) : Option Reply := Reply.ofText? m.text
 
-/-- Why a negotiation failed. `decode` carries the shared decode
-error; `negotiationFailed` covers every peer violation the core sees. -/
+/-- Why a negotiation failed. `decode` carries a frame the decoder
+rejects. `negotiationFailed` covers a bad exchange, an exhausted
+proposal list, and an invalid local list at start. -/
 inductive Error where
   | decode (e : DecodeError)
   | negotiationFailed
@@ -119,8 +119,8 @@ theorem chooseSpec {ours theirs : List Mock.Core.ProtocolId} {p : Mock.Core.Prot
 
 /-! ## The answers -/
 
-/-- What a decoded text means for this state. Byte-free, so every
-theorem about choice lives here. -/
+/-- What a decoded text means for this state. Byte-free, so the
+theorems about the chosen id reason over this classification. -/
 private inductive Answer where
   | echo
   | listIds
@@ -154,8 +154,8 @@ private def classify (s : State) (text : String) : Answer :=
         else if text = p.toString then .accept p else .fail
   | _, _ => .fail
 
-/-- Perform an answer. Byte-free per answer, so every theorem about
-writes and phase lives here. -/
+/-- Perform an answer. It decodes nothing, so its theorems need no
+decoder facts. -/
 private def act (s : State) (rest : List Nat) : Answer → Except Error (State × List Action)
   | .echo => .ok ({ s with buffer := rest, phase := .negotiating }, [.write (encodeText protocolId.toString)])
   | .listIds => .ok ({ s with buffer := rest }, [.write (encodeLs s.supported)])

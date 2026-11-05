@@ -1,8 +1,10 @@
 import Libp2p.Negotiate.Step
 import Libp2p.Negotiate.Message
 import Libp2p.Negotiate.Mock.Core
-import Libp2p.Negotiate.Mock.Streams
 import Libp2p.Negotiate.Mock.Identity
+import Streams.Conn
+import Streams.BufReader
+import Streams.Constants
 import Conc
 import Bytes
 
@@ -20,9 +22,8 @@ three-stage pipeline under one `Conc.withinDeadline`.
 The driver owns the byte cursor. It never reads `s.buffer`; it resets
 the buffer before every `step` call, and every unconsumed byte stays
 in the `input` argument. The `leftover` field of the result is
-authoritative. The shell always passes the
-driver's own states and leftovers back, so the convention is closed
-under use.
+authoritative. The shell passes the driver's own states and leftovers
+back unchanged.
 
 The negotiation loop parks on the connection read until a selection,
 an error, a close, or the deadline (root §3.3). No measure bounds that
@@ -186,7 +187,7 @@ def settleUpgrade {α : Type} :
 
 /-- The answer of one negotiation stage: the selected id and the bytes
 the stage over-read. `ByteArray` carries no `Repr` in Lean 4.34, so
-the structure derives none; the suite prints the fields it needs. -/
+the structure derives none; the suite compares the fields it needs. -/
 structure StageResult where
   proto : Mock.Core.ProtocolId
   leftover : ByteArray
@@ -195,8 +196,8 @@ structure StageResult where
 
 /-- The accumulator invariant behind the conservation law: the bytes
 fed in equal the bytes consumed plus the final leftover, for every
-arm of the result. The proof is the one induction of the unit, on the
-fuel; `decodeMsgEncodeDecode` reassociates each consumed frame. -/
+arm of the result. The proof inducts on the fuel;
+`decodeMsgEncodeDecode` reassociates each consumed frame. -/
 private theorem driveAux_conservation (fuel : Nat) :
     ∀ (s : State) (input consumed : List Nat) (writes : List (List Nat))
       (r : DriveResult),
@@ -315,8 +316,8 @@ theorem driveConsumedHead {fuel : Nat} {s : State} {m : Msg} {rest : List Nat}
       exact ⟨tail, by simpa [encodeMsg, List.append_assoc] using htail⟩
 
 /-- Two stages compose: bytes in equal the consumed bytes of both
-stages plus the final leftover. The reusable form of the pipeline's scope
-item 2. -/
+stages plus the final leftover. The reusable form of the leftover
+hand-over (contract 5). -/
 theorem handoverCompose {ε α β : Type}
     {f : List Nat → Except ε (α × List Nat)}
     {g : List Nat → Except ε (β × List Nat)}
@@ -330,9 +331,9 @@ theorem handoverCompose {ε α β : Type}
   rw [law₁ bs₁ a₁ l₁ h₁, List.append_assoc, law₂ (l₁ ++ bs₂) a₂ l₂ h₂]
   simp only [List.append_assoc]
 
-/-- The pure form of the hand-over: the muxer stage is seeded with
-the negotiation's leftover, and the two drives consume exactly the
-bytes fed in. -/
+/-- The pure form of one hand-over: when a second drive starts from
+the first drive's leftover, the bytes fed in equal the bytes both
+drives consumed plus the final leftover. -/
 theorem driveTwostage {fuel₁ fuel₂ : Nat} {s₁ s₂ : State}
     {input₁ input₂ : List Nat} {p₁ p₂ : Mock.Core.ProtocolId}
     {c₁ c₂ l₁ l₂ : List Nat} {w₁ w₂ : List (List Nat)}
@@ -344,10 +345,8 @@ theorem driveTwostage {fuel₁ fuel₂ : Nat} {s₁ s₂ : State}
   rw [h1, List.append_assoc, h2]
   simp only [List.append_assoc]
 
-/-- The shell's manual first write equals the core's propose
-step for a singleton list, after both sides are read as write lists.
-The driver therefore starts the negotiation the way the proved core
-would. -/
+/-- The shell's manual first write equals the core's propose step for
+a singleton list. The theorem does not cover a longer list. -/
 theorem initiatorStartPropose {p : Mock.Core.ProtocolId}
     (hfits : fitsText p.toString = true) :
     initiatorStart [p] =
@@ -403,26 +402,37 @@ theorem settleUpgradeSpec {α : Type} {e : Mock.Core.Error} {a : α} :
 
 /-! ## The IO shell -/
 
+/-- Write one frame, and turn a fault of the connection into the
+`closed` arm. `Connection.write` throws `IO.Error`, which is outside
+this shell's `Core.Error` channel. -/
+private def writeFrame (conn : Streams.Connection) (b : ByteArray) :
+    ExceptT Mock.Core.Error Conc.Async Unit := do
+  let ok ← (try
+    conn.write b
+    pure true
+  catch _ => pure false : Conc.Async Bool)
+  if ok then pure () else throw (.closed "connection write failed during the upgrade")
+
 /-- Write each frame payload through the connection, in order. A
 failed write is the `closed` arm: the connection is gone. -/
-private def sendWrites (conn : Mock.Streams.Connection) (ws : List (List Nat)) :
+private def sendWrites (conn : Streams.Connection) (ws : List (List Nat)) :
     ExceptT Mock.Core.Error Conc.Async Unit := do
   for w in ws do
-    match ← conn.write (Bytes.ofNatList w) with
-    | .ok () => pure ()
-    | .error _ => throw (.closed "connection write failed during the upgrade")
+    writeFrame conn (Bytes.ofNatList w)
 
 /-- The negotiation loop. It parks on `reader.read` only when `drive`
-reports `waiting`; a `running` answer costs no read, because a
-complete frame is still buffered. The loop ends on a selection, an
-error, a close, or the deadline, so no measure bounds it (root §3.3).
-The `repeat` form keeps the definition free of a `partial` marker,
-like `Conc.TaskSet.joinAll`. -/
-private def negotiateLoop (reader : Mock.Streams.BufReader)
-    (conn : Mock.Streams.Connection) (s : State) (input : List Nat) :
+reports `waiting`; a `running` answer costs no read, because the driver
+has not yet tried to decode `leftover`. `reader.read` returns the next
+reader, and the loop keeps it for the next read. The read parks for as
+long as the peer stays silent, so no measure bounds the loop (root
+§3.3). The `repeat` form keeps the definition free of a `partial`
+marker, like `Conc.TaskSet.joinAll`. -/
+private def negotiateLoop (reader : Streams.BufReader)
+    (conn : Streams.Connection) (s : State) (input : List Nat) :
     ExceptT Mock.Core.Error Conc.Async StageResult := do
   let mut s := s
   let mut input := input
+  let mut reader := reader
   repeat
     match drive 1 s input with
     | .error e => throw (mapNegotiateError e)
@@ -433,24 +443,26 @@ private def negotiateLoop (reader : Mock.Streams.BufReader)
         sendWrites conn writes
         match ← reader.read with
         | none => throw (.closed "multistream negotiation ended before a selection")
-        | some chunk =>
+        | some (chunk, reader') =>
             s := s'
             input := leftover ++ Bytes.toNatList chunk
+            reader := reader'
     | .ok (.running s' _ leftover writes) => do
         sendWrites conn writes
         s := s'
         input := leftover
   -- Every arm above returns or loops, so the `repeat` never falls
-  -- through. The tail keeps the loop total without an `Inhabited`.
+  -- through. The tail gives the `do` block its result type without an
+  -- `Inhabited`.
   throw (.closed "the negotiation loop ended without an answer")
 
-/-- One negotiation stage. The initiator writes the coalesced header
-plus first proposal before the loop; the responder reads first. The
-seed is the leftover of the previous stage. The end of the stream
-mid-negotiation is `Core.Error.closed`; a `Negotiate.Error` maps once
-through `mapNegotiateError`. -/
-def negotiate (role : Mock.Core.Role) (reader : Mock.Streams.BufReader)
-    (conn : Mock.Streams.Connection) (seed : ByteArray)
+/-- One negotiation stage. Both roles write before the loop: the
+initiator writes the coalesced header plus first proposal, and the
+responder writes its header. The seed is the leftover of the previous
+stage. The end of the stream mid-negotiation is `Core.Error.closed`; a
+`Negotiate.Error` maps once through `mapNegotiateError`. -/
+def negotiate (role : Mock.Core.Role) (reader : Streams.BufReader)
+    (conn : Streams.Connection) (seed : ByteArray)
     (ids : List Mock.Core.ProtocolId) :
     ExceptT Mock.Core.Error Conc.Async StageResult := do
   match role with
@@ -470,11 +482,11 @@ def negotiate (role : Mock.Core.Role) (reader : Mock.Streams.BufReader)
 /-- The pipeline: negotiate the security protocol, run the handshake,
 check the identity, negotiate the muxer, open the session. Each lookup
 is total; a miss after a selection is `protocol`. -/
-private def upgradeCore (role : Mock.Core.Role) (conn : Mock.Streams.Connection)
+private def upgradeCore (role : Mock.Core.Role) (conn : Streams.Connection)
     (leftover : ByteArray) (expected : Option Mock.Identity.PeerId)
     (secs : List Mock.Core.SecurityProtocol) (muxers : List Mock.Core.Muxer) :
     Conc.Async (Except Mock.Core.Error (Mock.Core.MuxSession × Mock.Identity.PeerId)) := do
-  let reader := Mock.Streams.BufReader.ofConn conn
+  let reader := Streams.BufReader.new conn
   match ← negotiate role reader conn leftover (secs.map (·.id)) with
   | .error e => return .error e
   | .ok stage =>
@@ -487,7 +499,7 @@ private def upgradeCore (role : Mock.Core.Role) (conn : Mock.Streams.Connection)
         match checkIdentity expected sc.remotePeer with
         | .error e => return .error e
         | .ok () =>
-          let muxReader := Mock.Streams.BufReader.ofConn sc.conn
+          let muxReader := Streams.BufReader.new sc.conn
           match ← negotiate role muxReader sc.conn sc.leftover (muxers.map (·.id)) with
           | .error e => return .error e
           | .ok stage2 =>
@@ -498,14 +510,15 @@ private def upgradeCore (role : Mock.Core.Role) (conn : Mock.Streams.Connection)
               | .error e => return .error e
               | .ok session => return .ok (session, sc.remotePeer)
 
-/-- Whether the deadline boundary already closed the connection. Both error
-arms of `withinDeadline` run the expiry hook. -/
+/-- Whether the deadline boundary already closed the connection.
+`withinDeadline` returns an error value only on expiry, after the hook
+ran. -/
 private def boundaryClosed {α : Type} : Except Conc.Error α → Bool
   | .error _ => true
   | .ok _ => false
 
-/-- Give a late session back to its owner. A result that arrives after the
-timer won never reaches a caller, so the release closes it here. -/
+/-- Close a session that finished after the timer won. No caller
+receives that session. -/
 private def releaseLate (r : Except Mock.Core.Error
     (Mock.Core.MuxSession × Mock.Identity.PeerId)) : BaseIO Unit :=
   match r with
@@ -518,27 +531,28 @@ the connection once at the boundary (root §3.5), and the race's
 The clock is a seam, so the deadline test can advance it. -/
 
 def upgradeWith (clock : Conc.Clock) (role : Mock.Core.Role)
-    (conn : Mock.Streams.Connection) (leftover : ByteArray)
+    (conn : Streams.Connection) (leftover : ByteArray)
     (expected : Option Mock.Identity.PeerId)
     (secs : List Mock.Core.SecurityProtocol) (muxers : List Mock.Core.Muxer) :
     ExceptT Mock.Core.Error Conc.Async (Mock.Core.MuxSession × Mock.Identity.PeerId) := do
-  let answer ← Conc.withinDeadline clock Mock.Streams.upgradeDeadlineMs conn.close
+  let answer ← Conc.withinDeadline clock Streams.unauthDeadlineMs
+    (Streams.Connection.closeQuietly conn)
     (upgradeCore role conn leftover expected secs muxers)
     releaseLate
   match settleUpgrade answer with
   | .ok pair => return pair
   | .error e => do
-      -- Both error arms of the boundary run the expiry hook, which closed the
-      -- connection once. Only a failure inside the work leaves it open.
+      -- An error from the boundary means the expiry hook closed the
+      -- connection. A failure inside the work leaves it open.
       if boundaryClosed answer then throw e
       else do
-        conn.close
+        Streams.Connection.closeQuietly conn
         throw e
 
 /-- The frozen entry of the package docs. The clock is fixed to the
 system clock here and stays a seam in `upgradeWith` for the deadline
 test. -/
-def upgrade (role : Mock.Core.Role) (conn : Mock.Streams.Connection)
+def upgrade (role : Mock.Core.Role) (conn : Streams.Connection)
     (leftover : ByteArray) (expected : Option Mock.Identity.PeerId)
     (secs : List Mock.Core.SecurityProtocol) (muxers : List Mock.Core.Muxer) :
     ExceptT Mock.Core.Error Conc.Async (Mock.Core.MuxSession × Mock.Identity.PeerId) :=
