@@ -3,13 +3,17 @@ import Libp2p.Mux
 import Libp2p.Mux.Mock.Core
 import Libp2p.Mux.Test.Wire
 import Libp2p.Mux.Test.State
+import Libp2p.Mux.Test.Session
+import Conc
+import Streams
+import Streams.Mock.Multiaddr
 
 /-!
 # Mux suite (unit W5.4)
 
 The constant checks, the temporary core seam, the private
-test-wire codec and parser, and the pure session transitions
-(`packages/libp2p/mux/docs/ARCHITECTURE.md`).
+test-wire codec and parser, the pure session transitions, and the
+runtime shell (`packages/libp2p/mux/docs/ARCHITECTURE.md`).
 -/
 
 set_option autoImplicit false
@@ -1592,6 +1596,1056 @@ def run (r : Runner) : IO Unit := do
 
 end Tests.Mux.State
 
+namespace Tests.Mux.Session
+
+open Libp2p.Mux.Mock.Core
+open Libp2p.Mux.Test.Session
+open Libp2p.Mux.Test.State
+open Libp2p.Mux.Test.Wire
+open Conc
+open Streams
+open Streams.Mock.Multiformats
+open Streams.Sim
+
+private def pid : ProtocolId := ⟨"/leanp2p/test-mux/1.0.0"⟩
+
+private def ma (s : String) : Async Multiaddr := do
+  match Multiaddr.parse? s with
+  | .ok a => return a
+  | .error _ => throw <| IO.userError s!"test address {s} does not parse"
+
+private structure Ends where
+  dialer : Connection
+  peer : Connection
+
+private def ends (n : Nat) : Async Ends := do
+  let net ← Net.new
+  let l ← net.listen (← ma s!"/ip4/127.0.0.1/tcp/{4000 + n}")
+  let some dialer ← net.dial l.addr | throw <| IO.userError "dial failed"
+  let some peer ← l.accept | throw <| IO.userError "accept failed"
+  return { dialer, peer }
+
+private def drain (c : Connection) (owner : TaskSet) : BaseIO Unit := do
+  owner.spawn do
+    repeat
+      match ← c.read with
+      | none => break
+      | some _ => pure ()
+
+private theorem id1 : (1 : UInt32) ≠ 0 := by decide
+
+private theorem openNotData : Kind.open ≠ Kind.data := by decide
+
+private theorem resetNotData : Kind.reset ≠ Kind.data := by decide
+
+private theorem finNotData : Kind.fin ≠ Kind.data := by decide
+
+private def control (k : Kind) (hk : k ≠ Kind.data) : ByteArray :=
+  Frame.encodeB (Frame.ofControl k 1 hk id1)
+
+private def oneData (b : UInt8) : ByteArray :=
+  Header.encodeB { kind := .data, streamId := 1, length := 1 } ++ ⟨#[b]⟩
+
+private def isOk (r : Except Streams.Error Unit) : Bool :=
+  match r with
+  | .ok () => true
+  | _ => false
+
+private def isClosedW (r : Except Streams.Error Unit) : Bool :=
+  match r with
+  | .error .closed => true
+  | _ => false
+
+private def isResetW (r : Except Streams.Error Unit) : Bool :=
+  match r with
+  | .error .reset => true
+  | _ => false
+
+private def holdData (base : Connection) : BaseIO (Connection × Chan Unit) := do
+  let hold ← Chan.new 1
+  let conn : Connection := { base with
+    write := fun bytes => do
+      let openFrame :=
+        match bytes[0]? with
+        | some b => b == 1
+        | none => false
+      if openFrame then
+        base.write bytes
+      else
+        match ← hold.recv with
+        | none => throw <| IO.userError "write held"
+        | some _ => base.write bytes }
+  return (conn, hold)
+
+private def mustOpen (sess : MuxSession) : Async Streams.Stream := do
+  match ← (sess.openStream pid).run with
+  | .ok stream => return stream
+  | .error e => throw <| IO.userError s!"open failed: {repr e}"
+
+/-- The text `join` throws, or `ok` when it returns. -/
+private def joinText (sess : MuxSession) : Async String := do
+  try
+    let _ ← sess.join
+    pure "ok"
+  catch e =>
+    pure e.toString
+
+/-- Hook refs with the force flags clear unless a test sets them. -/
+private def testHooks (invariant : Bool := false) (missing : Bool := false) :
+    Async TestHooks := do
+  return {
+    registrySize := ← IO.mkRef 0
+    forceInvariant := ← IO.mkRef invariant
+    forceMissingPort := ← IO.mkRef missing
+    acceptedEvent := ← IO.mkRef none
+    appliedFrames := ← IO.mkRef 0
+    captureOpenFrames := ← IO.mkRef none
+    pauseAfterBudget := ← IO.mkRef none
+    beforeOutcome := ← IO.mkRef none }
+
+/-- Terminal-event order, teardown races, owner faults, and the port map. -/
+private def runCorrections (r : Runner) : Async Unit := do
+  -- EOF dequeued with a second chunk ready does not start that write.
+  do
+    let pair ← ends 15
+    let hold : Chan Unit ← Chan.new 1
+    let entered : Chan Unit ← Chan.new 1
+    let phase ← IO.mkRef 0
+    let conn : Connection := { pair.dialer with
+      write := fun bytes => do
+        let isData :=
+          match bytes[0]? with
+          | some b => b == 2
+          | none => false
+        if isData then
+          let n ← phase.get
+          phase.set (n + 1)
+          if n == 0 then
+            discard <| entered.send ()
+            discard <| hold.recv
+        pair.dialer.write bytes }
+    let readGate : Chan Unit ← Chan.new 1
+    let eofConn : Connection := { conn with
+      read := do
+        match ← readGate.recv with
+        | none => return none
+        | some _ => conn.read }
+    let sess ← start .initiator eofConn
+    let stream ← mustOpen sess
+    let writer ← TaskSet.new
+    let wrote : Chan (Except Streams.Error Unit) ← Chan.new 1
+    writer.spawn do
+      let result ← stream.write ⟨Array.replicate (testPayloadCap + 1) 7⟩
+      discard <| wrote.send result
+    discard <| entered.recv
+    readGate.close
+    hold.close
+    writer.joinAll
+    match ← wrote.recv with
+    | some result =>
+      r.check "no write starts after EOF is dequeued"
+        ((← phase.get) == 1 && isClosedW result)
+    | none => r.check "no write starts after EOF is dequeued" false
+    match ← sess.join with
+    | .ok () => r.check "EOF join stays a success" true
+    | .error _ => r.check "EOF join stays a success" false
+
+  -- A reader fault is dequeued before any later write can start.
+  do
+    let pair ← ends 16
+    let hold : Chan Unit ← Chan.new 1
+    let entered : Chan Unit ← Chan.new 1
+    let phase ← IO.mkRef 0
+    let boom := IO.userError "reader boom"
+    let later := IO.userError "later write"
+    let conn : Connection := { pair.dialer with
+      write := fun bytes => do
+        let isData :=
+          match bytes[0]? with
+          | some b => b == 2
+          | none => false
+        if isData then
+          let n ← phase.get
+          phase.set (n + 1)
+          if n == 0 then
+            discard <| entered.send ()
+            discard <| hold.recv
+          else
+            throw later
+        pair.dialer.write bytes }
+    let readGate : Chan Unit ← Chan.new 1
+    let faultConn : Connection := { conn with
+      read := do
+        match ← readGate.recv with
+        | none => throw boom
+        | some _ => conn.read }
+    let sess ← start .initiator faultConn
+    let stream ← mustOpen sess
+    let writer ← TaskSet.new
+    let wrote : Chan (Except Streams.Error Unit) ← Chan.new 1
+    writer.spawn do
+      let result ← stream.write ⟨Array.replicate (testPayloadCap + 1) 7⟩
+      discard <| wrote.send result
+    discard <| entered.recv
+    readGate.close
+    hold.close
+    writer.joinAll
+    match ← wrote.recv with
+    | some result =>
+      r.check "no write starts after a reader fault is dequeued"
+        ((← phase.get) == 1 && isClosedW result)
+    | none => r.check "no write starts after a reader fault is dequeued" false
+    let readerJoin ← joinText sess
+    let readerAgain ← joinText sess
+    r.check "the reader fault wins and join throws it" (readerJoin == boom.toString)
+    r.check "a second join throws the same reader fault"
+      (readerAgain == boom.toString)
+
+  -- Opens and writes in flight at teardown all wake once.
+  do
+    let pair ← ends 17
+    let hold : Chan Unit ← Chan.new 1
+    let entered : Chan Unit ← Chan.new 1
+    let conn : Connection := { pair.dialer with
+      write := fun bytes => do
+        let isData :=
+          match bytes[0]? with
+          | some b => b == 2
+          | none => false
+        if isData then
+          discard <| entered.send ()
+          match ← hold.recv with
+          | none => throw <| IO.userError "write held"
+          | some _ => pair.dialer.write bytes
+        else
+          pair.dialer.write bytes }
+    let sess ← start .initiator conn
+    let stream ← mustOpen sess
+    let box : Chan Bool ← Chan.new 8
+    let ready : Chan Unit ← Chan.new 7
+    let workers ← TaskSet.new
+    -- Pin the owner inside this write before the other callers run.
+    workers.spawn do
+      let result ← stream.write ⟨#[9]⟩
+      discard <| box.send (isClosedW result)
+    discard <| entered.recv
+    for _ in List.range 3 do
+      workers.spawn do
+        discard <| ready.send ()
+        let result ← stream.write ⟨#[9]⟩
+        discard <| box.send (isClosedW result)
+    for _ in List.range 4 do
+      workers.spawn do
+        discard <| ready.send ()
+        match ← (sess.openStream pid).run with
+        | .error e => discard <| box.send (e == closedError)
+        | .ok extra =>
+          extra.reset
+          discard <| box.send false
+    for _ in List.range 7 do
+      discard <| ready.recv
+    sess.close
+    hold.close
+    workers.joinAll
+    let mut woke := 0
+    for _ in List.range 8 do
+      match ← box.recv with
+      | some true => woke := woke + 1
+      | _ => pure ()
+    r.check "owner close answers every racing open and write" (woke == 8)
+    match ← sess.join with
+    | .ok () => r.check "owner close join stays a success" true
+    | .error _ => r.check "owner close join stays a success" false
+
+  -- The owner throws the invariant, then join reports that same error.
+  do
+    let pair ← ends 18
+    let hooks ← testHooks true
+    let sess ← startWithHooks .initiator pair.dialer .empty hooks
+    let box : Chan Bool ← Chan.new 1
+    let opener ← TaskSet.new
+    opener.spawn do
+      match ← (sess.openStream pid).run with
+      | .error _ => discard <| box.send true
+      | .ok extra =>
+        extra.reset
+        discard <| box.send false
+    pair.peer.write ⟨#[1]⟩
+    match ← box.recv with
+    | some true => r.check "an owner invariant wakes the opener" true
+    | _ => r.check "an owner invariant wakes the opener" false
+    opener.joinAll
+    let want := InvariantError.message .sendInFlight
+    let ownerJoin ← joinText sess
+    let ownerAgain ← joinText sess
+    r.check "an owner invariant reaches join" (ownerJoin == want)
+    r.check "a second join throws the same owner invariant" (ownerAgain == want)
+
+  -- A missing port throws from the owner and join returns that text.
+  do
+    let pair ← ends 19
+    let hooks ← testHooks false true
+    let sess ← startWithHooks .initiator pair.dialer .empty hooks
+    pair.peer.write ⟨#[1]⟩
+    let missingJoin ← joinText sess
+    let missingAgain ← joinText sess
+    r.check "a missing port reaches join" (missingJoin == "mux: missing port 0")
+    r.check "a second join throws the same missing port"
+      (missingAgain == "mux: missing port 0")
+
+  -- Retired handles stay usable, and the map keeps only live ports.
+  do
+    let pair ← ends 20
+    let drainOwner ← TaskSet.new
+    drain pair.peer drainOwner
+    let hooks ← testHooks
+    let sess ← startWithHooks .initiator pair.dialer .empty hooks
+    let mut first : Option Streams.Stream := none
+    let mut grew := false
+    for i in List.range (liveStreamCap + 8) do
+      let stream ← mustOpen sess
+      if (← hooks.registrySize.get) != 1 then grew := true
+      if i == 0 then first := some stream
+      stream.reset
+    let extra ← mustOpen sess
+    r.check "the port map drops retired streams"
+      (!grew && (← hooks.registrySize.get) == 1)
+    match first with
+    | some stream =>
+      r.check "an old reset handle still reports reset"
+        (isResetW (← stream.write ⟨#[1]⟩))
+    | none => r.check "an old reset handle still reports reset" false
+    extra.reset
+    let _ ← mustOpen sess
+    r.check "another open proceeds after the churn"
+      ((← hooks.registrySize.get) == 1)
+    sess.close
+    discard <| sess.join
+    drainOwner.joinAll
+
+  -- Two joins wait together and both throw the stored owner error.
+  do
+    let pair ← ends 21
+    let hooks ← testHooks true
+    let sess ← startWithHooks .initiator pair.dialer .empty hooks
+    let box : Chan Bool ← Chan.new 1
+    let opener ← TaskSet.new
+    opener.spawn do
+      match ← (sess.openStream pid).run with
+      | .error _ => discard <| box.send true
+      | .ok extra =>
+        extra.reset
+        discard <| box.send false
+    pair.peer.write ⟨#[1]⟩
+    discard <| box.recv
+    opener.joinAll
+    let want := InvariantError.message .sendInFlight
+    let answers : Chan String ← Chan.new 2
+    let joins ← TaskSet.new
+    joins.spawn do
+      discard <| answers.send (← joinText sess)
+    joins.spawn do
+      discard <| answers.send (← joinText sess)
+    joins.joinAll
+    let left ← answers.recv
+    let right ← answers.recv
+    r.check "two concurrent joins throw the owner invariant"
+      (left == some want && right == some want)
+
+  -- Queued opens and writes are inside the channel. The pinned write
+  -- throws, failSend claims the writer fault, and finishCause closes
+  -- that still-open channel.
+  do
+    let pair ← ends 22
+    let hold : Chan Unit ← Chan.new 1
+    let entered : Chan Unit ← Chan.new 1
+    let boom := IO.userError "writer boom"
+    let conn : Connection := { pair.dialer with
+      write := fun bytes => do
+        let isData :=
+          match bytes[0]? with
+          | some b => b == 2
+          | none => false
+        if isData then
+          discard <| entered.send ()
+          match ← hold.recv with
+          | none => throw boom
+          | some _ => pair.dialer.write bytes
+        else
+          pair.dialer.write bytes }
+    let accepted : Chan Unit ← Chan.new 7
+    let hooks ← testHooks
+    let sess ← startWithHooks .initiator conn .empty hooks
+    let stream ← mustOpen sess
+    let box : Chan Bool ← Chan.new 8
+    let workers ← TaskSet.new
+    workers.spawn do
+      let result ← stream.write ⟨#[9]⟩
+      discard <| box.send (isClosedW result)
+    discard <| entered.recv
+    hooks.acceptedEvent.set (some accepted)
+    for _ in List.range 3 do
+      workers.spawn do
+        let result ← stream.write ⟨#[9]⟩
+        discard <| box.send (isClosedW result)
+    for _ in List.range 4 do
+      workers.spawn do
+        match ← (sess.openStream pid).run with
+        | .error e => discard <| box.send (e == closedError)
+        | .ok extra =>
+          extra.reset
+          discard <| box.send false
+    for _ in List.range 7 do
+      discard <| accepted.recv
+    hold.close
+    workers.joinAll
+    let mut answered := 0
+    for _ in List.range 8 do
+      match ← box.recv with
+      | some true => answered := answered + 1
+      | _ => pure ()
+    r.check "a writer fault drains every accepted open and write" (answered == 8)
+    let writerJoin ← joinText sess
+    let writerAgain ← joinText sess
+    r.check "repeated joins throw that writer fault"
+      (writerJoin == boom.toString && writerAgain == boom.toString)
+
+
+/-- More than two parser budgets stay queued behind one local open. -/
+private def runBudgetFairness (r : Runner) : Async Unit := do
+  let pair ← ends 23
+  let entered : Chan Unit ← Chan.new 1
+  let release : Chan Unit ← Chan.new 1
+  let accepted : Chan Unit ← Chan.new 1
+  let hooks ← testHooks
+  hooks.pauseAfterBudget.set (some { entered, release })
+  let sess ← startWithHooks .initiator pair.dialer .empty hooks
+  let mut blob : ByteArray := .empty
+  for i in List.range (parserFrameBudget * 3) do
+    discard <| mustOpen sess
+    let id : UInt32 := 1 + 2 * UInt32.ofNat i
+    let frame :=
+      Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[7]⟩
+    blob := blob ++ frame
+  pair.peer.write blob
+  discard <| entered.recv
+  let saw : Chan Nat ← Chan.new 1
+  hooks.captureOpenFrames.set (some saw)
+  hooks.acceptedEvent.set (some accepted)
+  let opener ← TaskSet.new
+  opener.spawn do
+    discard <| mustOpen sess
+  discard <| accepted.recv
+  discard <| release.send ()
+  opener.joinAll
+  match ← saw.recv with
+  | some n =>
+    r.check "a local open runs after one parser budget" (n == parserFrameBudget)
+  | none => r.check "a local open runs after one parser budget" false
+  sess.close
+  discard <| sess.join
+
+/-- Queued opens cannot hold a retained parser suffix. -/
+private def runInverseFairness (r : Runner) : Async Unit := do
+  let pair ← ends 30
+  let entered : Chan Unit ← Chan.new 1
+  let release : Chan Unit ← Chan.new 1
+  let accepted : Chan Unit ← Chan.new 1
+  let hooks ← testHooks
+  hooks.pauseAfterBudget.set (some { entered, release })
+  let sess ← startWithHooks .initiator pair.dialer .empty hooks
+  let mut blob : ByteArray := .empty
+  for i in List.range (parserFrameBudget * 3) do
+    discard <| mustOpen sess
+    let id : UInt32 := 1 + 2 * UInt32.ofNat i
+    let frame :=
+      Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[7]⟩
+    blob := blob ++ frame
+  pair.peer.write blob
+  discard <| entered.recv
+  let saw : Chan Nat ← Chan.new 4
+  hooks.captureOpenFrames.set (some saw)
+  hooks.acceptedEvent.set (some accepted)
+  let openers ← TaskSet.new
+  for _ in List.range 3 do
+    openers.spawn do
+      discard <| mustOpen sess
+    discard <| accepted.recv
+  discard <| release.send ()
+  openers.joinAll
+  let mut counts : List Nat := []
+  for _ in List.range 3 do
+    match ← saw.recv with
+    | some n => counts := counts ++ [n]
+    | none => counts := counts ++ [0]
+  let want := [parserFrameBudget, parserFrameBudget * 2, parserFrameBudget * 3]
+  r.check "queued opens advance one parser budget each" (counts == want)
+  sess.close
+  discard <| sess.join
+
+/-- Caller events queued behind a deferred terminal cannot hold the parser. -/
+private def runDeferredPressure (r : Runner) (n : Nat) (fault : Bool) : Async Unit := do
+  let pair ← ends n
+  let entered : Chan Unit ← Chan.new 1
+  let release : Chan Unit ← Chan.new 1
+  let readGate : Chan Unit ← Chan.new 1
+  let accepted : Chan Unit ← Chan.new 1
+  let phase ← IO.mkRef 0
+  let reads ← IO.mkRef 0
+  let boom := IO.userError "deferred reader boom"
+  let conn : Connection := { pair.dialer with
+    write := fun bytes => do
+      let isData :=
+        match bytes[0]? with
+        | some b => b == 2
+        | none => false
+      if isData then
+        phase.set ((← phase.get) + 1)
+      pair.dialer.write bytes
+    read := do
+      let k ← reads.get
+      reads.set (k + 1)
+      if k == 0 then
+        pair.dialer.read
+      else if fault then
+        match ← readGate.recv with
+        | none => throw boom
+        | some _ => pair.dialer.read
+      else
+        match ← readGate.recv with
+        | none => return none
+        | some _ => pair.dialer.read }
+  let hooks ← testHooks
+  hooks.pauseAfterBudget.set (some { entered, release })
+  let sess ← startWithHooks .initiator conn .empty hooks
+  let mut target : Option Streams.Stream := none
+  let mut blob : ByteArray := .empty
+  for i in List.range (parserFrameBudget * 4) do
+    let stream ← mustOpen sess
+    if i == 0 then target := some stream
+    let id : UInt32 := 1 + 2 * UInt32.ofNat i
+    let frame :=
+      Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[7]⟩
+    blob := blob ++ frame
+  pair.peer.write blob
+  discard <| entered.recv
+  hooks.acceptedEvent.set (some accepted)
+  readGate.close
+  discard <| accepted.recv
+  let enteredB : Chan Unit ← Chan.new 1
+  let releaseB : Chan Unit ← Chan.new 1
+  hooks.pauseAfterBudget.set (some { entered := enteredB, release := releaseB })
+  discard <| release.send ()
+  discard <| enteredB.recv
+  let framesAtDefer ← hooks.appliedFrames.get
+  let saw : Chan Nat ← Chan.new 4
+  hooks.captureOpenFrames.set (some saw)
+  let stream ← match target with
+    | some stream => pure stream
+    | none => throw <| IO.userError "pressure test opened no stream"
+  let writers ← TaskSet.new
+  let closed ← IO.mkRef true
+  for _ in List.range 3 do
+    writers.spawn do
+      let result ← stream.write ⟨#[1]⟩
+      if !(isClosedW result) then closed.set false
+    discard <| accepted.recv
+  let enteredC : Chan Unit ← Chan.new 1
+  let releaseC : Chan Unit ← Chan.new 1
+  hooks.pauseAfterBudget.set (some { entered := enteredC, release := releaseC })
+  discard <| releaseB.send ()
+  discard <| enteredC.recv
+  let framesNext ← hooks.appliedFrames.get
+  let firstRelease ← saw.recv
+  let extra ← (saw.tryRecv : BaseIO (Option Nat))
+  discard <| releaseC.send ()
+  writers.joinAll
+  let secondRelease ← saw.recv
+  let chunks ← phase.get
+  let answersClosed ← closed.get
+  let stepOk :=
+    framesAtDefer == parserFrameBudget * 2
+      && framesNext == parserFrameBudget * 3
+      && firstRelease == some (parserFrameBudget * 2)
+      && extra == none
+      && secondRelease == some (parserFrameBudget * 3)
+      && chunks == 0
+      && answersClosed
+  if fault then
+    let first ← joinText sess
+    let second ← joinText sess
+    r.check "a deferred reader fault advances under queued writes"
+      (stepOk && first == boom.toString && second == boom.toString)
+  else
+    let first ← joinText sess
+    let second ← joinText sess
+    r.check "a deferred EOF advances under queued writes"
+      (stepOk && first == "ok" && second == "ok")
+
+/-- Retained complete frames, then EOF, a partial tail, or a reader fault. -/
+private def runRetained (r : Runner) (n : Nat) (trailing fault : Bool) : Async Unit := do
+  let pair ← ends n
+  let entered : Chan Unit ← Chan.new 1
+  let release : Chan Unit ← Chan.new 1
+  let readGate : Chan Unit ← Chan.new 1
+  let accepted : Chan Unit ← Chan.new 1
+  let phase ← IO.mkRef 0
+  let reads ← IO.mkRef 0
+  let boom := IO.userError "retained reader boom"
+  let conn : Connection := { pair.dialer with
+    write := fun bytes => do
+      let isData :=
+        match bytes[0]? with
+        | some b => b == 2
+        | none => false
+      if isData then
+        phase.set ((← phase.get) + 1)
+      pair.dialer.write bytes
+    read := do
+      let k ← reads.get
+      reads.set (k + 1)
+      if k == 0 then
+        pair.dialer.read
+      else if fault then
+        match ← readGate.recv with
+        | none => throw boom
+        | some _ => pair.dialer.read
+      else
+        match ← readGate.recv with
+        | none => return none
+        | some _ => pair.dialer.read }
+  let hooks ← testHooks
+  hooks.pauseAfterBudget.set (some { entered, release })
+  let sess ← startWithHooks .initiator conn .empty hooks
+  let mut target : Option Streams.Stream := none
+  let mut blob : ByteArray := .empty
+  for i in List.range (parserFrameBudget * 3) do
+    let stream ← mustOpen sess
+    if i == 0 then target := some stream
+    let id : UInt32 := 1 + 2 * UInt32.ofNat i
+    let frame :=
+      Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[7]⟩
+    blob := blob ++ frame
+  if trailing then blob := blob ++ ⟨#[0, 0, 0, 0]⟩
+  pair.peer.write blob
+  discard <| entered.recv
+  let stream ← match target with
+    | some stream => pure stream
+    | none => throw <| IO.userError "retained test opened no stream"
+  hooks.acceptedEvent.set (some accepted)
+  let writer ← TaskSet.new
+  writer.spawn do
+    discard <| stream.write ⟨Array.replicate (testPayloadCap + 1) 7⟩
+  discard <| accepted.recv
+  readGate.close
+  discard <| accepted.recv
+  discard <| release.send ()
+  writer.joinAll
+  let chunks ← phase.get
+  if fault then
+    let first ← joinText sess
+    let second ← joinText sess
+    r.check "retained frames keep the reader fault"
+      (first == boom.toString && second == boom.toString)
+    r.check "no chunk follows a deferred reader fault" (chunks == 1)
+  else if trailing then
+    let once ← sess.join
+    let twice ← sess.join
+    match once, twice with
+    | .error a, .error b =>
+      r.check "a partial frame at EOF is a protocol error"
+        (a == protocolPartial && b == protocolPartial)
+    | _, _ => r.check "a partial frame at EOF is a protocol error" false
+    r.check "no chunk follows a deferred partial EOF" (chunks == 1)
+  else
+    let first ← joinText sess
+    let second ← joinText sess
+    r.check "retained frames then EOF join as connection end"
+      (first == "ok" && second == "ok")
+    r.check "no chunk follows a deferred EOF" (chunks == 1)
+
+/-- The second chunk of a large write leaves without a later event. -/
+private def runSecondChunk (r : Runner) : Async Unit := do
+  let pair ← ends 29
+  let phase ← IO.mkRef 0
+  let conn : Connection := { pair.dialer with
+    write := fun bytes => do
+      let isData :=
+        match bytes[0]? with
+        | some b => b == 2
+        | none => false
+      if isData then
+        phase.set ((← phase.get) + 1)
+      pair.dialer.write bytes }
+  let sess ← start .initiator conn
+  let stream ← mustOpen sess
+  let wrote ← stream.write ⟨Array.replicate (testPayloadCap + 1) 7⟩
+  let chunks ← phase.get
+  r.check "a large write sends its second chunk" (isOk wrote && chunks == 2)
+  sess.close
+  discard <| sess.join
+
+private def runArbitration (r : Runner) : Async Unit := do
+  runBudgetFairness r
+  runInverseFairness r
+  runSecondChunk r
+  runRetained r 24 false false
+  runRetained r 25 true false
+  runRetained r 26 false true
+  runDeferredPressure r 31 false
+  runDeferredPressure r 32 true
+  -- A throwing transport close still closes the event channel.
+  do
+    let pair ← ends 27
+    let hold : Chan Unit ← Chan.new 1
+    let entered : Chan Unit ← Chan.new 1
+    let conn : Connection := { pair.dialer with
+      write := fun bytes => do
+        let isData :=
+          match bytes[0]? with
+          | some b => b == 2
+          | none => false
+        if isData then
+          discard <| entered.send ()
+          match ← hold.recv with
+          | none => throw <| IO.userError "write held"
+          | some _ => pair.dialer.write bytes
+        else
+          pair.dialer.write bytes
+      close := do
+        pair.dialer.close
+        throw <| IO.userError "close boom" }
+    let sess ← start .initiator conn
+    let stream ← mustOpen sess
+    let box : Chan Bool ← Chan.new 1
+    let workers ← TaskSet.new
+    workers.spawn do
+      let result ← stream.write ⟨#[9]⟩
+      discard <| box.send (isClosedW result)
+    discard <| entered.recv
+    let returned ← try
+      sess.close
+      pure true
+    catch _ =>
+      pure false
+    r.check "close returns when the transport close throws" returned
+    match ← (sess.openStream pid).run with
+    | .error e => r.check "close shuts the event channel" (e == closedError)
+    | .ok extra =>
+      extra.reset
+      r.check "close shuts the event channel" false
+    hold.close
+    workers.joinAll
+    match ← box.recv with
+    | some true => r.check "a pinned writer wakes after a throwing close" true
+    | _ => r.check "a pinned writer wakes after a throwing close" false
+    let first ← joinText sess
+    let second ← joinText sess
+    r.check "repeated joins stay an owner close" (first == "ok" && second == "ok")
+  -- The reader fault has won. Close during the outcome pause keeps it.
+  do
+    let pair ← ends 28
+    let entered : Chan Unit ← Chan.new 1
+    let release : Chan Unit ← Chan.new 1
+    let hooks ← testHooks
+    hooks.beforeOutcome.set (some { entered, release })
+    let boom := IO.userError "reader boom"
+    let conn : Connection := { pair.dialer with
+      read := throw boom }
+    let sess ← startWithHooks .initiator conn .empty hooks
+    discard <| entered.recv
+    sess.close
+    discard <| release.send ()
+    let first ← joinText sess
+    let second ← joinText sess
+    r.check "a later close keeps the winning reader fault"
+      (first == boom.toString && second == boom.toString)
+
+private def checks (r : Runner) : Async Unit := do
+  -- Startup, join, and a second join.
+  do
+    let pair ← ends 1
+    let sess ← start .initiator pair.dialer
+    sess.close
+    match ← sess.join with
+    | .ok () => r.check "startup and clean shutdown join once" true
+    | .error _ => r.check "startup and clean shutdown join once" false
+    match ← sess.join with
+    | .ok () => r.check "a second join returns the same success" true
+    | .error _ => r.check "a second join returns the same success" false
+    match ← pair.peer.read with
+    | none => r.check "closing the session ends the peer read" true
+    | some _ => r.check "closing the session ends the peer read" false
+
+  -- One acknowledged data frame.
+  do
+    let pair ← ends 2
+    let sess ← start .initiator pair.dialer
+    let stream ← mustOpen sess
+    let wrote ← stream.write ⟨#[9]⟩
+    let openBytes ← pair.peer.readExactly 9
+    let dataBytes ← pair.peer.readExactly 10
+    let payloadOk :=
+      match dataBytes with
+      | some (frame, rest) =>
+        frame.size == 10 && frame[9]? == some 9 && rest.isEmpty
+      | none => false
+    r.check "one outbound data frame is written and acknowledged"
+      (isOk wrote && openBytes.isSome && payloadOk)
+    sess.close
+    match ← sess.join with
+    | .ok () => r.check "the reader and the owner both join" true
+    | .error _ => r.check "the reader and the owner both join" false
+
+  -- A failed write keeps the IO.Error.
+  do
+    let pair ← ends 3
+    let boom := IO.userError "boom"
+    let conn : Connection := { pair.dialer with write := fun _ => throw boom }
+    let sess ← start .initiator conn
+    match ← (sess.openStream pid).run with
+    | .ok _ => r.check "a failed open write resolves closed" false
+    | .error e =>
+      r.check "a failed open write resolves closed" (e == closedError)
+    let first ← joinText sess
+    let second ← joinText sess
+    r.check "a failed connection write keeps its IO.Error" (first == boom.toString)
+    r.check "a second join throws the same connection error" (second == boom.toString)
+
+  -- Malformed bytes are a protocol failure.
+  do
+    let pair ← ends 4
+    let sess ← start .initiator pair.dialer
+    pair.peer.write ⟨#[0, 0, 0, 0, 1, 0, 0, 0, 0]⟩
+    match ← sess.join with
+    | .error e =>
+      r.check "a malformed frame is a protocol failure" (e == protocolMalformed)
+    | .ok () =>
+      r.check "a malformed frame is a protocol failure" false
+
+  -- A frame split across reads.
+  do
+    let pair ← ends 5
+    let sess ← start .initiator pair.dialer
+    let stream ← mustOpen sess
+    let _ ← pair.peer.readExactly 9
+    let frame := oneData 7
+    pair.peer.write (frame.extract 0 4)
+    pair.peer.write (frame.extract 4 frame.size)
+    match ← stream.read with
+    | .ok (some chunk) =>
+      r.check "a frame split across reads is delivered" (chunk == ⟨#[7]⟩)
+    | _ => r.check "a frame split across reads is delivered" false
+    sess.close
+    discard <| sess.join
+
+  -- A payload that crosses the reader's slice boundary.
+  do
+    let pair ← ends 14
+    let sess ← start .initiator pair.dialer
+    let stream ← mustOpen sess
+    let _ ← pair.peer.readExactly 9
+    let payload : ByteArray := ⟨Array.replicate testPayloadCap 7⟩
+    let frame :=
+      Header.encodeB {
+        kind := .data
+        streamId := 1
+        length := UInt32.ofNat testPayloadCap } ++ payload
+    pair.peer.write frame
+    match ← stream.read with
+    | .ok (some chunk) =>
+      r.check "a frame that crosses a slice boundary is delivered" (chunk == payload)
+    | _ =>
+      r.check "a frame that crosses a slice boundary is delivered" false
+    sess.close
+    discard <| sess.join
+
+  -- More frames than one parser budget arrive in one read.
+  -- Each frame belongs to a different stream.
+  do
+    let pair ← ends 6
+    let reads ← IO.mkRef 0
+    let conn : Connection := { pair.dialer with
+      read := do
+        reads.modify (· + 1)
+        pair.dialer.read }
+    let sess ← start .initiator conn
+    let mut burst : Array Streams.Stream := #[]
+    for _ in List.range 10 do
+      burst := burst.push (← mustOpen sess)
+    let mut bulk : ByteArray := .empty
+    for i in List.range 10 do
+      let id := UInt32.ofNat (1 + 2 * i)
+      bulk := bulk ++ Header.encodeB {
+        kind := .data
+        streamId := id
+        length := 1 } ++ ⟨#[UInt8.ofNat i]⟩
+    pair.peer.write bulk
+    let mut got : Array UInt8 := #[]
+    for stream in burst do
+      match ← stream.read with
+      | .ok (some chunk) =>
+        match chunk[0]? with
+        | some b => got := got.push b
+        | none => pure ()
+      | _ => pure ()
+    let n ← reads.get
+    r.check "a budget of frames drains without a read per frame"
+      (got == (List.range 10).toArray.map UInt8.ofNat && 1 ≤ n && n ≤ 3)
+    sess.close
+    discard <| sess.join
+
+  -- Reset publishes the port before it closes admission.
+  do
+    let pair ← ends 7
+    let sess ← start .initiator pair.dialer
+    let stream ← mustOpen sess
+    let _ ← pair.peer.readExactly 9
+    pair.peer.write (control .reset resetNotData)
+    match ← stream.read with
+    | .error .reset =>
+      let mut resetCount := 0
+      for _ in List.range 5 do
+        if isResetW (← stream.write ⟨#[1]⟩) then
+          resetCount := resetCount + 1
+      r.check "five writes after reset observe the reset port" (resetCount == 5)
+    | _ => r.check "five writes after reset observe the reset port" false
+    sess.close
+    discard <| sess.join
+
+  -- A reset frame write wakes a blocked fifth writer after the port update.
+  do
+    let pair ← ends 12
+    let drainOwner ← TaskSet.new
+    drain pair.peer drainOwner
+    let gate : Chan Unit ← Chan.new 1
+    let conn : Connection := { pair.dialer with
+      write := fun bytes => do
+        let openFrame :=
+          match bytes[0]? with
+          | some b => b == 1
+          | none => false
+        if openFrame then
+          pair.dialer.write bytes
+        else
+          let _ ← gate.recv
+          pair.dialer.write bytes }
+    let sess ← start .initiator conn
+    let stream ← mustOpen sess
+    stream.reset
+    let box ← Chan.new 5
+    let writers ← TaskSet.new
+    for _ in List.range 5 do
+      writers.spawn do
+        let result ← stream.write ⟨#[3]⟩
+        discard <| box.send result
+    gate.close
+    writers.joinAll
+    let mut resetCount := 0
+    for _ in List.range 5 do
+      match ← box.recv with
+      | some result =>
+        if isResetW result then resetCount := resetCount + 1
+      | none => pure ()
+    r.check "a blocked fifth writer wakes with reset" (resetCount == 5)
+    sess.close
+    discard <| sess.join
+    drainOwner.joinAll
+
+  -- Negotiation bytes are frames before the first read.
+  do
+    let pair ← ends 13
+    let sess ← start .responder pair.dialer (control .open openNotData)
+    match ← sess.accept with
+    | some _ => r.check "a leftover open frame is accepted" true
+    | none => r.check "a leftover open frame is accepted" false
+    sess.close
+    discard <| sess.join
+
+  -- Half-close closes admission.
+  do
+    let pair ← ends 8
+    let drainOwner ← TaskSet.new
+    drain pair.peer drainOwner
+    let sess ← start .initiator pair.dialer
+    let stream ← mustOpen sess
+    stream.close
+    let wrote ← stream.write ⟨#[1]⟩
+    r.check "a write after half-close completes with closed" (isClosedW wrote)
+    sess.close
+    discard <| sess.join
+    drainOwner.joinAll
+
+  -- Five writers wake on shutdown.
+  do
+    let pair ← ends 9
+    let (conn, hold) ← holdData pair.dialer
+    let sess ← start .initiator conn
+    let stream ← mustOpen sess
+    let box ← Chan.new 5
+    let writers ← TaskSet.new
+    for _ in List.range 5 do
+      writers.spawn do
+        let result ← stream.write ⟨#[3]⟩
+        discard <| box.send result
+    sess.close
+    hold.close
+    writers.joinAll
+    let mut closedCount := 0
+    for _ in List.range 5 do
+      match ← box.recv with
+      | some result =>
+        if isClosedW result then closedCount := closedCount + 1
+      | none => pure ()
+    r.check "five blocked writers wake with closed on shutdown" (closedCount == 5)
+    match ← sess.join with
+    | .ok () => r.check "shutdown join stays a success" true
+    | .error _ => r.check "shutdown join stays a success" false
+
+  -- Accept envelopes survive reset.
+  do
+    let pair ← ends 10
+    let sess ← start .responder pair.dialer
+    pair.peer.write (control .open openNotData)
+    pair.peer.write (control .reset resetNotData)
+    match ← sess.accept with
+    | none => r.check "an accepted stream survives reset" false
+    | some stream =>
+      match ← stream.read with
+      | .error .reset =>
+        r.check "an accepted stream survives reset" true
+      | _ => r.check "an accepted stream survives reset" false
+    sess.close
+    discard <| sess.join
+
+  -- Live permits return, so the cap can be filled twice.
+  do
+    let pair ← ends 11
+    let drainOwner ← TaskSet.new
+    drain pair.peer drainOwner
+    let sess ← start .initiator pair.dialer
+    let mut streams : Array Streams.Stream := #[]
+    for _ in List.range liveStreamCap do
+      streams := streams.push (← mustOpen sess)
+    for stream in streams do
+      stream.reset
+    let extra ← mustOpen sess
+    extra.reset
+    r.check "a live permit returns and another open proceeds" true
+    sess.close
+    discard <| sess.join
+    drainOwner.joinAll
+
+  runCorrections r
+  runArbitration r
+
+/-- The runtime shell over the sim connection. -/
+def run (r : Runner) : IO Unit := do
+  r.section "mux test session" "packages/libp2p/mux/Libp2p/Mux/Test/Session.lean"
+  Async.run (checks r)
+
+end Tests.Mux.Session
+
 namespace Tests
 
 open Libp2p.Mux
@@ -1613,5 +2667,6 @@ def Mux.run (r : Runner) : IO Unit := do
   Mux.Wire.run r
   Mux.Seam.run r
   Mux.State.run r
+  Mux.Session.run r
 
 end Tests

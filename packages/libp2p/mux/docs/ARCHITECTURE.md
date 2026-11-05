@@ -24,6 +24,7 @@ same node code ran under both muxers in-process and over loopback TCP
 | `Libp2p/Mux/Test.lean` | `Mux.test : Muxer`, the independent test session under `Mux.testId`. Planned |
 | `Libp2p/Mux/Test/Wire.lean` | the private header, frame, and incremental parser. Present. Internal, and tests import it directly |
 | `Libp2p/Mux/Test/State.lean` | the pure owner-loop state and its transitions. Present. Internal, and tests import it directly. A transition returns actions for the runtime shell |
+| `Libp2p/Mux/Test/Session.lean` | the runtime shell for that state. Present. Internal, and tests import it directly. One reader and one owner loop |
 | `Libp2p/Mux/Mock/Core/ProtocolId.lean` | the temporary `ProtocolId`. Present. `Constants.lean` imports only this module, so the constants stay free of `Conc` and `Streams` |
 | `Libp2p/Mux/Mock/Core.lean` | the temporary `Role`, `Error`, `Muxer`, and `MuxSession` that let W5.4 compile before W5.2. Present. The public root does not import it |
 
@@ -33,9 +34,10 @@ live in `Libp2p.Mux.Test.Wire`.
 
 `Libp2p/Mux.lean`, `Libp2p/Mux/Constants.lean`,
 `Libp2p/Mux/Mock/Core/ProtocolId.lean`, `Libp2p/Mux/Mock/Core.lean`,
-`Libp2p/Mux/Test/Wire.lean`, and `Libp2p/Mux/Test/State.lean` are in
-the tree. `Yamux.lean`, `Mplex.lean`, and `Test.lean` are the
-remaining modules of this package.
+`Libp2p/Mux/Test/Wire.lean`, `Libp2p/Mux/Test/State.lean`, and
+`Libp2p/Mux/Test/Session.lean` are in the tree. `Yamux.lean`,
+`Mplex.lean`, and `Test.lean` are the remaining modules of this
+package.
 
 ## Public surface
 
@@ -256,6 +258,13 @@ retired id is a duplicate open and a protocol error. A data, fin, or
 reset frame for an id that was never opened is a protocol error. An
 id is never reused.
 
+The runtime port map keeps an id while a later action of the retiring
+step still names it. The step then removes the entry. The stream
+handle keeps the port value. An empty write and a late write read
+that value. An active action that names a missing port throws
+`mux: missing port {id}`. Terminal cleanup closes the ports still
+in the map. It skips an entry the retiring step already removed.
+
 ### Parser and codec
 
 The header codec and the frame codec cover values their types can
@@ -280,13 +289,30 @@ distinguish a peer FIN, a peer RST, and a local close.
 
 ### Ownership
 
-One reader task and one owner loop serve the session. The loop is the
-only task that steps the pure session state, and it is the only task
-that writes a frame. Callers post events on the bounded event channel.
-The loop is the only caller of `Outcome.finish`. `TaskSet.joinAll`
-returns before `Outcome.answer`. The reader and the loop catch an
-`IO.Error` from the connection and return. `joinAll` therefore does
-not throw that error a second time.
+One reader task and one owner loop serve the session.
+`Test/Session.lean` is that pair. The loop is the only task that
+steps the pure session state, and it is the only task that writes a
+frame. Callers post events on the bounded event channel. The reader
+posts slices of at most `testPayloadCap`. The loop calls `ackSend`
+or `failSend` before it applies another event. It reads the close
+request again immediately before `Connection.write`. Scheduling and
+writes is the rest of the turn.
+The loop is the only caller of `Outcome.finish`. `join` waits for
+`TaskSet.joinAll`, then reads a stored owner error or `Outcome.answer`.
+The reader and the loop catch an `IO.Error` from the connection and
+return. That fault stays in `Outcome`, and every `join` throws it.
+A protocol failure stays a returned `Core.Error`. An owner that throws
+any other `IO.Error`, including `InvariantError.toIOError`, stores
+that error first. It then wakes the reader, the callers, and admission,
+and throws the same error. It does not store a successful result.
+Every later `join` throws the stored error.
+`start` takes the role, the connection, and the leftover bytes.
+`startWithHooks` is the test entry. `Libp2p.Mux` does not import it.
+
+Teardown closes the event channel before it drains. The drain answers
+every open and write that entered before the close. A send that finds
+the channel closed fails, and that caller releases the permit it
+still holds.
 
 The owner does not cancel either task. Shutdown closes the connection
 and the event channel, and that close wakes a parked task. Stream
@@ -301,10 +327,16 @@ an IO fault that carries its `IO.Error`, and a protocol failure that
 carries its `Core.Error`.
 
 The first atomic claim out of running wins. A later cause leaves the
-winner in place. Only a winning owner close calls
-`Outcome.markClosing`. No claimant writes fault state into `Outcome`.
-Teardown records a winning IO fault once, through `Outcome.recordFault`,
-before `Outcome.finish`.
+winner in place. `close` sets the close request. It then closes the
+connection with `Connection.closeQuietly` and closes the event
+channel. It does not call `Outcome.markClosing`. `finishCause` calls
+`markClosing` only for a winning owner close, immediately before
+`Outcome.finish (.ok ())`. A reader fault, a writer fault, a protocol
+error, or a connection end that already won stays the result if close
+is requested before that projection. A read or a write that fails
+after the close request, while the session is still running, is owner
+close. Teardown records a winning IO fault once, through
+`Outcome.recordFault`, before `Outcome.finish`.
 
 `Core.Error` is the seam error named in the root architecture (§4.9).
 This package does not declare it.
@@ -340,15 +372,28 @@ Teardown closes every live inbox and every inbox still queued for
 
 ### Scheduling and writes
 
-A turn processes at most one available event. It then takes at most
-the parser frame budget of complete frames, then one outbound chunk.
-One chunk is at most `testPayloadCap` bytes. A large write cannot
-hold the connection for the rest of its bytes.
+A turn takes at most one queued event. It then takes at most one
+parser budget, unless that event was a byte slice and `feed` already
+spent the budget. It then sends at most one ready chunk. One chunk is
+at most `testPayloadCap` bytes. A terminal observation sends no chunk.
+The next turn starts after those steps.
 
-A complete frame already in the parser, or an outbound chunk that is
-ready, keeps the loop runnable when no new event is queued. The loop
-parks only when a queued event, a complete buffered frame, and a
-ready outbound chunk are all absent.
+`feed` of a byte event is the budget. A non-byte event leaves the
+budget for one retained pull in the same turn, so a full event channel
+cannot hold the parser. With no queued event, a complete frame still
+costs one pull, and a ready chunk is one send. When the channel is
+empty, the close request runs before that pull or send. The loop parks
+when the channel has no event, the parser has no complete frame, no
+chunk is ready, and the close request is clear.
+
+The owner stores the first dequeued connection end or reader fault in
+`deferredTerminal` while a complete frame remains. The owner alone
+writes that cell. A later terminal does not replace it. No chunk
+starts after that dequeue. While the cell is set and a complete frame
+remains, the turn answers one queued caller event and takes one
+parser budget. A queued byte slice counts as that budget. The owner
+applies the stored cause when no complete frame remains. A close
+request claims owner close, and the stored cause is not claimed.
 
 The owner performs one `sendFrame` or `sendChunk`. It then calls
 `ackSend` or `failSend`. Only then does it dequeue and apply another
@@ -392,10 +437,9 @@ The logical `Stream.write` has no arm for that error. The loop
 resolves that write, and every write still waiting, with
 `Streams.Error.closed`. `Connection.write` does not say whether the
 peer received the bytes. When the IO fault won the terminal claim,
-`Outcome.answer` throws the stored `IO.Error`. When owner close
-already won, `markClosing` has ended the outcome, the fault is not
-recorded, and `answer` returns success. The stream write is
-`Streams.Error.closed` in both cases.
+`Outcome.answer` throws the stored `IO.Error`. When owner close won,
+that write error is not recorded, and `answer` returns success. The
+stream write is `Streams.Error.closed` in both cases.
 
 A local reset sends one reset frame. Admitted writes, and writes
 still waiting for admission, complete with `Streams.Error.reset`.
