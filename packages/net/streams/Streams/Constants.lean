@@ -28,4 +28,15 @@ A dial parks while the queue is full, as a TCP backlog makes a connect
 wait. -/
 def simBacklog : Nat := 16
 
+/-- The largest chunk that one TCP read asks for: 64 KiB. A read can
+still split or join frames (`Connection.read`). A Noise frame on the
+wire is 2 + 65535 bytes, so a frame at the cap always takes two reads,
+and the framing layer joins them. -/
+def tcpReadChunk : Nat := 65536
+
+/-- The connections that the kernel queues for a TCP listener before
+its owner accepts them: the backlog of `listen(2)`. 128 is the Linux
+default of `somaxconn` before 5.4. -/
+def tcpBacklog : Nat := 128
+
 end Streams

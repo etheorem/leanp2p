@@ -18,13 +18,16 @@ to the transport. Two values fill the seam: the in-memory sim of
 
 Each operation fails through one channel of §3.5:
 
-* `read` answers `none` at the end of the stream: the peer has
-  finished, or our own `close` woke the read.
-* A fault throws `IO.Error`: an error of our own system, or a write to a
-  closed connection.
+* `read` answers `none` at the end of the stream: the peer sent a FIN
+  or an RST, or our own `close` woke the read. A FIN and an RST both
+  tell that the peer has finished, the end-of-stream row of §3.5 (the
+  package ARCHITECTURE, "Decisions", the peer's reset).
+* A fault throws `IO.Error`: a socket error of our own system, such as
+  a network that is down, or a write to a closed connection.
 
 A write that fails tears the connection down (§4.7). The local read
-then sees EOF, and the peer gets a FIN. Each transport value keeps this
+then sees EOF, and the peer gets a FIN, or an RST when a write is in
+flight. Each transport value keeps this
 rule, so a caller never holds a connection that is half closed.
 
 `Connection` holds operations and no state. The state lives in the
@@ -44,8 +47,9 @@ open Conc Streams.Mock.Multiformats
 /-- One byte stream in both directions between two peers. -/
 structure Connection where
   /-- The next chunk of bytes, of any length above zero. `none` at the
-  end of the stream. A read can split or join the writes of the peer,
-  so no caller can use the write boundaries. -/
+  end of the stream, a FIN or an RST from the peer. A read can split or
+  join the writes of the peer, so no caller can use the write
+  boundaries. -/
   read : Async (Option ByteArray)
   /-- Write the bytes, and return when the transport has taken them. A
   failed write throws `IO.Error`, and the transport tears the
