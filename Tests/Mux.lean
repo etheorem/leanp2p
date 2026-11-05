@@ -1684,8 +1684,22 @@ private theorem finNotData : Kind.fin ≠ Kind.data := by decide
 private def control (k : Kind) (hk : k ≠ Kind.data) : ByteArray :=
   Frame.encodeB (Frame.ofControl k 1 hk id1)
 
+private def dataFrame (id : UInt32) (b : UInt8) : ByteArray :=
+  Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[b]⟩
+
 private def oneData (b : UInt8) : ByteArray :=
-  Header.encodeB { kind := .data, streamId := 1, length := 1 } ++ ⟨#[b]⟩
+  dataFrame 1 b
+
+/-- One decoded header, and the bytes read past it. -/
+private def takeHeader (c : Connection) (pending : ByteArray) :
+    Async (Option (Header × ByteArray)) := do
+  match ← c.readExactly headerSize pending with
+  | none => return none
+  | some (frame, rest) =>
+    match Header.decodeB? frame with
+    | .ok (h, suffix) =>
+      if suffix.isEmpty then return some (h, rest) else return none
+    | .error _ => return none
 
 private def isOk (r : Except Streams.Error Unit) : Bool :=
   match r with
@@ -2418,6 +2432,111 @@ private def runArbitration (r : Runner) : Async Unit := do
     r.check "a later close keeps the winning reader fault"
       (first == boom.toString && second == boom.toString)
 
+/-- A full inbox resets that stream. Buffered bytes stay readable.
+The other stream and the session stay up. -/
+private def runInboxCredit (r : Runner) : Async Unit := do
+  let pair ← ends 33
+  let sess ← start .initiator pair.dialer
+  let firstStream ← mustOpen sess
+  let secondStream ← mustOpen sess
+  let mut pending : ByteArray := .empty
+  let mut opensOk := false
+  match ← takeHeader pair.peer pending with
+  | some (firstOpen, rest1) =>
+    match ← takeHeader pair.peer rest1 with
+    | some (secondOpen, rest2) =>
+      pending := rest2
+      opensOk :=
+        firstOpen.kind == Kind.open && firstOpen.streamId == 1 &&
+          firstOpen.length == 0 &&
+        secondOpen.kind == Kind.open && secondOpen.streamId == 3 &&
+          secondOpen.length == 0
+    | none => pure ()
+  | none => pure ()
+  if !opensOk then
+    r.check "a full inbox sends one reset for that stream" false
+    r.check "buffered inbox bytes drain before reset" false
+    r.check "inbox reset is reported once before eof" false
+    r.check "writes after inbox overflow report reset" false
+    r.check "another stream remains usable after inbox overflow" false
+    r.check "inbox overflow leaves the session healthy" false
+    sess.close
+    discard <| sess.join
+    pair.peer.close
+    return
+  let queued := (List.range inboundFrameCredit).toArray.map fun i =>
+    UInt8.ofNat (i + 1)
+  let mut blob : ByteArray := .empty
+  for b in queued do
+    blob := blob ++ dataFrame 1 b
+  blob := blob ++ dataFrame 1 (UInt8.ofNat (inboundFrameCredit + 1))
+  pair.peer.write blob
+  match ← takeHeader pair.peer pending with
+  | none =>
+    r.check "a full inbox sends one reset for that stream" false
+    r.check "buffered inbox bytes drain before reset" false
+    r.check "inbox reset is reported once before eof" false
+    r.check "writes after inbox overflow report reset" false
+    r.check "another stream remains usable after inbox overflow" false
+    r.check "inbox overflow leaves the session healthy" false
+    sess.close
+    discard <| sess.join
+    pair.peer.close
+  | some (resetHeader, rest) =>
+    let resetOk :=
+      resetHeader.kind == Kind.reset && resetHeader.streamId == 1 &&
+        resetHeader.length == 0 && rest.isEmpty
+    r.check "a full inbox sends one reset for that stream" resetOk
+    if !resetOk then
+      r.check "buffered inbox bytes drain before reset" false
+      r.check "inbox reset is reported once before eof" false
+      r.check "writes after inbox overflow report reset" false
+      r.check "another stream remains usable after inbox overflow" false
+      r.check "inbox overflow leaves the session healthy" false
+      sess.close
+      discard <| sess.join
+      pair.peer.close
+      return
+    let mut got : Array ByteArray := #[]
+    for _ in [:queued.size] do
+      match ← firstStream.read with
+      | .ok (some bytes) => got := got.push bytes
+      | _ => pure ()
+    let expect := queued.map fun b => (⟨#[b]⟩ : ByteArray)
+    r.check "buffered inbox bytes drain before reset" (got == expect)
+    let resetRead ← firstStream.read
+    let eofRead ← firstStream.read
+    r.check "inbox reset is reported once before eof"
+      (match resetRead, eofRead with
+        | .error .reset, .ok none => true
+        | _, _ => false)
+    let wrote ← firstStream.write ⟨#[7]⟩
+    r.check "writes after inbox overflow report reset" (isResetW wrote)
+    pair.peer.write (dataFrame 3 8)
+    let inbound ← secondStream.read
+    let outbound ← secondStream.write ⟨#[9]⟩
+    match ← takeHeader pair.peer rest with
+    | some (dataHeader, dataRest) =>
+      match ← pair.peer.readExactly 1 dataRest with
+      | some (body, leftover) =>
+        let readOk :=
+          match inbound with
+          | .ok (some bytes) => bytes == ⟨#[8]⟩
+          | _ => false
+        r.check "another stream remains usable after inbox overflow"
+          (readOk && isOk outbound &&
+            dataHeader.kind == Kind.data && dataHeader.streamId == 3 &&
+            dataHeader.length == 1 && body == ⟨#[9]⟩ && leftover.isEmpty)
+      | none =>
+        r.check "another stream remains usable after inbox overflow" false
+    | none =>
+      r.check "another stream remains usable after inbox overflow" false
+    sess.close
+    match ← sess.join with
+    | .ok () => r.check "inbox overflow leaves the session healthy" true
+    | .error _ => r.check "inbox overflow leaves the session healthy" false
+    pair.peer.close
+
 private def checks (r : Runner) : Async Unit := do
   -- Startup, join, and a second join.
   do
@@ -2693,6 +2812,7 @@ private def checks (r : Runner) : Async Unit := do
     discard <| sess.join
     drainOwner.joinAll
 
+  runInboxCredit r
   runCorrections r
   runArbitration r
 
@@ -2700,6 +2820,11 @@ private def checks (r : Runner) : Async Unit := do
 def run (r : Runner) : IO Unit := do
   r.section "mux test session" "packages/libp2p/mux/Libp2p/Mux/Test/Session.lean"
   Async.run (checks r)
+
+/-- The inbox-credit boundary through `Session.start`. -/
+def runInbox (r : Runner) : IO Unit := do
+  r.section "mux test session" "packages/libp2p/mux/Libp2p/Mux/Test/Session.lean"
+  Async.run (runInboxCredit r)
 
 end Tests.Mux.Session
 
