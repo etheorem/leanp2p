@@ -20,7 +20,7 @@ application and the host. The clock seam carries the heartbeat and the
 delayed gossip. The loop parks in `select` over the two, so the timer costs
 no task, and a `TestClock` drives every time decision of a test.
 
-`loop` and `readFrame` are `partial`. A peer controls the number of events
+`loop` and `readFrames` are `partial`. A peer controls the number of events
 and chunks. No measure bounds the wait for a complete frame or a close
 (root CLAUDE.md, "`partial def`").
 
@@ -38,6 +38,9 @@ through `OnceRef.update` (root ARCHITECTURE §4.1).
 - **The stop field runs in Async.** The brief gives it a BaseIO type.
   TaskSet.joinAll runs in Async, because joining can park. This field keeps
   that type and leaves the blocking run to the application edge.
+- **Actions return the next stream table and pending sends.** This follows
+  the yamux performAll discipline. These actions use Async because opening
+  and writing streams can park. The loop assigns each returned state.
 - **The spread index counts sends within each heartbeat.** Config describes
   this index, while the brief's loop sketch increments it once per tick.
   Each delayed send gets its own index, and the next heartbeat starts at 0.
@@ -56,22 +59,23 @@ through `OnceRef.update` (root ARCHITECTURE §4.1).
   join, so that peer would never learn the topic. The go implementation
   announces a change in its host registry, outside the router. The loop
   does the same with `subOptRpc`, after the core step.
-- **The gossip spread is fixed.** The go implementation draws the delay of
-  its gossip from a random source. `defaultTrickle` is a fixed function, so a
-  run replays exactly. The tolerance of the unit 3c gate on latency is an
-  open question on the pull request. The peer order of a tick is the order
-  of the state, for the same reason.
-- **One outbound stream per RPC.** `sendRpc` opens a stream, writes one frame,
-  and half-closes it. A send runs on the loop task, so a host whose
-  `newStream` parks also parks the loop. Two RPCs to one peer can reorder,
-  because each stream has its own handler task. The unit 3c gate decides if
-  this shape stays.
-- **The inbound handler serves one frame per stream.** Bytes after the first
-  frame in the same read are a protocol error, as the unit 3b brief requires.
+- **The default gossip delay is zero.** The pinned go implementation flushes
+  heartbeat gossip at once. Config.trickle keeps an explicit delay for tests
+  and callers that need one, as section 12 of the brief records.
+- **The loop keeps one outbound stream per peer.** Each action returns the
+  updated stream table. The loop closes the streams when it ends, and resets
+  a stream when its peer leaves or a write fails. The next send can reopen it.
+  Opening and writing run on the loop task, so either call can park the loop.
+- **The inbound handler serves consecutive frames.** Go and rust keep their
+  outbound stream open. The handler bounds each frame before appending bytes,
+  and serves several frames from one chunk in order.
+- **The receipt observer runs before the core step.** Config.onRpc receives
+  the sender and payload bytes of every RPC, including duplicates and bad
+  protobuf bodies. Frame errors fail the handler before they reach it.
 - **The host posts `peerJoined` before it serves a stream of that peer.** The
   core ignores an RPC from an unknown peer (`Core.rpcStep`), so an earlier
   stream loses its RPC.
-- **A send failure has no sink.** `sendRpc` answers `Unit`, and the mock host has
+- **A send failure has no sink.** The send retires the stream, and the mock host has
   no failure log. The host reports stream failures at integration.
 -/
 
@@ -81,11 +85,9 @@ namespace Libp2p.Protocols.Gossipsub.Node
 
 open Mock.Host (HostSeam)
 
-/-- The delay of the i-th gossip send of a heartbeat: a fixed spread below
-one second. Each run replays the same delays. Nodes with the same schedule
-can align their sends. -/
-def defaultTrickle (i : Nat) : Millis :=
-  (i * 7919 + 1) % 1000
+/-- The default sends heartbeat gossip at once, as the pinned go router does.
+Callers can provide a delay through Config.trickle. -/
+def defaultTrickle (_i : Nat) : Millis := 0
 
 /-- The configuration of one node: the router parameters, the clock the
 loop reads, and the spread of the heartbeat gossip. -/
@@ -97,6 +99,9 @@ structure Config where
   /-- The delay of the `i`-th gossip send of one heartbeat, in milliseconds.
   The caller fixes it, so a test gets exact times. -/
   trickle : Nat → Millis := defaultTrickle
+  /-- Observe each inbound RPC before validation and deduplication. The callback
+  runs on the loop task and must not park. The bytes are the unframed body. -/
+  onRpc : Peer → List Nat → BaseIO Unit := fun _ _ => pure ()
 
 /-- A running node. Every field is a seam over the loop task, which is the
 only owner of the router state. -/
@@ -137,56 +142,102 @@ beside the code that sends it. -/
 def subOptRpc (t : TopicId) (on : Bool) : Rpc.RPC :=
   { subscriptions := [{ subscribe := on, topicid := t.name }], publish := [], control := none }
 
-/-- Send one RPC on a new stream, and half-close the stream. An RPC over
-`Constants.rpcCap` is never sent. Every failure ends this send and leaves
-the loop running, and the module doc records why nothing reports it. -/
-def sendRpc (host : HostSeam) (to : Peer) (rpc : Rpc.RPC) : Conc.Async Unit := do
-  let some frame := Rpc.encodeFrame? rpc | return ()
+/-- The outbound streams owned by the loop, one per peer. Each send returns
+its next table, so the loop assigns from the answer. -/
+abbrev Outbound := List (Peer × Streams.Stream)
+
+/-- Retire a peer's outbound stream. Reset wakes both directions. -/
+private def retire (streams : Outbound) (peer : Peer) : Conc.Async Outbound := do
+  for (p, stream) in streams do
+    if p = peer then stream.reset
+  return streams.filter (fun e => e.1 != peer)
+
+/-- Write one frame and return the stream table. A successful write keeps
+its stream open. A failed write resets and removes it. -/
+private def writeFrame (streams : Outbound) (peer : Peer) (stream : Streams.Stream)
+    (frame : List Nat) : Conc.Async Outbound := do
+  try
+    match ← stream.write (Bytes.ofNatList frame) with
+    | .ok () => return streams
+    | .error _ => retire streams peer
+  catch _ => retire streams peer
+
+/-- Send one RPC through the peer's stream and return the next stream table.
+An RPC over Constants.rpcCap opens no stream. A failed open leaves the table
+unchanged. The host reports send failures at integration. -/
+def sendRpc (host : HostSeam) (streams : Outbound) (to : Peer) (rpc : Rpc.RPC) :
+    Conc.Async Outbound := do
+  let some frame := Rpc.encodeFrame? rpc | return streams
+  if let some (_, stream) := streams.find? (fun e => e.1 == to) then
+    return ← writeFrame streams to stream frame
   try
     match ← host.newStream to [Constants.meshsubId] with
-    | .error _ => return ()
-    | .ok (_, stream) =>
-      match ← stream.write (Bytes.ofNatList frame) with
-      | .ok () => stream.close
-      | .error _ => stream.reset
-  catch _ =>
-    return ()
+    | .error _ => return streams
+    | .ok (_, stream) => writeFrame ((to, stream) :: streams) to stream frame
+  catch _ => return streams
+
+/-- Half-close each outbound stream when the loop ends. The peer's read
+wakes at EOF, and its host joins the inbound handler. -/
+private def closeOutbound (streams : Outbound) : Conc.Async Unit := do
+  for (_, stream) in streams do
+    stream.close
 
 /-! ## The inbound handler -/
 
-/-- Read one frame and post its payload. The buffer stays under the RPC cap
-plus five prefix bytes. The size check runs before an append allocates a new
-buffer. A bad prefix, trailing bytes, or EOF inside the frame fails the
-handler. A closed event queue means the node stops. -/
-private partial def readFrame (events : Conc.Chan Core.Event) (peer : Peer)
-    (stream : Streams.Stream) (buf : ByteArray) :
-    Conc.Async (Except Mock.Core.Error Unit) := do
-  -- Park: the peer writes, half-closes, or resets.
-  match ← stream.read with
-  | .error e => return .error (Mock.Core.mapStreamError e)
-  | .ok none => return .error (.protocol "the stream ended before an RPC frame")
-  | .ok (some chunk) =>
-    if Constants.rpcCap + 5 < buf.size + chunk.size then
-      return .error (.protocol "the RPC buffer exceeds the cap")
-    let buf := buf ++ chunk
-    match Rpc.decodeFrame? (Bytes.toNatList buf) with
-    | .ok (some (payload, rest)) =>
-      if !rest.isEmpty then
-        return .error (.protocol "the stream has bytes after its RPC frame")
-      -- Park: the loop frees a slot, or stop closes the queue.
-      discard <| events.send (.rpc peer payload)
-      return .ok ()
-    | .ok none => readFrame events peer stream buf
-    | .error _ => return .error (.protocol "the RPC frame is malformed")
+/-- The total frame size once its prefix is complete. A prefix under the
+RPC cap can use up to Varint.maxBytes bytes. The decoder checks the length
+before the handler appends any body bytes. -/
+private def frameSize (buf : ByteArray) : Except Mock.Core.Error (Option Nat) :=
+  let head := Bytes.toNatList (buf.extract 0 Varint.maxBytes)
+  match Streams.Framing.decodeLength? .uvarint head with
+  | .error .truncated => .ok none
+  | .error .malformed => .error (.protocol "the RPC prefix is malformed")
+  | .ok (size, rest) =>
+    if Constants.rpcCap < size then .error (.protocol "the RPC exceeds the cap")
+    else .ok (some (head.length - rest.length + size))
 
-/-- The handler of Constants.meshsubId. It serves one frame per stream.
-Trailing bytes in the same read are a protocol error. The handler returns
-as soon as it posts the frame, so it leaves later reads to the host. A
-protocol error resets the stream. The loop keeps running. -/
+/-- Read consecutive frames. The buffer holds only the current frame.
+A chunk may hold several frames, so pos marks the bytes already consumed.
+The handler appends only the bytes needed by the prefix or current body.
+Its buffer stays under the RPC cap plus Varint.maxBytes, even when one
+chunk holds many frames. EOF between frames is clean. -/
+private partial def readFrames (events : Conc.Chan Core.Event) (peer : Peer)
+    (stream : Streams.Stream) (buf chunk : ByteArray) (pos : Nat) :
+    Conc.Async (Except Mock.Core.Error Unit) := do
+  match frameSize buf with
+  | .error e => return .error e
+  | .ok size? =>
+    if let some size := size? then
+      if size ≤ buf.size then
+        match Rpc.decodeFrame? (Bytes.toNatList buf) with
+        | .ok (some (payload, [])) =>
+          -- Park: the loop frees a slot, or stop closes the event queue.
+          match ← events.send (.rpc peer payload) with
+          | .error _ => return .ok ()
+          | .ok () => return ← readFrames events peer stream ByteArray.empty chunk pos
+        | _ => return .error (.protocol "the RPC frame is malformed")
+    if pos < chunk.size then
+      -- An incomplete prefix needs one byte. A complete prefix fixes the
+      -- exact body size, so no append can exceed that frame's bound.
+      let need := size?.map (fun size => size - buf.size) |>.getD 1
+      let take := Nat.min need (chunk.size - pos)
+      readFrames events peer stream (buf ++ chunk.extract pos (pos + take)) chunk (pos + take)
+    else
+      -- Park: the peer writes, half-closes, or resets.
+      match ← stream.read with
+      | .error e => return .error (Mock.Core.mapStreamError e)
+      | .ok none =>
+        return if buf.isEmpty then .ok ()
+          else .error (.protocol "the stream ended inside an RPC frame")
+      | .ok (some bytes) => readFrames events peer stream buf bytes 0
+
+/-- Serve every RPC of a peer's stream in arrival order. Frame errors reset
+both directions. A clean EOF closes our write direction. The host owns and
+joins this handler task. -/
 def handler (events : Conc.Chan Core.Event) : Mock.Core.StreamHandler where
   id := Constants.meshsubId
   handle peer stream := ExceptT.mk do
-    let answer ← readFrame events peer stream ByteArray.empty
+    let answer ← readFrames events peer stream ByteArray.empty ByteArray.empty 0
     match answer with
     | .ok () => stream.close
     | .error _ => stream.reset
@@ -242,6 +293,8 @@ private structure Pending where
 private structure LoopState where
   /-- The router state. -/
   router : Core.State
+  /-- The outbound streams owned by this loop. -/
+  streams : Outbound
   /-- The gossip sends that wait for their due time. -/
   pending : List Pending
   /-- The time of the next heartbeat. -/
@@ -257,9 +310,11 @@ private inductive Wake where
 sends. `gossipAt` is the time of the tick when a tick made the actions. The
 `i`-th IHAVE send of that tick waits for `trickle i` milliseconds, and every
 other action runs now. -/
-private def perform (env : Env) (gossipAt : Option Millis) (actions : List Core.Action) :
-    Conc.Async (List Pending) := do
+private def perform (env : Env) (streams : Outbound) (gossipAt : Option Millis)
+    (actions : List Core.Action) : Conc.Async (Outbound × List Pending) := do
+  let mut streams := streams
   let mut delayed : Array Pending := #[]
+  let mut gossipIndex := 0
   for action in actions do
     match action with
     | .deliver m => (deliver env.subs m : BaseIO Unit)
@@ -267,34 +322,48 @@ private def perform (env : Env) (gossipAt : Option Millis) (actions : List Core.
       match gossipAt with
       | some now =>
         if hasIhave rpc then
-          delayed := delayed.push
-            { due := now + env.config.trickle delayed.size, peer := to, rpc := rpc }
+          let delay := env.config.trickle gossipIndex
+          gossipIndex := gossipIndex + 1
+          if delay = 0 then
+            streams ← sendRpc env.host streams to rpc
+          else
+            delayed := delayed.push { due := now + delay, peer := to, rpc := rpc }
         else
-          sendRpc env.host to rpc
-      | none => sendRpc env.host to rpc
-  return delayed.toList
+          streams ← sendRpc env.host streams to rpc
+      | none => streams ← sendRpc env.host streams to rpc
+  return (streams, delayed.toList)
 
 /-- One core step, then its actions. Only an RPC that does not decode makes
 the core answer `.error`. That answer keeps the state, and the loop runs on. -/
 private def stepAndAct (env : Env) (st : LoopState) (event : Core.Event) : Conc.Async LoopState := do
+  if let .rpc peer bytes := event then
+    (env.config.onRpc peer bytes : BaseIO Unit)
+  let st ← match event with
+    | .peerLeft peer => do
+      let streams ← retire st.streams peer
+      pure { st with streams, pending := st.pending.filter (fun p => p.peer != peer) }
+    | _ => pure st
   match Core.step env.config.params st.router event with
   | .error (.decode _) => return st
   | .ok (router, actions) =>
     let gossipAt := match event with
       | .tick now _ => some now
       | _ => none
-    let delayed ← perform env gossipAt actions
-    return { st with router, pending := st.pending ++ delayed }
+    let (streams, delayed) ← perform env st.streams gossipAt actions
+    return { st with router, streams, pending := st.pending ++ delayed }
 
 /-- Tell every known peer about a subscription change (module doc). -/
-private def announce (env : Env) (router : Core.State) : Core.Event → Conc.Async Unit
-  | .subscribe t => do
-    for (peer, _) in router.peers do
-      sendRpc env.host peer (subOptRpc t true)
-  | .unsubscribe t => do
-    for (peer, _) in router.peers do
-      sendRpc env.host peer (subOptRpc t false)
-  | _ => return ()
+private def announce (env : Env) (st : LoopState) (event : Core.Event) :
+    Conc.Async LoopState := do
+  let record? := match event with
+    | .subscribe t => some (subOptRpc t true)
+    | .unsubscribe t => some (subOptRpc t false)
+    | _ => none
+  let mut streams := st.streams
+  if let some rpc := record? then
+    for (peer, _) in st.router.peers do
+      streams ← sendRpc env.host streams peer rpc
+  return { st with streams }
 
 /-- The loop. Each pass sends the gossip that came due, runs the heartbeat
 when it came due, arms one timer for the next due time, and parks.
@@ -309,9 +378,10 @@ private partial def loop (env : Env) (st : LoopState) : Conc.Async Unit := do
   -- (see `Conc.TaskSet.joinAll`).
   let now ← (clock.nowMs : BaseIO Nat)
   let (due, later) := st.pending.partition (fun p => decide (p.due ≤ now))
+  let mut streams := st.streams
   for p in due.mergeSort (fun a b => decide (a.due ≤ b.due)) do
-    sendRpc env.host p.peer p.rpc
-  let st : LoopState := { st with pending := later }
+    streams ← sendRpc env.host streams p.peer p.rpc
+  let st : LoopState := { st with streams, pending := later }
   let st ←
     if st.nextTick ≤ now then do
       let order := st.router.peers.map (·.1)
@@ -324,10 +394,10 @@ private partial def loop (env : Env) (st : LoopState) : Conc.Async Unit := do
   -- Park: a send or a close of the queue wakes it, and so does the timer.
   match ← Conc.select #[Conc.Park.recv env.events Wake.event, timer.map fun () => Wake.timer] with
   | .timer => loop env st
-  | .event none => return ()
+  | .event none => closeOutbound st.streams
   | .event (some e) =>
     let st ← stepAndAct env st e
-    announce env st.router e
+    let st ← announce env st e
     loop env st
 
 /-- The router state of a node with no peers at time `now`. -/
@@ -365,6 +435,7 @@ def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
   let tasks ← Conc.TaskSet.new
   tasks.spawn <| loop { host, config, subs, events }
     { router := initialState config.params now
+      streams := []
       pending := []
       nextTick := now + config.params.heartbeatInterval }
   return {

@@ -120,21 +120,27 @@ private partial def readAll (s : Streams.Stream) (acc : ByteArray) : Async ByteA
   | .ok none => return acc
   | .error _ => return acc
 
-/-- A raw peer on the switch: its handler decodes each stream as one RPC and
-keeps it for the check. A probe has no router, so a check sees exactly what
-the node sent. -/
+/-- Decode each frame as soon as its bytes arrive. The probe reads until EOF,
+so the node can reuse one stream for many RPCs. -/
+private partial def probeRead (seen : Chan Seen) (me sender : Peer)
+    (stream : Streams.Stream) (buf : List Nat) : Async Unit := do
+  match Rpc.decodeFrame? buf with
+  | .ok (some (payload, rest)) =>
+    if let .ok rpc := Core.decodeRpc payload then
+      discard (seen.trySend { receiver := me, sender, rpc } : BaseIO Bool)
+    probeRead seen me sender stream rest
+  | .error _ => stream.reset
+  | .ok none =>
+    match ← stream.read with
+    | .ok (some bytes) => probeRead seen me sender stream (buf ++ Bytes.toNatList bytes)
+    | _ => stream.close
+
+/-- A raw peer whose handler records each RPC before the stream closes. -/
 private def probe (sw : Switch) (me : Peer) (seen : Chan Seen) : Async HostSeam := do
   let (seam, _) ← (sw.host me : BaseIO (HostSeam × TaskSet))
   (seam.setHandler
     { id := Constants.meshsubId
-      handle := fun sender stream => ExceptT.lift do
-        let bytes ← readAll stream ByteArray.empty
-        match Rpc.decodeFrame? (Bytes.toNatList bytes) with
-        | .ok (some (payload, _)) =>
-          match Core.decodeRpc payload with
-          | .ok rpc => discard (seen.trySend { receiver := me, sender, rpc } : BaseIO Bool)
-          | .error _ => pure ()
-        | _ => pure () } : BaseIO Unit)
+      handle := fun sender stream => ExceptT.lift (probeRead seen me sender stream []) } : BaseIO Unit)
   return seam
 
 /-- Open a stream, and write the chunks one by one. The stream stays open. -/
@@ -337,18 +343,18 @@ private def handlerChecks (r : Tests.Runner) : Async Unit := do
   -- A prefix that never ends.
   let longPrefix? ← sendOpen seamA pb [List.replicate 12 0x80]
   r.check "node.handler.long-prefix-fails" (← failsOnOpenStream tasksB longPrefix?)
-  -- An oversized chunk is refused before the handler appends it.
-  let tooLarge? ← sendOpen seamA pb [List.replicate (Constants.rpcCap + 6) 0]
-  r.check "node.handler.oversized-chunk-fails" (← failsOnOpenStream tasksB tooLarge?)
+  -- A large chunk with an invalid prefix fails without an unbounded append.
+  let tooLarge? ← sendOpen seamA pb [List.replicate (Constants.rpcCap + 6) 0x80]
+  r.check "node.handler.large-malformed-chunk-fails" (← failsOnOpenStream tasksB tooLarge?)
   -- The stream ends inside a frame.
   discard <| send seamA pb [Streams.Framing.encodeLength .uvarint 5 ++ [1]]
   r.check "node.handler.end-inside-a-frame-fails" (← joinFails tasksB)
   -- The stream ends inside a prefix.
   discard <| send seamA pb [[0x80]]
   r.check "node.handler.end-inside-a-prefix-fails" (← joinFails tasksB)
-  -- EOF before a complete frame is a protocol error.
+  -- EOF between frames is clean.
   discard <| send seamA pb []
-  r.check "node.handler.empty-stream-fails" (← joinFails tasksB)
+  r.check "node.handler.empty-stream-is-clean" (!(← joinFails tasksB))
   -- A frame whose body does not decode: the handler is clean, and the core
   -- answers the error to the loop.
   r.check "node.handler.body-does-not-decode"
@@ -360,16 +366,12 @@ private def handlerChecks (r : Tests.Runner) : Async Unit := do
   discard <| send seamA pb [frameOf (Core.publishRpc (msgOf ta [1]))]
   let got ← within inbox
   r.check "node.handler.loop-survives-a-bad-body" (got == some (msgOf ta [1]))
-  -- Trailing bytes in the same read reject the whole frame.
+  -- Two frames in one chunk are processed in arrival order.
   discard <| send seamA pb
     [frameOf (Core.publishRpc (msgOf ta [2])) ++ frameOf (Core.publishRpc (msgOf ta [3]))]
-  r.check "node.handler.trailing-frame-fails" (← joinFails tasksB)
-  r.check "node.handler.trailing-frame-delivers-nothing" (← quiet inbox)
-  discard <| send seamA pb [frameOf (Core.publishRpc (msgOf ta [2]))]
   let two ← within inbox
-  discard <| send seamA pb [frameOf (Core.publishRpc (msgOf ta [3]))]
   let three ← within inbox
-  r.check "node.handler.separate-streams-deliver"
+  r.check "node.handler.two-frames-in-one-chunk"
     (two == some (msgOf ta [2]) && three == some (msgOf ta [3]))
   -- One frame in single bytes is one RPC.
   discard <| send seamA pb ((frameOf (Core.publishRpc (msgOf ta [4]))).map (fun x => [x]))
@@ -398,14 +400,94 @@ private def sendChecks (r : Tests.Runner) : Async Unit := do
       newStream := fun peer protocols => do
         (opened.update (· + 1) : BaseIO Unit)
         seam.newStream peer protocols }
-  sendRpc counting pa (Core.publishRpc (msgOf ta (List.replicate Constants.rpcCap 7)))
+  let streams ← sendRpc counting [] pa (Core.publishRpc (msgOf ta (List.replicate Constants.rpcCap 7)))
   r.check "node.send.over-cap-opens-no-stream" ((← (opened.get : BaseIO Nat)) == 0)
-  sendRpc counting px (subOptRpc ta true)
+  let streams ← sendRpc counting streams px (subOptRpc ta true)
   r.check "node.send.no-peer-is-no-fault" ((← (opened.get : BaseIO Nat)) == 1)
-  sendRpc counting pa (subOptRpc ta true)
+  let streams ← sendRpc counting streams pa (subOptRpc ta true)
   let got ← within seen
   r.check "node.send.one-frame-round-trips" (got.any (fun s => s.rpc == subOptRpc ta true))
+  let streams ← sendRpc counting streams pa (subOptRpc ta false)
+  let next ← within seen
+  r.check "node.send.second-frame-on-the-same-stream"
+    (next.any (fun s => s.rpc == subOptRpc ta false))
+  r.check "node.send.reuses-the-peer-stream" ((← (opened.get : BaseIO Nat)) == 2)
+  -- End the pipe behind the cached stream. Its next write fails, so the send
+  -- removes the stream. A later send opens a fresh one.
+  for (_, stream) in streams do stream.reset
+  let streams ← sendRpc counting streams pa (subOptRpc ta true)
+  r.check "node.send.failed-write-retires-the-stream" streams.isEmpty
+  let streams ← sendRpc counting streams pa (subOptRpc ta true)
+  let reopened ← within seen
+  r.check "node.send.reopens-after-failure"
+    ((← (opened.get : BaseIO Nat)) == 3 && reopened.any (fun s => s.rpc == subOptRpc ta true))
+  for (_, stream) in streams do stream.close
   sw.close
+
+/-! ## Receipt observation and stream ownership -/
+
+/-- The receipt observer sees duplicate bodies before deduplication. Its
+callback runs before the delivery callback of the accepted message. -/
+private def receiptChecks (r : Tests.Runner) : Async Unit := do
+  let sw ← (Switch.new : BaseIO Switch)
+  let tc ← (TestClock.new : BaseIO TestClock)
+  let seen : Chan Seen ← (Chan.new 16 : BaseIO (Chan Seen))
+  let source ← probe sw pa seen
+  let (seam, _) ← (sw.host pb : BaseIO (HostSeam × TaskSet))
+  let receipts : Chan (Peer × List Nat) ← (Chan.new 8 : BaseIO (Chan (Peer × List Nat)))
+  let order : OnceRef (List Nat) ← (OnceRef.new [] : BaseIO (OnceRef (List Nat)))
+  let cfg : Config := { configOn tc with onRpc := fun peer bytes => do
+    order.update (· ++ [1])
+    discard <| receipts.trySend (peer, bytes) }
+  let n ← (start seam cfg : BaseIO Node)
+  discard (n.subscribe ta (fun _ => order.update (· ++ [2])) : BaseIO Bool)
+  discard (n.peerJoined pa .meshsub : BaseIO Bool)
+  r.check "node.receipt.setup" (← settle tc 3)
+  let rpc := Core.publishRpc (msgOf ta [7])
+  let body := Pb.encodeMessage rpc
+  let frame := frameOf rpc
+  let bad := Streams.Framing.encodeLength .uvarint badBody.length ++ badBody
+  discard <| send source pb [frame ++ frame ++ bad]
+  -- The accepted RPC, its duplicate, and the bad protobuf body.
+  r.check "node.receipt.three-events" (← settle tc 3)
+  let first ← within receipts
+  let duplicate ← within receipts
+  let invalid ← within receipts
+  r.check "node.receipt.sender-and-body"
+    (first == some (pa, body) && duplicate == some (pa, body))
+  r.check "node.receipt.bad-protobuf-is-observed" (invalid == some (pa, badBody))
+  r.check "node.receipt.before-deduplication-and-delivery"
+    ((← (order.get : BaseIO (List Nat))) == [1, 2, 1, 1])
+  teardown sw [n] [tc]
+
+/-- A node keeps its stream across announcements, then retires it when the
+peer leaves. Stop half-closes the replacement stream, so its handler joins. -/
+private def streamOwnership (r : Tests.Runner) : Async Unit := do
+  let sw ← (Switch.new : BaseIO Switch)
+  let tc ← (TestClock.new : BaseIO TestClock)
+  let seen : Chan Seen ← (Chan.new 16 : BaseIO (Chan Seen))
+  discard <| probe sw pc seen
+  let (seam, _) ← (sw.host pa : BaseIO (HostSeam × TaskSet))
+  let opens : OnceRef Nat ← (OnceRef.new 0 : BaseIO (OnceRef Nat))
+  let counting : HostSeam := { seam with newStream := fun peer protocols => do
+    (opens.update (· + 1) : BaseIO Unit)
+    seam.newStream peer protocols }
+  let n ← (start counting (configOn tc) : BaseIO Node)
+  discard (n.peerJoined pc .meshsub : BaseIO Bool)
+  discard <| within seen
+  discard (n.subscribe ta (fun _ => pure ()) : BaseIO Bool)
+  discard <| within seen
+  discard (n.unsubscribe ta : BaseIO Bool)
+  discard <| within seen
+  r.check "node.stream.one-stream-for-three-rpcs" ((← (opens.get : BaseIO Nat)) == 1)
+  discard (n.peerLeft pc : BaseIO Bool)
+  discard (n.peerJoined pc .meshsub : BaseIO Bool)
+  discard <| within seen
+  r.check "node.stream.peer-leave-retires-the-stream" ((← (opens.get : BaseIO Nat)) == 2)
+  n.stop
+  sw.close
+  r.check "node.stream.stop-closes-outbound-before-the-host-joins" true
+  (tc.close : BaseIO Unit)
 
 /-! ## The heartbeat -/
 
@@ -468,9 +550,8 @@ private def gossipParams : Core.Params :=
 /-- Test 5: the trickle regression. The `i`-th IHAVE of one heartbeat leaves at
 the time of the heartbeat plus `trickle i`, and no earlier. -/
 private def trickleSpread (r : Tests.Runner) : Async Unit := do
-  r.check "node.trickle.default-is-below-one-second"
-    ((List.range 64).all (fun i => defaultTrickle i < 1000))
-  r.check "node.trickle.default-spreads" (defaultTrickle 0 != defaultTrickle 1)
+  r.check "node.trickle.default-is-zero"
+    ((List.range 64).all (fun i => defaultTrickle i == 0))
   let sw ← (Switch.new : BaseIO Switch)
   let tc ← (TestClock.new : BaseIO TestClock)
   let seen : Chan Seen ← (Chan.new 16 : BaseIO (Chan Seen))
@@ -512,6 +593,30 @@ private def trickleSpread (r : Tests.Runner) : Async Unit := do
      | _, _ => false)
   teardown sw [n] [tc]
 
+/-- With the default zero delay, both IHAVEs reach their peers on the
+heartbeat. The test clock needs no second advance. -/
+private def defaultGossip (r : Tests.Runner) : Async Unit := do
+  let sw ← (Switch.new : BaseIO Switch)
+  let tc ← (TestClock.new : BaseIO TestClock)
+  let seen : Chan Seen ← (Chan.new 16 : BaseIO (Chan Seen))
+  discard <| probe sw pc seen
+  discard <| probe sw pd seen
+  let (seam, _) ← (sw.host pa : BaseIO (HostSeam × TaskSet))
+  let n ← (start seam (configOn tc gossipParams) : BaseIO Node)
+  discard (n.subscribe ta (fun _ => pure ()) : BaseIO Bool)
+  discard (n.peerJoined pc .meshsub : BaseIO Bool)
+  discard (n.peerJoined pd .meshsub : BaseIO Bool)
+  discard (n.publish ta (Bytes.ofNatList [1]) : BaseIO Bool)
+  r.check "node.trickle.zero-default-setup" (← settle tc 5)
+  discard <| within seen
+  discard <| within seen
+  (tc.advance gossipParams.heartbeatInterval : BaseIO Unit)
+  let first ← within seen
+  let second ← within seen
+  r.check "node.trickle.zero-default-sends-at-the-heartbeat"
+    (first.any (fun s => hasIhave s.rpc) && second.any (fun s => hasIhave s.rpc))
+  teardown sw [n] [tc]
+
 /-- The receivers of the IHAVE sends of one heartbeat, in send order, when both
 sends come due in one pass of the loop. -/
 private def gossipOrder (spread : Nat → Millis) : Async (List Peer) := do
@@ -525,8 +630,14 @@ private def gossipOrder (spread : Nat → Millis) : Async (List Peer) := do
   let recording : HostSeam :=
     { seam with
       newStream := fun peer protocols => do
-        (opened.update (· ++ [peer]) : BaseIO Unit)
-        seam.newStream peer protocols }
+        match ← seam.newStream peer protocols with
+        | .error err => return .error err
+        | .ok (id, stream) =>
+          return .ok (id, { stream with write := fun bytes => do
+            if let .ok (some (payload, _)) := Rpc.decodeFrame? (Bytes.toNatList bytes) then
+              if let .ok rpc := Core.decodeRpc payload then
+                if hasIhave rpc then (opened.update (· ++ [peer]) : BaseIO Unit)
+            stream.write bytes }) }
   let n ← (start recording (configOn tc gossipParams spread) : BaseIO Node)
   discard (n.subscribe ta (fun _ => pure ()) : BaseIO Bool)
   discard (n.peerJoined pc .meshsub : BaseIO Bool)
@@ -540,8 +651,7 @@ private def gossipOrder (spread : Nat → Millis) : Async (List Peer) := do
   discard <| settle tc 1
   let order ← (opened.get : BaseIO (List Peer))
   teardown sw [n] [tc]
-  -- The first two streams carried the hellos.
-  return order.drop 2
+  return order
 
 /-- Two sends that come due in one pass leave in the order of their due times,
 whatever the order of the heartbeat that made them. -/
@@ -703,8 +813,11 @@ def run (r : Tests.Runner) : IO Unit := do
     announcement r
     handlerChecks r
     sendChecks r
+    receiptChecks r
+    streamOwnership r
     tickGrafts r
     trickleSpread r
+    defaultGossip r
     trickleOrder r
     systemClock r
     callbackOrder r

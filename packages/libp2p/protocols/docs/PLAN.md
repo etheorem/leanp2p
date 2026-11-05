@@ -104,8 +104,12 @@ in the codec group wrapping upstream `google/snappy`.
     the negative record.
   - A bad frame fails its handler and resets its stream. A body that does
     not decode leaves the loop running.
-  - The handler serves one frame in any chunking. Trailing bytes fail the
-    handler, and the buffer cap is checked before an append.
+  - The handler serves consecutive frames in any chunking. It checks the
+    length before it appends body bytes, and EOF between frames is clean.
+  - The node reuses one outbound stream per peer and retires failed streams.
+    A peer leave resets its stream, and stop closes the outbound streams.
+  - The receipt observer sees duplicates before validation and delivery.
+  - The default gossip delay is zero. Tests supply an explicit spread.
   - A heartbeat sends the graft, and a later publish reaches the mesh.
   - The `i`-th IHAVE of a heartbeat leaves at `trickle i`, and no earlier.
   - A publish with no peers opens no stream and delivers nothing locally.
