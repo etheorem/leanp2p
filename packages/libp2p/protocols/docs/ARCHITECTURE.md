@@ -52,18 +52,23 @@ package; §4.9 names no echo, so no module line covers it.
   `Multiformats.Multiaddr.ofBytes?`. The client (the spike's `requestR`
   shape) reads one response, validates it, and returns the metadata for
   the peerstore. The client reads one frame per stream and drops the
-  bytes after it. Go merges up to 10 frames; this client reads one. The
+  bytes after it. Go merges up to 10 frames; this client reads one. Go
+  splits a record that carries a signed peer record and passes 2 KiB
+  into two frames, and caps one response at 8 KiB; this package writes
+  one frame and caps at 64 KiB. The
   two handler values serve inbound streams and register under their
   ids. The responder builds the message from the host's identity,
   addresses, protocol list, observed address, and agent version, as the
   spike's `respond` does. `Identify.pushTo` announces the same record
   on the stream that the host opened under `pushId`, and then
-  half-closes. The host owns the schedule: go's identify service pushes
-  one record per local address or protocol set change (the spike's
-  `vendor/go-libp2p/p2p/protocol/identify/id.go`, the `loop` and
-  `sendPushes` functions), so the sender starts no timer and the host
-  decides when the local record changed. A received push updates the
-  peerstore through the host. The push stores the addresses. The
+  half-closes. The host calls the sender after the local address set or
+  the local protocol set changes. Go's identify service skips a push
+  when the snapshot did not change, merges pending pushes into one
+  round, and skips a connection that already carries the current record
+  (the spike's `vendor/go-libp2p/p2p/protocol/identify/id.go`, the
+  `loop` and `sendPushes` functions). This package sends one record per
+  call and starts no timer. A received push updates the peerstore
+  through the host. The push stores the addresses. The
   peerstore surface of the host doc holds addresses only, so a push's
   protocols list has no store yet. Go's push handler stores both. A
   push frame must carry the public key. The spec says to ignore missing
@@ -113,7 +118,7 @@ Both spike programs call `Ping.ping`.
    package holds four, so `Identify.Error`, `Ping.Error`, the req/resp
    error in `ReqResp/Core.lean`, and `ProtocolError` are mapped at
    their seam values. `Identify.Error` maps in `pushHandler` with
-   `Except.mapError` and directly in `respondTo`. A framing failure is
+   `Except.mapError` and directly in `writeRecord`. A framing failure is
    `Except E`. A peer that finished its half of the exchange is `none`;
    `Ping.ping` is the exception: a stream end before the echo is
    `.truncated`, because the exchange did not finish.
@@ -125,8 +130,8 @@ Both spike programs call `Ping.ping`.
 4. **Identify and ping take no `step`** (§3.3, last rule). Identify has
    a pure codec and a pure `validate`. Ping has the pure `checkEcho`
    and no codec. `Identify.client` reads and validates one frame,
-   `Identify.respondTo` writes one frame, and the ping handler echoes
-   until the stream closes.
+   `Identify.respondTo` and `Identify.pushTo` write one record, and the
+   ping handler echoes until the stream closes.
 5. **The gossipsub router is one pure `step` with time as an
    `Event.tick`** (§3.3; root PLAN W6.4). Mesh, scoring, and heartbeat
    hold in the same `State`, and every timer fires as an event. The
