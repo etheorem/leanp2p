@@ -2891,6 +2891,10 @@ private def dataFrame (id : UInt32) (b : UInt8) : ByteArray :=
 private def resetFrame (id : UInt32) : ByteArray :=
   Header.encodeB { kind := .reset, streamId := id, length := 0 }
 
+/-- One zero-length fin for `id`. -/
+private def finFrame (id : UInt32) : ByteArray :=
+  Header.encodeB { kind := .fin, streamId := id, length := 0 }
+
 /-- The next peer frame is one data byte `b` for `id`. -/
 private def peerReadsData (c : Connection) (pending : ByteArray) (id : UInt32)
     (b : UInt8) : Async (Bool × ByteArray) := do
@@ -3414,6 +3418,144 @@ private def runPeerReset (r : Runner) : Async Unit := do
   | .ok (), .error e => throw e
   | .ok (), .ok () => pure ()
 
+/-- Local half-close sends stream 1 data, then one fin.
+A second close draws no fin. The inbound side stays open until the peer fin. -/
+private def runHalfClose (r : Runner) : Async Unit := do
+  let pair ← ends 54
+  let mut opened : Option MuxSession := none
+  let outcome : Except IO.Error Unit ←
+    try
+      let mut opensOk := false
+      let mut wireOk := false
+      let mut writeClosed := false
+      let mut silenceOk := false
+      let mut inboundOk := false
+      let mut eofOk := false
+      let mut eofStable := false
+      let mut siblingRead := false
+      let mut healthy := false
+      match ← (test.open .initiator pair.dialer .empty).run with
+      | .error _ => pure ()
+      | .ok sess =>
+        opened := some sess
+        match ← (sess.openStream testId).run with
+        | .error _ => pure ()
+        | .ok stream1 =>
+          match ← (sess.openStream testId).run with
+          | .error _ => pure ()
+          | .ok stream3 =>
+            let (h1, rest1) ← takeHeader pair.peer .empty
+            let (h2, rest2) ← takeHeader pair.peer rest1
+            opensOk :=
+              h1.kind == Kind.open && h1.streamId == 1 && h1.length == 0 &&
+                h2.kind == Kind.open && h2.streamId == 3 && h2.length == 0 &&
+                rest2.isEmpty
+            if opensOk then
+              match ← stream1.write ⟨#[5]⟩ with
+              | .error _ => pure ()
+              | .ok () =>
+                stream1.close
+                let (dataHeader, dataRest) ← takeHeader pair.peer .empty
+                match ← pair.peer.readExactly 1 dataRest with
+                | none => pure ()
+                | some (body, afterData) =>
+                  let dataOk :=
+                    dataHeader.kind == Kind.data && dataHeader.streamId == 1 &&
+                      dataHeader.length == 1 && body == ⟨#[5]⟩
+                  if dataOk then
+                    let (finHeader, finRest) ← takeHeader pair.peer afterData
+                    wireOk :=
+                      finHeader.kind == Kind.fin && finHeader.streamId == 1 &&
+                        finHeader.length == 0 && finRest.isEmpty
+            if opensOk && wireOk then
+              match ← stream1.write ⟨#[7]⟩ with
+              | .error .closed => writeClosed := true
+              | _ => pure ()
+            if opensOk && wireOk && writeClosed then
+              stream1.close
+              match ← stream3.write ⟨#[9]⟩ with
+              | .error _ => pure ()
+              | .ok () =>
+                let (frameOk, _) ← peerReadsData pair.peer .empty 3 9
+                silenceOk := frameOk
+            if opensOk && wireOk && writeClosed && silenceOk then
+              pair.peer.write (dataFrame 1 6)
+              inboundOk :=
+                match ← stream1.read with
+                | .ok (some bytes) => bytes == ⟨#[6]⟩
+                | _ => false
+            if opensOk && wireOk && writeClosed && silenceOk && inboundOk then
+              pair.peer.write (finFrame 1)
+              match ← stream1.read with
+              | .ok none =>
+                eofOk := true
+                eofStable :=
+                  match ← stream1.read with
+                  | .ok none => true
+                  | _ => false
+              | _ => pure ()
+            if opensOk && wireOk && writeClosed && silenceOk && inboundOk &&
+                eofOk && eofStable then
+              pair.peer.write (dataFrame 3 8)
+              siblingRead :=
+                match ← stream3.read with
+                | .ok (some bytes) => bytes == ⟨#[8]⟩
+                | _ => false
+        let finished :=
+          opensOk && wireOk && writeClosed && silenceOk && inboundOk &&
+            eofOk && eofStable && siblingRead
+        sess.close
+        match ← sess.join with
+        | .ok () => healthy := finished
+        | .error _ => pure ()
+      r.check "the initiator opens streams 1 and 3" opensOk
+      r.check "stream 1 sends its payload and then one fin" wireOk
+      r.check "a write after half-close returns closed" writeClosed
+      r.check "the next frame after a second close is stream 3 data" silenceOk
+      r.check "stream 1 reads inbound data after half-close" inboundOk
+      r.check "the peer fin ends stream 1 with eof" eofOk
+      r.check "a second read on stream 1 stays at eof" eofStable
+      r.check "stream 3 reads its byte after the peer fin" siblingRead
+      r.check "half-close leaves the session healthy" healthy
+      pure (.ok ())
+    catch e =>
+      pure (.error e)
+  match outcome with
+  | .error _ =>
+    match opened with
+    | some sess =>
+      try
+        sess.close
+      catch _ =>
+        pure ()
+      try
+        discard <| sess.join
+      catch _ =>
+        pure ()
+    | none =>
+      try
+        pair.dialer.close
+      catch _ =>
+        pure ()
+  | .ok () =>
+    match opened with
+    | some _ => pure ()
+    | none =>
+      try
+        pair.dialer.close
+      catch _ =>
+        pure ()
+  let peerClosed : Except IO.Error Unit ←
+    try
+      pair.peer.close
+      pure (.ok ())
+    catch e =>
+      pure (.error e)
+  match outcome, peerClosed with
+  | .error e, _ => throw e
+  | .ok (), .error e => throw e
+  | .ok (), .ok () => pure ()
+
 private def checks (r : Runner) : Async Unit := do
   r.check "Mux.test.id is Mux.testId" (decide (test.id = testId))
   r.check "the test protocol id is /leanp2p/test-mux/1.0.0"
@@ -3429,6 +3571,7 @@ private def checks (r : Runner) : Async Unit := do
   runMalformed r
   runAcceptBacklog r
   runPeerReset r
+  runHalfClose r
 
 /-- The public `Mux.test` boundary over the sim connection. -/
 def run (r : Runner) : IO Unit := do
@@ -3454,6 +3597,11 @@ def runAccept (r : Runner) : IO Unit := do
 def runReset (r : Runner) : IO Unit := do
   r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
   Async.run (runPeerReset r)
+
+/-- The public half-close path through `Mux.test.open`. -/
+def runFin (r : Runner) : IO Unit := do
+  r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
+  Async.run (runHalfClose r)
 
 end Tests.Mux.Public
 
