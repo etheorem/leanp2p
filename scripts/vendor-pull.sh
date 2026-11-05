@@ -39,9 +39,17 @@ for e in entries:
                 failed = True
                 continue
     tmp = tempfile.mkdtemp(prefix="vendor-" + os.path.basename(d) + "-")
-    subprocess.run(["git", "clone", "--quiet", "--filter=blob:none", repo, tmp],
+    # Two background jobs can write into .git while the `rm` below
+    # deletes it, and the `rm` then fails. The checkout of a partial
+    # clone fetches the blobs it needs, and that fetch starts a detached
+    # `git maintenance run --auto`. A hook from the user's clone
+    # template can also start a job of its own. A `-c` setting reaches
+    # the child fetch, so these settings stop maintenance and every hook.
+    git = ["git", "-c", "maintenance.auto=false", "-c", "gc.auto=0",
+           "-c", "core.hooksPath=/dev/null"]
+    subprocess.run(git + ["clone", "--quiet", "--filter=blob:none", repo, tmp],
                    check=True)
-    subprocess.run(["git", "-C", tmp, "checkout", "--quiet", commit], check=True)
+    subprocess.run(git + ["-C", tmp, "checkout", "--quiet", commit], check=True)
     subprocess.run(["rm", "-rf", os.path.join(tmp, ".git")], check=True)
     with open(os.path.join(tmp, ".pin"), "w") as f:
         f.write(commit + "\n")
