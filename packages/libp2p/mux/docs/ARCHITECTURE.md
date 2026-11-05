@@ -17,27 +17,28 @@ same node code ran under both muxers in-process and over loopback TCP
 
 | Module | Holds, and why |
 |---|---|
-| `Libp2p/Mux.lean` | the root module; one import line per public submodule. It does not re-export the mock or the private test wire |
+| `Libp2p/Mux.lean` | the root module. It imports `Constants.lean` and `Test.lean`. The `Test.lean` import loads the session implementation under `Libp2p.Mux.Test` |
 | `Libp2p/Mux/Constants.lean` | `Mux.yamuxId` (`/yamux/1.0.0`), `Mux.mplexId` (`/mplex/6.7.0`), `Mux.testId` (`/leanp2p/test-mux/1.0.0`), and `Mux.mplexMessageCap` (1 MiB); the named ids of §3.4 and the cap of §5.1, one home per fact (§3.8) |
 | `Libp2p/Mux/Yamux.lean` | `Mux.yamux`, the yamux value over the session of `net/yamux`; the `Role` conversion below. Planned |
 | `Libp2p/Mux/Mplex.lean` | the mplex message codec and `Mux.mplex` (P2, §8); the spike reference is `Conn/Mplex.lean` (§10 row 15, §7 row 10). Planned |
-| `Libp2p/Mux/Test.lean` | `Mux.test : Muxer`, the independent test session under `Mux.testId`. Planned |
-| `Libp2p/Mux/Test/Wire.lean` | the private header, frame, and incremental parser. Present. Internal, and tests import it directly |
-| `Libp2p/Mux/Test/State.lean` | the pure owner-loop state and its transitions. Present. Internal, and tests import it directly. A transition returns actions for the runtime shell |
-| `Libp2p/Mux/Test/Session.lean` | the runtime shell for that state. Present. Internal, and tests import it directly. One reader and one owner loop |
+| `Libp2p/Mux/Test.lean` | `Mux.test : Muxer`. Present. `open` calls `Session.start` and lifts the session onto the seam |
+| `Libp2p/Mux/Test/Wire.lean` | the header, frame, and incremental parser. Present. An unsupported implementation detail under `Libp2p.Mux.Test.Wire`. Tests import it directly |
+| `Libp2p/Mux/Test/State.lean` | the pure owner-loop state and its transitions. Present. An unsupported implementation detail under `Libp2p.Mux.Test.State`. A transition returns actions for the runtime shell |
+| `Libp2p/Mux/Test/Session.lean` | the runtime shell, `TestHooks`, and `startWithHooks`. Present. Unsupported implementation and testing details under `Libp2p.Mux.Test.Session`. One reader and one owner loop |
 | `Libp2p/Mux/Mock/Core/ProtocolId.lean` | the temporary `ProtocolId`. Present. `Constants.lean` imports only this module, so the constants stay free of `Conc` and `Streams` |
-| `Libp2p/Mux/Mock/Core.lean` | the temporary `Role`, `Error`, `Muxer`, and `MuxSession` that let W5.4 compile before W5.2. Present. The public root does not import it |
+| `Libp2p/Mux/Mock/Core.lean` | the temporary `Role`, `Error`, `Muxer`, and `MuxSession` that let W5.4 compile before W5.2. Present. `Test.lean` imports it, so the root loads the seam with `Mux.test` |
 
-Public declarations live in the `Libp2p.Mux` namespace, and the root
-module re-exports the public submodules. The private wire declarations
-live in `Libp2p.Mux.Test.Wire`.
+The supported names in `Libp2p.Mux` are `Mux.test`, `Mux.testId`,
+and the other constants, together with the `Muxer` and `MuxSession`
+fields. The frame, the parser, the state, and the session shell live
+under `Libp2p.Mux.Test.*`. `Libp2p.Mux` defines no alias for them.
 
 `Libp2p/Mux.lean`, `Libp2p/Mux/Constants.lean`,
 `Libp2p/Mux/Mock/Core/ProtocolId.lean`, `Libp2p/Mux/Mock/Core.lean`,
-`Libp2p/Mux/Test/Wire.lean`, `Libp2p/Mux/Test/State.lean`, and
-`Libp2p/Mux/Test/Session.lean` are in the tree. `Yamux.lean`,
-`Mplex.lean`, and `Test.lean` are the remaining modules of this
-package.
+`Libp2p/Mux/Test/Wire.lean`, `Libp2p/Mux/Test/State.lean`,
+`Libp2p/Mux/Test/Session.lean`, and `Libp2p/Mux/Test.lean` are in
+the tree. `Yamux.lean` and `Mplex.lean` are the remaining modules
+of this package.
 
 ## Public surface
 
@@ -52,8 +53,11 @@ package.
 - The error mapping happens once, in `Yamux.lean`: the value lifts the
   session failure into `Core.Error` with one `Except.mapError` (§3.5).
   The upgrader and the host match on `Core.Error` alone.
-- `Mux.test : Muxer` is the test session below. Callers use the
-  `Muxer` and `MuxSession` seams. Its id is `Mux.testId`.
+- `Mux.test : Muxer` carries `id := Mux.testId`. `open` calls
+  `Test.Session.start` with the role, the connection, and the
+  leftover bytes. `ExceptT.lift` returns that session on the seam.
+  The lift adds no error arm. `openStream` still takes a
+  `ProtocolId`. The private frame does not carry it.
 - `Mux.mplex : Muxer` is the P2 surface: `id := Mux.mplexId`, the pure
   message codec, and a session that keys streams by
   `(id, initiator)`. The declared message length is capped at
@@ -74,10 +78,12 @@ Its id is `Mux.testId`, and
 
 ### Boundary
 
-The public value is `Mux.test : Muxer`. A caller sees the W5.2
-`Muxer` and `MuxSession` seams. Frame types, parser state, stream ids,
-terminal state, admission gates, and scheduling state are private.
-They do not appear in public Lean declarations.
+The supported surface is `Mux.test`, `Mux.testId`, and the `Muxer`
+and `MuxSession` fields. `Libp2p/Mux.lean` imports `Test.lean`.
+That import loads the frame, the parser, the state, the session
+shell, `TestHooks`, and `startWithHooks` under `Libp2p.Mux.Test.*`.
+Those declarations are unsupported implementation and testing
+details. `Libp2p.Mux` defines no alias for them.
 
 Temporary W5.2 types live only under `Libp2p/Mux/Mock/`.
 `Mock/Core/ProtocolId.lean` holds `ProtocolId`, and `Constants.lean`
@@ -307,7 +313,9 @@ that error first. It then wakes the reader, the callers, and admission,
 and throws the same error. It does not store a successful result.
 Every later `join` throws the stored error.
 `start` takes the role, the connection, and the leftover bytes.
-`startWithHooks` is the test entry. `Libp2p.Mux` does not import it.
+`TestHooks` and `startWithHooks` are unsupported testing details
+under `Libp2p.Mux.Test.Session`. `Mux.test.open` calls `start`.
+`Libp2p.Mux` defines no alias for them.
 
 Teardown closes the event channel before it drains. The drain answers
 every open and write that entered before the close. A send that finds

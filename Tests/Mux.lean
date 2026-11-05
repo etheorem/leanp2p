@@ -2646,6 +2646,189 @@ def run (r : Runner) : IO Unit := do
 
 end Tests.Mux.Session
 
+namespace Tests.Mux.Public
+
+open Libp2p.Mux
+open Libp2p.Mux.Mock.Core
+open Libp2p.Mux.Test.Wire
+open Conc
+open Streams
+open Streams.Mock.Multiformats
+open Streams.Sim
+
+private structure Ends where
+  dialer : Connection
+  peer : Connection
+
+private def ends (n : Nat) : Async Ends := do
+  let net ← Net.new
+  let addr ← match Multiaddr.parse? s!"/ip4/127.0.0.1/tcp/{4000 + n}" with
+    | .ok a => pure a
+    | .error _ => throw <| IO.userError s!"test address {n} does not parse"
+  let l ← net.listen addr
+  let some dialer ← net.dial l.addr | throw <| IO.userError "dial failed"
+  let some peer ← l.accept | throw <| IO.userError "accept failed"
+  return { dialer, peer }
+
+/-- The session `Mux.test.open` returns. -/
+private def openSession (role : Role) (conn : Connection)
+    (leftover : ByteArray := .empty) : Async MuxSession := do
+  match ← (test.open role conn leftover).run with
+  | .ok sess => return sess
+  | .error e => throw <| IO.userError s!"public open failed: {repr e}"
+
+private def readPayload (stream : Stream) : Async ByteArray := do
+  match ← stream.read with
+  | .ok (some bytes) => return bytes
+  | .ok none => throw <| IO.userError "public read ended"
+  | .error e => throw <| IO.userError s!"public read failed: {repr e}"
+
+private def takeHeader (c : Connection) (pending : ByteArray) :
+    Async (Header × ByteArray) := do
+  match ← c.readExactly headerSize pending with
+  | none => throw <| IO.userError "header ended"
+  | some (frame, rest) =>
+    match Header.decodeB? frame with
+    | .ok (h, suffix) =>
+      if suffix.isEmpty then return (h, rest)
+      else throw <| IO.userError "header left a suffix"
+    | .error _ => throw <| IO.userError "header did not decode"
+
+private def openFrame (id : UInt32) : ByteArray :=
+  Header.encodeB { kind := .open, streamId := id, length := 0 }
+
+private def dataFrame (id : UInt32) (b : UInt8) : ByteArray :=
+  Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[b]⟩
+
+/-- Two concurrent opens. The peer reads both open frames. -/
+private def runParity (r : Runner) (n : Nat) (role : Role)
+    (low high : UInt32) (title : String) : Async Unit := do
+  let pair ← ends n
+  let sess ← openSession role pair.dialer
+  let other : ProtocolId := ⟨"/leanp2p/not-on-wire/1"⟩
+  let workers ← TaskSet.new
+  workers.spawn do
+    match ← (sess.openStream testId).run with
+    | .ok _ => pure ()
+    | .error e => throw <| IO.userError s!"open failed: {repr e}"
+  workers.spawn do
+    match ← (sess.openStream other).run with
+    | .ok _ => pure ()
+    | .error e => throw <| IO.userError s!"open failed: {repr e}"
+  workers.joinAll
+  let (h1, pending) ← takeHeader pair.peer .empty
+  let (h2, _) ← takeHeader pair.peer pending
+  let ids := (h1.streamId, h2.streamId)
+  let framesOk :=
+    (ids == (low, high) || ids == (high, low))
+      && h1.kind == Kind.open && h2.kind == Kind.open
+      && h1.length == 0 && h2.length == 0
+  r.check title framesOk
+  sess.close
+  discard <| sess.join
+
+/-- One public open, then bytes in both directions. -/
+private def runRoundTrip (r : Runner) : Async Unit := do
+  let pair ← ends 42
+  let dial ← openSession .initiator pair.dialer
+  let peer ← openSession .responder pair.peer
+  match ← (dial.openStream testId).run with
+  | .error _ =>
+    r.check "the peer accepts a public open" false
+    r.check "bytes round-trip in both directions" false
+  | .ok outbound =>
+    let wrote ← outbound.write ⟨#[7]⟩
+    match ← peer.accept with
+    | none =>
+      r.check "the peer accepts a public open" false
+      r.check "bytes round-trip in both directions" false
+    | some remote =>
+      r.check "the peer accepts a public open" true
+      let got ← readPayload remote
+      let replied ← remote.write ⟨#[8]⟩
+      let back ← readPayload outbound
+      let wroteOk :=
+        match wrote with
+        | .ok () => true
+        | .error _ => false
+      let repliedOk :=
+        match replied with
+        | .ok () => true
+        | .error _ => false
+      r.check "bytes round-trip in both directions"
+        (wroteOk && repliedOk && got == ⟨#[7]⟩ && back == ⟨#[8]⟩)
+  dial.close
+  peer.close
+  discard <| dial.join
+  discard <| peer.join
+
+/-- Leftover bytes are the reader's first input. -/
+private def runLeftover (r : Runner) : Async Unit := do
+  let pair ← ends 43
+  let leftover := openFrame 2 ++ dataFrame 2 1
+  let later := openFrame 4 ++ dataFrame 4 2
+  pair.peer.write later
+  let sess ← openSession .initiator pair.dialer leftover
+  match ← sess.accept with
+  | none => r.check "a leftover arrives before later connection bytes" false
+  | some first =>
+    match ← sess.accept with
+    | none => r.check "a leftover arrives before later connection bytes" false
+    | some second =>
+      let early ← readPayload first
+      let next ← readPayload second
+      r.check "a leftover arrives before later connection bytes"
+        (early == ⟨#[1]⟩ && next == ⟨#[2]⟩)
+  sess.close
+  discard <| sess.join
+
+/-- Close, repeated join, and a parked accept. -/
+private def runClose (r : Runner) : Async Unit := do
+  let pair ← ends 44
+  let sess ← openSession .initiator pair.dialer
+  let started : Chan Unit ← Chan.new 1
+  let box : Chan Bool ← Chan.new 1
+  let workers ← TaskSet.new
+  workers.spawn do
+    discard <| started.send ()
+    match ← sess.accept with
+    | none => discard <| box.send true
+    | some stream =>
+      stream.reset
+      discard <| box.send false
+  discard <| started.recv
+  sess.close
+  workers.joinAll
+  match ← box.recv with
+  | some true => r.check "a closed session wakes accept" true
+  | _ => r.check "a closed session wakes accept" false
+  match ← sess.join with
+  | .ok () => r.check "public close joins once" true
+  | .error _ => r.check "public close joins once" false
+  match ← sess.join with
+  | .ok () => r.check "a second public join returns the same success" true
+  | .error _ => r.check "a second public join returns the same success" false
+  match ← pair.peer.read with
+  | none => r.check "public close ends the peer read" true
+  | some _ => r.check "public close ends the peer read" false
+
+private def checks (r : Runner) : Async Unit := do
+  r.check "Mux.test.id is Mux.testId" (decide (test.id = testId))
+  r.check "the test protocol id is /leanp2p/test-mux/1.0.0"
+    (test.id.toString == "/leanp2p/test-mux/1.0.0")
+  runParity r 40 .initiator 1 3 "an initiator open pair uses distinct odd ids"
+  runParity r 41 .responder 2 4 "a responder open pair uses distinct even ids"
+  runRoundTrip r
+  runLeftover r
+  runClose r
+
+/-- The public `Mux.test` boundary over the sim connection. -/
+def run (r : Runner) : IO Unit := do
+  r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
+  Async.run (checks r)
+
+end Tests.Mux.Public
+
 namespace Tests
 
 open Libp2p.Mux
@@ -2668,5 +2851,6 @@ def Mux.run (r : Runner) : IO Unit := do
   Mux.Seam.run r
   Mux.State.run r
   Mux.Session.run r
+  Mux.Public.run r
 
 end Tests

@@ -48,8 +48,9 @@ structure TurnGate where
   release : Chan Unit
 
 /-- Refs a test installs through `startWithHooks`. `start` does not
-take this structure, and `Libp2p.Mux` does not import it. With no
-hooks the owner reads no hook ref. -/
+take this structure. `TestHooks` is an unsupported testing detail
+under `Libp2p.Mux.Test.Session`. With no hooks the owner reads no
+hook ref. -/
 structure TestHooks where
   /-- Live entries in the port map, written after each retirement sweep. -/
   registrySize : IO.Ref Nat
@@ -854,8 +855,9 @@ def start (role : Role) (conn : Streams.Connection) (leftover : ByteArray := .em
     Async MuxSession :=
   startRuntime role conn leftover none
 
-/-- `start` with test refs. `Libp2p.Mux` does not import this function.
-The owner reads a hook only through this entry. -/
+/-- `startWithHooks` is an unsupported testing detail under
+`Libp2p.Mux.Test.Session`. The owner reads a hook only through this
+entry. -/
 def startWithHooks (role : Role) (conn : Streams.Connection)
     (leftover : ByteArray := .empty) (hooks : TestHooks) : Async MuxSession :=
   startRuntime role conn leftover (some hooks)
