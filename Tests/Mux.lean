@@ -1710,6 +1710,7 @@ private def runCorrections (r : Runner) : Async Unit := do
     let pair ← ends 15
     let hold : Chan Unit ← Chan.new 1
     let entered : Chan Unit ← Chan.new 1
+    let accepted : Chan Unit ← Chan.new 1
     let phase ← IO.mkRef 0
     let conn : Connection := { pair.dialer with
       write := fun bytes => do
@@ -1730,7 +1731,8 @@ private def runCorrections (r : Runner) : Async Unit := do
         match ← readGate.recv with
         | none => return none
         | some _ => conn.read }
-    let sess ← start .initiator eofConn
+    let hooks ← testHooks
+    let sess ← startWithHooks .initiator eofConn .empty hooks
     let stream ← mustOpen sess
     let writer ← TaskSet.new
     let wrote : Chan (Except Streams.Error Unit) ← Chan.new 1
@@ -1738,7 +1740,13 @@ private def runCorrections (r : Runner) : Async Unit := do
       let result ← stream.write ⟨Array.replicate (testPayloadCap + 1) 7⟩
       discard <| wrote.send result
     discard <| entered.recv
+    -- The barrier waits for the reader's successful event post
+    -- before the blocked write is released.
+    hooks.acceptedEvent.set (some accepted)
     readGate.close
+    match ← accepted.recv with
+    | some _ => pure ()
+    | none => throw <| IO.userError "the eof terminal was not accepted"
     hold.close
     writer.joinAll
     match ← wrote.recv with
@@ -1755,6 +1763,7 @@ private def runCorrections (r : Runner) : Async Unit := do
     let pair ← ends 16
     let hold : Chan Unit ← Chan.new 1
     let entered : Chan Unit ← Chan.new 1
+    let accepted : Chan Unit ← Chan.new 1
     let phase ← IO.mkRef 0
     let boom := IO.userError "reader boom"
     let later := IO.userError "later write"
@@ -1779,7 +1788,8 @@ private def runCorrections (r : Runner) : Async Unit := do
         match ← readGate.recv with
         | none => throw boom
         | some _ => conn.read }
-    let sess ← start .initiator faultConn
+    let hooks ← testHooks
+    let sess ← startWithHooks .initiator faultConn .empty hooks
     let stream ← mustOpen sess
     let writer ← TaskSet.new
     let wrote : Chan (Except Streams.Error Unit) ← Chan.new 1
@@ -1787,7 +1797,13 @@ private def runCorrections (r : Runner) : Async Unit := do
       let result ← stream.write ⟨Array.replicate (testPayloadCap + 1) 7⟩
       discard <| wrote.send result
     discard <| entered.recv
+    -- The barrier waits for the reader's successful event post
+    -- before the blocked write is released.
+    hooks.acceptedEvent.set (some accepted)
     readGate.close
+    match ← accepted.recv with
+    | some _ => pure ()
+    | none => throw <| IO.userError "the reader fault was not accepted"
     hold.close
     writer.joinAll
     match ← wrote.recv with
