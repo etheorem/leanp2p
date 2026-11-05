@@ -2865,6 +2865,12 @@ private def readPayload (stream : Stream) : Async ByteArray := do
   | .ok none => throw <| IO.userError "public read ended"
   | .error e => throw <| IO.userError s!"public read failed: {repr e}"
 
+/-- The next chunk is the one-byte form of `id`. -/
+private def readIdByte (stream : Stream) (id : UInt32) : Async Bool := do
+  match ← stream.read with
+  | .ok (some bytes) => return bytes == ⟨#[UInt8.ofNat id.toNat]⟩
+  | _ => return false
+
 private def takeHeader (c : Connection) (pending : ByteArray) :
     Async (Header × ByteArray) := do
   match ← c.readExactly headerSize pending with
@@ -2881,6 +2887,18 @@ private def openFrame (id : UInt32) : ByteArray :=
 
 private def dataFrame (id : UInt32) (b : UInt8) : ByteArray :=
   Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[b]⟩
+
+/-- The next peer frame is one data byte `b` for `id`. -/
+private def peerReadsData (c : Connection) (pending : ByteArray) (id : UInt32)
+    (b : UInt8) : Async (Bool × ByteArray) := do
+  let (h, rest) ← takeHeader c pending
+  match ← c.readExactly 1 rest with
+  | none => return (false, rest)
+  | some (body, leftover) =>
+    let ok :=
+      h.kind == Kind.data && h.streamId == id && h.length == 1 &&
+        body == ⟨#[b]⟩ && leftover.isEmpty
+    return (ok, leftover)
 
 /-- Two concurrent opens. The peer reads both open frames. -/
 private def runParity (r : Runner) (n : Nat) (role : Role)
@@ -3158,6 +3176,137 @@ private def runMalformed (r : Runner) : Async Unit := do
         r.check "a public malformed frame returns a protocol error" false
         r.check "a second public join returns the same protocol error" false
 
+/-- A full accept backlog resets the next remote open.
+One dequeue admits the following id. The session stays up. -/
+private def runAcceptBacklog (r : Runner) : Async Unit := do
+  let pair ← ends 52
+  let cap := Libp2p.Mux.Test.State.acceptBacklogCap
+  let remoteId (i : Nat) : UInt32 := UInt32.ofNat (2 * (i + 1))
+  let refused := remoteId cap
+  let later := remoteId (cap + 1)
+  let mut opened : Option MuxSession := none
+  let outcome : Except IO.Error Unit ←
+    try
+      match ← (test.open .initiator pair.dialer .empty).run with
+      | .error _ =>
+        r.check "a full accept backlog resets the overflow open" false
+        r.check "the first accepted stream carries the first remote id" false
+        r.check "one queued stream stays usable after the refusal" false
+        r.check "accepted streams stay in open order" false
+        r.check "the next remote id is accepted after one dequeue" false
+        r.check "the later accepted stream is usable" false
+        r.check "accept backlog overflow leaves the session healthy" false
+        pure (.ok ())
+      | .ok sess =>
+        opened := some sess
+        let mut blob : ByteArray := .empty
+        for i in List.range cap do
+          let id := remoteId i
+          blob := blob ++ openFrame id ++ dataFrame id (UInt8.ofNat id.toNat)
+        blob := blob ++ openFrame refused
+        pair.peer.write blob
+        let (resetHeader, rest) ← takeHeader pair.peer .empty
+        let resetOk :=
+          resetHeader.kind == Kind.reset && resetHeader.streamId == refused &&
+            resetHeader.length == 0 && rest.isEmpty
+        r.check "a full accept backlog resets the overflow open" resetOk
+        let mut firstStream : Option Stream := none
+        let mut firstOk := false
+        let mut stop := !resetOk
+        if resetOk then
+          match ← sess.accept with
+          | none => stop := true
+          | some stream =>
+            firstStream := some stream
+            firstOk := ← readIdByte stream (remoteId 0)
+        r.check "the first accepted stream carries the first remote id" firstOk
+        let usable ←
+          match firstStream with
+          | none => pure false
+          | some stream =>
+            match ← stream.write ⟨#[1]⟩ with
+            | .error _ => pure false
+            | .ok () =>
+              let (frameOk, _) ← peerReadsData pair.peer rest (remoteId 0) 1
+              pure frameOk
+        r.check "one queued stream stays usable after the refusal" usable
+        if resetOk && firstOk then
+          pair.peer.write (openFrame later ++ dataFrame later (UInt8.ofNat later.toNat))
+        let mut orderOk := resetOk && firstOk
+        for i in List.range (cap - 1) do
+          if !stop && orderOk then
+            match ← sess.accept with
+            | none =>
+              orderOk := false
+              stop := true
+            | some stream =>
+              let ok ← readIdByte stream (remoteId (i + 1))
+              orderOk := orderOk && ok
+        r.check "accepted streams stay in open order" orderOk
+        let mut laterStream : Option Stream := none
+        let laterOk ←
+          if stop || !orderOk then
+            pure false
+          else
+            match ← sess.accept with
+            | none => pure false
+            | some stream =>
+              laterStream := some stream
+              readIdByte stream later
+        r.check "the next remote id is accepted after one dequeue" laterOk
+        let laterUsable ←
+          match laterStream with
+          | none => pure false
+          | some stream =>
+            match ← stream.write ⟨#[3]⟩ with
+            | .error _ => pure false
+            | .ok () =>
+              let (frameOk, _) ← peerReadsData pair.peer .empty later 3
+              pure frameOk
+        r.check "the later accepted stream is usable" laterUsable
+        sess.close
+        match ← sess.join with
+        | .ok () => r.check "accept backlog overflow leaves the session healthy" true
+        | .error _ => r.check "accept backlog overflow leaves the session healthy" false
+        pure (.ok ())
+    catch e =>
+      pure (.error e)
+  match outcome with
+  | .error _ =>
+    match opened with
+    | some sess =>
+      try
+        sess.close
+      catch _ =>
+        pure ()
+      try
+        discard <| sess.join
+      catch _ =>
+        pure ()
+    | none =>
+      try
+        pair.dialer.close
+      catch _ =>
+        pure ()
+  | .ok () =>
+    match opened with
+    | some _ => pure ()
+    | none =>
+      try
+        pair.dialer.close
+      catch _ =>
+        pure ()
+  let peerClosed : Except IO.Error Unit ←
+    try
+      pair.peer.close
+      pure (.ok ())
+    catch e =>
+      pure (.error e)
+  match outcome, peerClosed with
+  | .error e, _ => throw e
+  | .ok (), .error e => throw e
+  | .ok (), .ok () => pure ()
+
 private def checks (r : Runner) : Async Unit := do
   r.check "Mux.test.id is Mux.testId" (decide (test.id = testId))
   r.check "the test protocol id is /leanp2p/test-mux/1.0.0"
@@ -3171,6 +3320,7 @@ private def checks (r : Runner) : Async Unit := do
   runConcurrentOpens r
   runReaderFault r
   runMalformed r
+  runAcceptBacklog r
 
 /-- The public `Mux.test` boundary over the sim connection. -/
 def run (r : Runner) : IO Unit := do
@@ -3186,6 +3336,11 @@ def runFault (r : Runner) : IO Unit := do
 def runHostile (r : Runner) : IO Unit := do
   r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
   Async.run (runMalformed r)
+
+/-- The live accept-backlog path through `Mux.test.open`. -/
+def runAccept (r : Runner) : IO Unit := do
+  r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
+  Async.run (runAcceptBacklog r)
 
 end Tests.Mux.Public
 
