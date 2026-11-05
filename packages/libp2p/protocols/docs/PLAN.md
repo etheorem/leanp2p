@@ -23,6 +23,10 @@ sub-split below, with the reasons.
 
 Unit 0 is done.
 
+Unit 3b owns the trickle regressions that issue #23's done-when names. The pure `step` decides
+which peer receives which gossip on a tick. The randomised delay that spreads those messages
+across the heartbeat interval belongs to the loop, and the regression is a test of that loop.
+
 The splits follow the deliverable size. Unit 2a is pure codec work that
 starts when the snappy binding exists, and unit 2b needs the host's
 streams for the core's loop and the exchange, so the two wait on
