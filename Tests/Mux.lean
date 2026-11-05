@@ -673,6 +673,29 @@ private def require {α : Type} (op : String) (x : Except InvariantError α) : E
   | .ok a => pure a
   | .error e => throw s!"{op}: {e.message}"
 
+/-- The accept close and the terminal claim. -/
+private def sessionTerminal (a : Action) : Bool :=
+  match a with
+  | .closeAccept => true
+  | .terminal _ => true
+  | _ => false
+
+/-- An unknown-id claim on a fresh session. The counters, the live
+table, the order, and the outbound slot stay as they were. Every
+action is session-level. -/
+private def unknownFresh (fresh : State) (id : UInt32) (step : Step) : Bool :=
+  isProtocol step.state.cause protocolUnknown &&
+  step.state.nextLocal == fresh.nextLocal &&
+  step.state.nextRemote == fresh.nextRemote &&
+  (step.state.live.get? id).isNone &&
+  step.state.live.isEmpty &&
+  !(step.state.retired id) &&
+  step.state.order.isEmpty &&
+  step.state.outbound.isNone &&
+  step.state.turnIndex == fresh.turnIndex &&
+  Parser.gap step.state.parser == .empty &&
+  step.actions.all sessionTerminal
+
 /-- Append `ackSend` when the step left an intent. -/
 private def acknowledged (step : Step) : Except InvariantError Step :=
   if step.state.outbound.isNone then
@@ -1072,6 +1095,23 @@ private def runLifecycle (r : Runner) : ExceptT String IO Unit := do
       portEnds remoteFin.actions == [] &&
       (remoteFin.state.live.get? localId).isNone &&
       (remoteFin.state.writeMode? localId).isNone)
+
+/-- Data, fin, and reset for a remote id that was never opened.
+Each call starts from a fresh initiator session. -/
+private def runUnknown (r : Runner) : ExceptT String IO Unit := do
+  let id : UInt32 := 2
+  let dataFresh := State.empty .initiator
+  let dataStep ← require "dataRemote" (State.dataRemote dataFresh id oneByte)
+  r.check "data for a never-opened id selects protocolUnknown"
+    (unknownFresh dataFresh id dataStep)
+  let finFresh := State.empty .initiator
+  let finStep ← require "finRemote" (State.finRemote finFresh id)
+  r.check "fin for a never-opened id selects protocolUnknown"
+    (unknownFresh finFresh id finStep)
+  let resetFresh := State.empty .initiator
+  let resetStep ← require "resetRemote" (State.resetRemote resetFresh id)
+  r.check "reset for a never-opened id selects protocolUnknown"
+    (unknownFresh resetFresh id resetStep)
 
 /-- Terminal-cause arbitration. -/
 private def runTerminal (r : Runner) : ExceptT String IO Unit := do
@@ -1588,6 +1628,7 @@ def run (r : Runner) : IO Unit := do
   finish r (runAdmission r)
   finish r (runWrites r)
   finish r (runLifecycle r)
+  finish r (runUnknown r)
   finish r (runTerminal r)
   finish r (runParser r)
   finish r (runAccept r)
