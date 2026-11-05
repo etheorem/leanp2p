@@ -21,8 +21,10 @@ loop uses repeat and parks only on the channel receive. Ready events use
 constant stack space. The loop asks the alarm for the next due time after
 each input. A TestClock drives the alarm in tests.
 
-The inbound readFrames is partial because a peer controls the number of
-frames and chunks before EOF (root CLAUDE.md, "partial def").
+The inbound reader uses repeat with a mutable header, body cursor and chunk
+position. Each bounded body allocation follows its decoded length. Each
+input byte enters the body once, so small reads use constant stack space
+and linear copying.
 
 ## Ownership
 
@@ -76,8 +78,9 @@ updateGet (root ARCHITECTURE §4.1). Only the first stop caller joins.
 - **Each peer has one writer task.** The pinned go pubsub version a01777894f4c
   resets duplicate inbound streams (comm.go, lines 55 to 65). Its sender uses
   one stream and a bounded queue per peer (lines 181 to 233). Our writer
-  writes frames in queue order. A failed write closes the queue and posts
-  peerLeft. Stop resets installed streams to wake parked writes and joins
+  writes frames in queue order. A failed write retires its outbound entry
+  and closes its queue. Transport notifications own peerLeft. Stop resets
+  installed streams to wake parked writes and joins
   the writer tasks. The host must end a newStream call when its session ends.
 - **The inbound handler serves every frame of a stream.** The pubsub spec
   uses separate long-lived inbound and outbound streams (pubsub/README.md,
@@ -96,8 +99,10 @@ updateGet (root ARCHITECTURE §4.1). Only the first stop caller joins.
   exposes the sender and unframed body before that step. The observer can
   decode the body to log every message. The default hook decodes nothing.
   Frame errors fail the handler before they reach the observer.
-- **A send failure has no sink.** The send retires the stream, and the mock host has
-  no failure log. The host reports stream failures at integration.
+- **A send failure retires its outbound entry.** The next send starts a fresh
+  writer and stream. The core keeps the peer and accepts further RPCs on its
+  live inbound stream. Retirement checks the writer id, so an old writer
+  cannot remove a newer entry for the same peer.
 -/
 
 set_option autoImplicit false
@@ -108,7 +113,8 @@ open Mock.Host (HostSeam)
 
 /-- A spread a caller may choose for heartbeat gossip. Each delay stays below
 one second. The multiplier is prime, so the delays do not repeat with a short
-period. Config.trickle defaults to zero. -/
+period. Config.trickle defaults to zero. A caller who needs gossip inside
+each heartbeat interval sets heartbeatInterval above the largest delay. -/
 def spread (i : Nat) : Millis := (i * 7919 + 1) % 1000
 
 /-- Replayable peer order for a heartbeat. The hash combines its counter
@@ -157,7 +163,8 @@ structure Node where
   field runs in `Async` because a join parks, and a parked `BaseIO` action would
   hold a thread. A second call does nothing. -/
   stop : Conc.Async Unit
-  /-- Frames dropped at the peer queue or pending-gossip bound. -/
+  /-- Frames dropped by a full or closed peer queue, or by the 256-send
+  pending-gossip bound. -/
   dropped : BaseIO Nat
 
 /-! ## One outbound RPC -/
@@ -182,6 +189,8 @@ inductive Input where
 
 /-- One peer's bounded writer queue and its currently open stream. -/
 structure Outbound where
+  /-- The writer generation used for exact retirement. -/
+  id : Nat
   /-- At most 32 encoded frames wait for this peer. -/
   queue : Conc.Chan ByteArray
   /-- Stop resets this stream to wake a parked write. -/
@@ -194,13 +203,15 @@ private def endOutbound (ob : Outbound) : Conc.Async Unit := do
     stream.reset
 
 /-- One writer owns the peer stream. It writes queued frames in order and
-closes the stream at the end. A failed write closes the queue and reports
-peerLeft. Stop resets an installed stream; a late open checks closing too. -/
+closes the stream at the end. A failed open or write retires only this writer
+entry and closes its queue. The core peer stays connected. Stop resets an
+installed stream; a late open checks closing too. -/
 private def writer (host : HostSeam) (closing : Conc.OnceRef Bool)
-    (events : Conc.Chan Input) (peer : Peer) (ob : Outbound) : Conc.Async Unit := do
+    (outbound : Conc.OnceRef (List (Peer × Outbound))) (peer : Peer) (ob : Outbound) : Conc.Async Unit := do
   let fail : Conc.Async Unit := do
     (ob.queue.close : BaseIO Unit)
-    discard <| events.send (.event (.peerLeft peer))
+    (outbound.update (fun table => table.filter (fun e => e.2.id != ob.id)) : BaseIO Unit)
+    if let some stream ← (ob.stream.get : BaseIO (Option Streams.Stream)) then stream.reset
   try
     match ← host.newStream peer [Constants.meshsubId] with
     | .error _ => fail
@@ -219,52 +230,63 @@ private def writer (host : HostSeam) (closing : Conc.OnceRef Bool)
 
 /-! ## The inbound handler -/
 
-/-- The total frame size once its prefix is complete. A prefix under the
-RPC cap can use up to Varint.maxBytes bytes. The decoder checks the length
-before the handler appends any body bytes. -/
-private def frameSize (buf : ByteArray) : Except Mock.Core.Error (Option Nat) :=
-  let head := Bytes.toNatList (buf.extract 0 Varint.maxBytes)
-  match Streams.Framing.decodeLength? .uvarint head with
-  | .error .truncated => .ok none
-  | .error .malformed => .error (.protocol "the RPC prefix is malformed")
-  | .ok (size, rest) =>
-    if Constants.rpcCap < size then .error (.protocol "the RPC exceeds the cap")
-    else .ok (some (head.length - rest.length + size))
-
-/-- Read consecutive frames. The buffer holds only the current frame.
-A chunk may hold several frames, so pos marks the bytes already consumed.
-The handler appends only the bytes needed by the prefix or current body.
-Its buffer stays under the RPC cap plus Varint.maxBytes, even when one
-chunk holds many frames. EOF between frames is clean. -/
-private partial def readFrames (events : Conc.Chan Input) (peer : Peer)
-    (stream : Streams.Stream) (buf chunk : ByteArray) (pos : Nat) :
-    Conc.Async (Except Mock.Core.Error Unit) := do
-  match frameSize buf with
-  | .error e => return .error e
-  | .ok size? =>
-    if let some size := size? then
-      if size ≤ buf.size then
-        match Rpc.decodeFrame? (Bytes.toNatList buf) with
-        | .ok (some (payload, [])) =>
-          -- Park: the loop frees a slot, or stop closes the event queue.
-          match ← events.send (.event (.rpc peer payload)) with
-          | .error _ => return .ok ()
-          | .ok () => return ← readFrames events peer stream ByteArray.empty chunk pos
-        | _ => return .error (.protocol "the RPC frame is malformed")
-    if pos < chunk.size then
-      -- An incomplete prefix needs one byte. A complete prefix fixes the
-      -- exact body size, so no append can exceed that frame's bound.
-      let need := size?.map (fun size => size - buf.size) |>.getD 1
-      let take := Nat.min need (chunk.size - pos)
-      readFrames events peer stream (buf ++ chunk.extract pos (pos + take)) chunk (pos + take)
-    else
+/-- Read consecutive frames with a bounded header and one body allocation.
+The header is at most Varint.maxBytes bytes. Its decoded length is capped
+before emptyWithCapacity allocates the body. This is the pinned Lean name
+for the capacity constructor. Each copySlice writes only the next slice at
+cursor, without retaining an earlier body value. EOF between frames is clean.
+The repeat loop uses constant stack space for any number of chunks or frames. -/
+private def readFrames (events : Conc.Chan Input) (peer : Peer)
+    (stream : Streams.Stream) : Conc.Async (Except Mock.Core.Error Unit) := do
+  let mut header := ByteArray.emptyWithCapacity Varint.maxBytes
+  let mut body := ByteArray.empty
+  let mut expected : Option Nat := none
+  let mut cursor := 0
+  let mut chunk := ByteArray.empty
+  let mut pos := 0
+  repeat
+    if let some size := expected then
+      if cursor = size then
+        -- Park: the loop frees a slot, or stop closes the event queue.
+        if let .error _ ← events.send (.event (.rpc peer (Bytes.toNatList body))) then
+          return .ok ()
+        body := ByteArray.empty
+        expected := none
+        cursor := 0
+    if pos = chunk.size then
       -- Park: the peer writes, half-closes, or resets.
       match ← stream.read with
       | .error e => return .error (Mock.Core.mapStreamError e)
       | .ok none =>
-        return if buf.isEmpty then .ok ()
+        return if header.isEmpty && expected.isNone then .ok ()
           else .error (.protocol "the stream ended inside an RPC frame")
-      | .ok (some bytes) => readFrames events peer stream buf bytes 0
+      | .ok (some bytes) =>
+        chunk := bytes
+        pos := 0
+    else
+      match expected with
+      | some size =>
+        let count := Nat.min (size - cursor) (chunk.size - pos)
+        body := chunk.copySlice pos body cursor count
+        cursor := cursor + count
+        pos := pos + count
+      | none =>
+        if Varint.maxBytes ≤ header.size then
+          return .error (.protocol "the RPC header is malformed")
+        header := header.push (chunk.get! pos)
+        pos := pos + 1
+        match Streams.Framing.decodeLength? .uvarint (Bytes.toNatList header) with
+        | .error .truncated => pure ()
+        | .error .malformed => return .error (.protocol "the RPC header is malformed")
+        | .ok (size, _) =>
+          if Constants.rpcCap < size then
+            return .error (.protocol "the RPC exceeds the cap")
+          -- The allocation runs only after the length passes the cap.
+          body := ByteArray.emptyWithCapacity size
+          expected := some size
+          cursor := 0
+          header := ByteArray.emptyWithCapacity Varint.maxBytes
+  return .ok ()
 
 /-- Serve every RPC of a peer's stream in arrival order. Frame errors reset
 both directions. A clean EOF closes our write direction. The host owns and
@@ -276,7 +298,7 @@ def handler (events : Conc.Chan Input) : Mock.Core.StreamHandler where
     if let .error _ ← events.send (.event (.peerJoined peer .meshsub)) then
       stream.close
       return .ok ()
-    let answer ← readFrames events peer stream ByteArray.empty ByteArray.empty 0
+    let answer ← readFrames events peer stream
     match answer with
     | .ok () => stream.close
     | .error _ => stream.reset
@@ -322,8 +344,10 @@ private structure Env where
   alarm : Conc.Alarm
   /-- The owner of the loop, alarm and writers. -/
   tasks : Conc.TaskSet
-  /-- The peer writer registry. Only the loop adds entries. -/
+  /-- The peer writer registry. The loop inserts and writers retire by id. -/
   outbound : Conc.OnceRef (List (Peer × Outbound))
+  /-- The next writer generation, allocated atomically. -/
+  nextOutbound : Conc.OnceRef Nat
   /-- The first stop caller sets this flag. -/
   closing : Conc.OnceRef Bool
   /-- Frames refused by a full or closed outbound queue. -/
@@ -338,9 +362,10 @@ private def enqueue (env : Env) (peer : Peer) (rpc : Rpc.RPC) : BaseIO Unit := d
   let ob ← match table.find? (fun e => e.1 == peer) with
     | some (_, ob) => pure ob
     | none => do
-      let ob : Outbound := { queue := ← Conc.Chan.new 32, stream := ← Conc.OnceRef.new none }
+      let id ← env.nextOutbound.updateGet (fun n => (n, n + 1))
+      let ob : Outbound := { id, queue := ← Conc.Chan.new 32, stream := ← Conc.OnceRef.new none }
       env.outbound.update (fun table => (peer, ob) :: table)
-      env.tasks.spawn (writer env.host env.closing env.events peer ob)
+      env.tasks.spawn (writer env.host env.closing env.outbound peer ob)
       pure ob
   if ← env.closing.get then
     ob.queue.close
@@ -508,10 +533,11 @@ def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
   let tasks ← Conc.TaskSet.new
   let alarm ← Conc.Alarm.new
   let outbound ← Conc.OnceRef.new ([] : List (Peer × Outbound))
+  let nextOutbound ← Conc.OnceRef.new 0
   let closing ← Conc.OnceRef.new false
   let drops ← Conc.OnceRef.new 0
   tasks.spawn <| alarm.run config.clock (fun now => events.send (.wake now))
-  tasks.spawn <| loop { host, config, subs, events, alarm, tasks, outbound, closing, drops }
+  tasks.spawn <| loop { host, config, subs, events, alarm, tasks, outbound, nextOutbound, closing, drops }
     { router := initialState config.params now
       pending := []
       nextTick := now + config.params.heartbeatInterval

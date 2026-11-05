@@ -330,6 +330,94 @@ private def frameBoundaryChecks (r : Tests.Runner) : Async Unit := do
       ((match result with | .error (.protocol _) => true | _ => false) &&
         (← (reset.get : BaseIO Bool)))
 
+/-- A failed outbound write retires only its writer. The existing inbound
+stream can still publish, and a later send opens a new outbound writer. -/
+private def outboundFailureChecks (r : Tests.Runner) : Async Unit := do
+  let deliveries ← (Chan.new 8 : BaseIO (Chan Message))
+  let receipts ← (Chan.new 8 : BaseIO (Chan Unit))
+  let closed ← (Chan.new 8 : BaseIO (Chan Unit))
+  let inbound ← (Pipe.new 16 : BaseIO Pipe)
+  let opens ← (OnceRef.new 0 : BaseIO (OnceRef Nat))
+  let saved ← (OnceRef.new (none : Option Mock.Core.StreamHandler) : BaseIO (OnceRef (Option Mock.Core.StreamHandler)))
+  let host : HostSeam := {
+    setHandler := fun h => saved.set (some h)
+    newStream := fun _ _ => do
+      (opens.update (· + 1) : BaseIO Unit)
+      return .ok (Constants.meshsubId, {
+        read := pure (.ok none)
+        write := fun _ => pure (.error .closed)
+        close := discard (closed.trySend () : BaseIO Bool)
+        reset := pure () }) }
+  let tc ← (TestClock.new : BaseIO TestClock)
+  let n ← (start host { clock := tc.clock, onRpc := fun _ _ => discard (receipts.trySend ()) } : BaseIO Node)
+  discard (n.subscribe topic (fun m => discard <| deliveries.trySend m) : BaseIO Bool)
+  let some h ← (saved.get : BaseIO (Option Mock.Core.StreamHandler))
+    | throw <| IO.userError "missing node handler"
+  let owner ← (TaskSet.new : BaseIO TaskSet)
+  let stream : Streams.Stream := {
+    read := return .ok (← inbound.read)
+    write := fun _ => pure (.ok ())
+    close := pure ()
+    reset := (inbound.close : BaseIO Unit) }
+  owner.spawn do
+    discard <| (h.handle pa stream).run
+  discard <| inbound.write (frame (Core.publishRpc (message [31])))
+  r.check "node.failure.first-inbound-publish-delivers"
+    ((← receive deliveries) == some (message [31]))
+  r.check "node.failure.outbound-write-failed" ((← receive closed).isSome)
+  -- The close signal follows retirement, so the second publish sees the
+  -- post-failure peer state while using the same inbound stream.
+  discard <| inbound.write (frame (Core.publishRpc (message [32])))
+  r.check "node.failure.second-inbound-publish-survives-outbound-failure"
+    ((← receive deliveries) == some (message [32]))
+  discard (n.subscribe ⟨"reopen"⟩ (fun _ => pure ()) : BaseIO Bool)
+  r.check "node.failure.next-send-opens-fresh-writer" ((← receive closed).isSome)
+  r.check "node.failure.two-outbound-opens" ((← (opens.get : BaseIO Nat)) == 2)
+  (inbound.close : BaseIO Unit)
+  owner.joinAll
+  n.stop
+  (tc.close : BaseIO Unit)
+
+/-- A legal body arrives one byte per read. The direct handler queue records
+all frame bodies in order, without a router changing or deduplicating them. -/
+private def readerCopyChecks (r : Tests.Runner) : Async Unit := do
+  let first := Core.publishRpc (message (List.replicate 8192 17))
+  let second := Core.publishRpc (message [18])
+  let third := Core.publishRpc (message [19])
+  let all := frame first ++ frame second ++ frame third
+  let cursor ← (OnceRef.new 0 : BaseIO (OnceRef Nat))
+  let events ← (Chan.new 16 : BaseIO (Chan Input))
+  let dribble : Streams.Stream := {
+    read := do
+      let i ← (cursor.updateGet (fun i => (i, i + 1)) : BaseIO Nat)
+      return .ok (if i < all.size then some (all.extract i (i + 1)) else none)
+    write := fun _ => pure (.ok ())
+    close := pure ()
+    reset := pure () }
+  let result ← ((handler events).handle pa dribble).run
+  let inputs ← (events.drain : BaseIO (List Input))
+  let bodies := inputs.filterMap fun
+    | .event (.rpc _ bytes) => some bytes
+    | _ => none
+  r.check "node.reader.many-one-byte-chunks-preserve-all-frames"
+    ((match result with | .ok () => true | _ => false) &&
+      bodies == [Pb.encodeMessage first, Pb.encodeMessage second, Pb.encodeMessage third])
+  let split := frame third
+  let chunks := [frame first ++ frame second ++ split.extract 0 1,
+    split.extract 1 3, split.extract 3 split.size]
+  let pending ← (OnceRef.new chunks : BaseIO (OnceRef (List ByteArray)))
+  let mixedEvents ← (Chan.new 16 : BaseIO (Chan Input))
+  let mixed := { dribble with read := do
+    let bytes ← (pending.updateGet (fun xs => (xs.head?, xs.drop 1)) : BaseIO (Option ByteArray))
+    return .ok bytes }
+  let mixedResult ← ((handler mixedEvents).handle pa mixed).run
+  let mixedInputs ← (mixedEvents.drain : BaseIO (List Input))
+  let mixedBodies := mixedInputs.filterMap fun
+    | .event (.rpc _ bytes) => some bytes
+    | _ => none
+  r.check "node.reader.two-frames-then-split-frame-preserve-order"
+    ((match mixedResult with | .ok () => true | _ => false) && mixedBodies == bodies)
+
 /-- Two real nodes learn subscriptions and deliver a publish without a
 heartbeat or an explicit peerJoined call at the receiver. -/
 private def pairChecks (r : Tests.Runner) : Async Unit := do
@@ -616,6 +704,8 @@ def run (r : Tests.Runner) : IO Unit := do
     systemClockChecks r
     inboundChecks r
     frameBoundaryChecks r
+    outboundFailureChecks r
+    readerCopyChecks r
     pairChecks r
     surfaceChecks r
     subscribeRace r

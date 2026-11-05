@@ -16,11 +16,11 @@ recorded fields, and re-encodes it. The re-encoding decodes to the same value, a
 whose payload carries no field that this codec leaves out, the re-encoding is the recorded bytes.
 The suite reads one fixture and needs no network, no clock and no task.
 
-The plan records that gossipsub has no vectors (`docs/PLAN.md`, "Vector stance"). This fixture is
-the first one. It lives in `Tests/fixtures` because the CI provenance step regenerates
-`Tests/vectors` with `scripts/extract-vectors.py` and diffs the result, while this file comes from
-its own committed generator. The fixture records the generator, the module and the version, so a
-stale file fails its own provenance check.
+The CI provenance step covers Tests/vectors only. It regenerates that corpus
+with scripts/extract-vectors.py. This fixture lives in Tests/fixtures and
+checks its own generator, module and version provenance fields. A maintainer
+regenerates it by hand with go run from packages/libp2p/protocols/tools/go-rpc-fixtures.
+The command is go run . with the generator's default output path.
 -/
 
 set_option autoImplicit false
