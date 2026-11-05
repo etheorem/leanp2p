@@ -1,5 +1,5 @@
 import Libp2p.Negotiate.Constants
-import Libp2p.Negotiate.Mock.Varint
+import Varint
 import Bytes
 
 /-!
@@ -11,9 +11,10 @@ newline (ARCHITECTURE §3.2, package docs "Public surface").
 
 The decoder splits one frame at the index the prefix computes, then
 runs the computed inverse of the payload map: it reads the body as
-UTF-8, re-encodes it, and compares. One comparison rejects a missing
-trailing newline, a model value at or above 256, and bad UTF-8. This
-keeps the `LawfulCodec` inverse to one `encodeDecode` step.
+UTF-8, re-encodes it, and compares. `Bytes.toString?` rejects bad
+UTF-8. The comparison rejects a missing trailing newline and a model
+value at or above 256. So the `encodeDecode` proof needs no UTF-8
+reasoning.
 
 The 1 KiB cap is checked in `splitFrame`, before any payload
 inspection (contract 1). The `ls` reply framing walks its entries as
@@ -34,9 +35,15 @@ between texts and payloads. -/
 def payloadOf (s : String) : List Nat :=
   Bytes.toNatList (Bytes.ofString (s ++ "\n"))
 
+/-- A total `UVarint` constructor for a length. `initiatorStart` and
+`responderStart` keep the upgrade's lengths at or under `maxMsg`; the
+modulo keeps the constructor total for any input. -/
+def boundedVarint (n : Nat) : Varint.UVarint :=
+  ⟨n % Varint.limit, Nat.mod_lt _ (by decide)⟩
+
 /-- The total text encoder: a uvarint length prefix, then the payload. -/
 def encodeText (s : String) : List Nat :=
-  Mock.Varint.encode (Mock.Varint.boundedVarint (payloadOf s).length) ++ payloadOf s
+  Varint.encode (boundedVarint (payloadOf s).length) ++ payloadOf s
 
 /-- A multistream message. `text` excludes the trailing newline.
 `fits` is the proof-carrying cap fact of root §3.7: the message fits
@@ -63,14 +70,14 @@ theorem payloadOfEq (s : String) :
 theorem payloadOfNe (s : String) : payloadOf s ≠ [] := by
   rw [payloadOfEq]; simp
 
-/-- The checked constructor. The tests and `header` build messages
-through it. -/
+/-- The checked constructor. The tests build messages through it. -/
 def Msg.ofText? (s : String) : Option Msg :=
   if h : (Bytes.ofString (s ++ "\n")).size ≤ maxMsg then some ⟨s, h⟩ else none
 
-/-- A text whose frame fits the 1 KiB cap. The senders call this before
-they write, so a configured id that would produce an over-cap frame is a
-protocol error rather than a frame the decoder refuses (root §5.1). -/
+/-- A text whose frame fits the 1 KiB cap. `initiatorStart` and
+`responderStart` call this before any write, so a configured id that
+would produce an over-cap frame is a protocol error rather than a frame
+the decoder refuses (root §5.1). -/
 def fitsText (s : String) : Bool :=
   decide ((Bytes.ofString (s ++ "\n")).size ≤ maxMsg)
 
@@ -87,7 +94,7 @@ is checked first, before any payload inspection (contract 1). A zero
 declared length is malformed. A payload cut short is truncated, so
 the caller keeps waiting. -/
 def splitFrame (bs : List Nat) : Except DecodeError (List Nat × List Nat) :=
-  match Mock.Varint.decode? bs with
+  match Varint.decode? bs with
   | .error e => .error e
   | .ok (v, rest) =>
     if maxMsg < v.val then .error .malformed
@@ -150,13 +157,13 @@ def decodeMsg? (bs : List Nat) : Except DecodeError (Msg × List Nat) :=
 and the remainder. -/
 theorem splitFrameEncode (s : String) (h : (payloadOf s).length ≤ maxMsg) (rest : List Nat) :
     splitFrame (encodeText s ++ rest) = .ok (payloadOf s, rest) := by
-  have hlim : (payloadOf s).length < Mock.Varint.limit := by
-    unfold Mock.Varint.limit maxMsg at *; omega
-  have hb : (Mock.Varint.boundedVarint (payloadOf s).length).val = (payloadOf s).length := by
-    simp [Mock.Varint.boundedVarint, Nat.mod_eq_of_lt hlim]
+  have hlim : (payloadOf s).length < Varint.limit := by
+    unfold Varint.limit Varint.maxBytes maxMsg at *; omega
+  have hb : (boundedVarint (payloadOf s).length).val = (payloadOf s).length := by
+    simp [boundedVarint, Nat.mod_eq_of_lt hlim]
   have hpos : 0 < (payloadOf s).length := List.length_pos_iff.mpr (payloadOfNe s)
   unfold splitFrame encodeText
-  rw [List.append_assoc, Mock.Varint.decodeEncodeSuffix]
+  rw [List.append_assoc, Varint.decodeEncodeSuffix]
   simp only [hb]
   have h1 : ¬ maxMsg < (payloadOf s).length := by omega
   have h2 : ¬ (payloadOf s).length = 0 := by omega
@@ -184,7 +191,7 @@ theorem decodeMsgEncodeDecode (bs : List Nat) (m : Msg) (rest : List Nat)
     split at hsplit
     · simp at hsplit
     · rename_i v r0 hdec
-      have hbs := Mock.Varint.encodeDecode bs v r0 hdec
+      have hbs := Varint.encodeDecode hdec
       split at hsplit
       · simp at hsplit
       split at hsplit
@@ -203,8 +210,8 @@ theorem decodeMsgEncodeDecode (bs : List Nat) (m : Msg) (rest : List Nat)
           obtain ⟨rfl, rfl⟩ := h
           have hl : (payloadOf t).length = v.val := by
             rw [hp]; simp; omega
-          have hv : Mock.Varint.boundedVarint (payloadOf t).length = v := by
-            cases v; simp_all [Mock.Varint.boundedVarint, Nat.mod_eq_of_lt]
+          have hv : boundedVarint (payloadOf t).length = v := by
+            cases v; simp_all [boundedVarint, Nat.mod_eq_of_lt]
           rw [encodeText, hv, hp, List.append_assoc, List.take_append_drop]
           exact hbs.symm
         · simp at h
@@ -217,7 +224,7 @@ instance : Bytes.Codec Msg where
 theorem decodeMsgEncode (m : Msg) : decodeMsg? (encodeMsg m) = .ok (m, []) := by
   simpa [encodeMsg] using decodeMsgSuffix m []
 
-/-- The round trip law, the frozen demand of §3.2. -/
+/-- The round-trip law that §3.2 requires. -/
 instance : Bytes.LawfulCodec Msg where
   decodeEncode := decodeMsgEncode
   encodeDecode := by
@@ -226,37 +233,37 @@ instance : Bytes.LawfulCodec Msg where
 
 /-- The cap fires before the payload is read, for every payload that
 follows the prefix (contract 1). -/
-theorem decodeMsgCap {v : Mock.Varint.UVarint} {payload : List Nat}
+theorem decodeMsgCap {v : Varint.UVarint} {payload : List Nat}
     (h : maxMsg < v.val) :
-    decodeMsg? (Mock.Varint.encode v ++ payload) = .error .malformed := by
-  simp [decodeMsg?, splitFrame, Mock.Varint.decodeEncodeSuffix, h]
+    decodeMsg? (Varint.encode v ++ payload) = .error .malformed := by
+  simp [decodeMsg?, splitFrame, Varint.decodeEncodeSuffix, h]
 
 /-- A payload cut short is incomplete: more bytes may complete it. -/
-theorem decodeMsgTruncated {v : Mock.Varint.UVarint} {payload : List Nat}
+theorem decodeMsgTruncated {v : Varint.UVarint} {payload : List Nat}
     (hv0 : 0 < v.val) (hcap : v.val ≤ maxMsg) (hshort : payload.length < v.val) :
-    decodeMsg? (Mock.Varint.encode v ++ payload) = .error .truncated := by
+    decodeMsg? (Varint.encode v ++ payload) = .error .truncated := by
   unfold decodeMsg? splitFrame
-  rw [Mock.Varint.decodeEncodeSuffix]
+  rw [Varint.decodeEncodeSuffix]
   have h1 : ¬ maxMsg < v.val := by omega
   have h2 : ¬ v.val = 0 := by omega
   simp only [h1, h2, hshort, ite_true, ite_false]
 
 /-- A zero declared length is malformed. -/
-theorem decodeMsgZeroLength {v : Mock.Varint.UVarint} {payload : List Nat}
+theorem decodeMsgZeroLength {v : Varint.UVarint} {payload : List Nat}
     (h : v.val = 0) :
-    decodeMsg? (Mock.Varint.encode v ++ payload) = .error .malformed := by
-  simp [decodeMsg?, splitFrame, Mock.Varint.decodeEncodeSuffix, h, maxMsg]
+    decodeMsg? (Varint.encode v ++ payload) = .error .malformed := by
+  simp [decodeMsg?, splitFrame, Varint.decodeEncodeSuffix, h, maxMsg]
 
 /-- A body whose last byte is not the newline is malformed. -/
-theorem decodeMsgNoNewline {v : Mock.Varint.UVarint} {payload : List Nat}
+theorem decodeMsgNoNewline {v : Varint.UVarint} {payload : List Nat}
     (hv0 : 0 < v.val) (hcap : v.val ≤ maxMsg) (hlen : payload.length = v.val)
     (hlast : payload.getLast? ≠ some 10) :
-    decodeMsg? (Mock.Varint.encode v ++ payload) = .error .malformed := by
+    decodeMsg? (Varint.encode v ++ payload) = .error .malformed := by
   have hnone : textOf? (List.take v.val payload) = none := by
     rw [← hlen, List.take_length]
     exact textOf?None hlast
   unfold decodeMsg? splitFrame
-  rw [Mock.Varint.decodeEncodeSuffix]
+  rw [Varint.decodeEncodeSuffix]
   have h1 : ¬ maxMsg < v.val := by omega
   have h2 : ¬ v.val = 0 := by omega
   have h3 : ¬ payload.length < v.val := by omega
@@ -266,8 +273,8 @@ theorem decodeMsgNoNewline {v : Mock.Varint.UVarint} {payload : List Nat}
 /-- The framing budget: a message frame spans its payload plus at
 most nine prefix bytes. -/
 theorem encodeMsgLength (m : Msg) :
-    (encodeMsg m).length ≤ maxMsg + Mock.Varint.maxBytes := by
-  have h1 := Mock.Varint.encodeLengthBound (Mock.Varint.boundedVarint (payloadOf m.text).length)
+    (encodeMsg m).length ≤ maxMsg + Varint.maxBytes := by
+  have h1 := Varint.lengthEncodeLe (boundedVarint (payloadOf m.text).length)
   have h2 : (payloadOf m.text).length ≤ maxMsg := by rw [payloadOfLength]; exact m.fits
   simp only [encodeMsg, encodeText, List.length_append]
   omega
@@ -286,7 +293,7 @@ def lsBody (ids : List Mock.Core.ProtocolId) : List Nat := lsEntries ids ++ [10]
 /-- The full `ls` reply: the body wrapped in one uvarint length
 prefix, exactly like a message. -/
 def encodeLs (ids : List Mock.Core.ProtocolId) : List Nat :=
-  Mock.Varint.encode (Mock.Varint.boundedVarint (lsBody ids).length) ++ lsBody ids
+  Varint.encode (boundedVarint (lsBody ids).length) ++ lsBody ids
 
 /-- Walk the entries of one complete `ls` body. The fuel counts
 entries; the caller passes the body's byte length, which is at least
@@ -367,13 +374,13 @@ entries, so no cleanliness hypothesis is needed. -/
 theorem decodeLsEncodeLs (ids : List Mock.Core.ProtocolId)
     (hbody : (lsBody ids).length ≤ maxMsg) :
     decodeLs? (encodeLs ids) = .ok (ids, []) := by
-  have hlim : (lsBody ids).length < Mock.Varint.limit := by
-    unfold Mock.Varint.limit maxMsg at *; omega
-  have hb : (Mock.Varint.boundedVarint (lsBody ids).length).val = (lsBody ids).length := by
-    simp [Mock.Varint.boundedVarint, Nat.mod_eq_of_lt hlim]
+  have hlim : (lsBody ids).length < Varint.limit := by
+    unfold Varint.limit Varint.maxBytes maxMsg at *; omega
+  have hb : (boundedVarint (lsBody ids).length).val = (lsBody ids).length := by
+    simp [boundedVarint, Nat.mod_eq_of_lt hlim]
   have hl := lsEntriesLength ids
   unfold decodeLs? encodeLs splitFrame
-  rw [← List.append_nil (lsBody ids), Mock.Varint.decodeEncodeSuffix]
+  rw [← List.append_nil (lsBody ids), Varint.decodeEncodeSuffix]
   simp only [hb, List.append_nil]
   have h1 : ¬ maxMsg < (lsBody ids).length := by omega
   have h2 : ¬ (lsBody ids).length = 0 := by simp [lsBody]
@@ -385,12 +392,12 @@ theorem decodeLsEncodeLs (ids : List Mock.Core.ProtocolId)
 /-- A frame that splits back is exactly the prefix plus body plus
 remainder. -/
 theorem splitFrameInv {bs body rest : List Nat} (h : splitFrame bs = .ok (body, rest)) :
-    Mock.Varint.encode (Mock.Varint.boundedVarint body.length) ++ body ++ rest = bs := by
+    Varint.encode (boundedVarint body.length) ++ body ++ rest = bs := by
   unfold splitFrame at h
   split at h
   · simp at h
   · rename_i v r0 hdec
-    have hbs := Mock.Varint.encodeDecode bs v r0 hdec
+    have hbs := Varint.encodeDecode hdec
     split at h
     · simp at h
     split at h
@@ -401,8 +408,8 @@ theorem splitFrameInv {bs body rest : List Nat} (h : splitFrame bs = .ok (body, 
     simp only [Except.ok.injEq, Prod.mk.injEq] at h
     obtain ⟨rfl, rfl⟩ := h
     have hl : (r0.take v.val).length = v.val := by simp; omega
-    have hv : Mock.Varint.boundedVarint (r0.take v.val).length = v := by
-      cases v; simp_all [Mock.Varint.boundedVarint, Nat.mod_eq_of_lt]
+    have hv : boundedVarint (r0.take v.val).length = v := by
+      cases v; simp_all [boundedVarint, Nat.mod_eq_of_lt]
     rw [hv, List.append_assoc, List.take_append_drop]
     exact hbs.symm
 

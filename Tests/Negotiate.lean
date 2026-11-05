@@ -1,5 +1,6 @@
 import Tests.Support
 import Libp2p.Negotiate
+import Varint
 import Bytes
 
 /-!
@@ -88,23 +89,23 @@ def run (r : Runner) : IO Unit := do
 
   /- Model-level strictness. -/
   r.check "mss decode zero length malformed"
-    (failsWith DecodeError.malformed (decodeMsg? (Mock.Varint.encode (Mock.Varint.boundedVarint 0) ++ [10])))
+    (failsWith DecodeError.malformed (decodeMsg? (Varint.encode (boundedVarint 0) ++ [10])))
   r.check "mss decode no trailing newline malformed"
-    (failsWith DecodeError.malformed (decodeMsg? (Mock.Varint.encode (Mock.Varint.boundedVarint 2) ++ [110, 97])))
+    (failsWith DecodeError.malformed (decodeMsg? (Varint.encode (boundedVarint 2) ++ [110, 97])))
   r.check "mss decode bad UTF-8 malformed"
-    (failsWith DecodeError.malformed (decodeMsg? (Mock.Varint.encode (Mock.Varint.boundedVarint 2) ++ [195, 10])))
+    (failsWith DecodeError.malformed (decodeMsg? (Varint.encode (boundedVarint 2) ++ [195, 10])))
   r.check "mss decode overlong varint malformed"
     (failsWith DecodeError.malformed (decodeMsg? (List.replicate 12 255)))
   r.check "mss decode short varint truncated"
     (failsWith DecodeError.truncated (decodeMsg? [128]))
   r.check "mss decode short payload truncated"
-    (failsWith DecodeError.truncated (decodeMsg? (Mock.Varint.encode (Mock.Varint.boundedVarint 3) ++ [110, 97])))
+    (failsWith DecodeError.truncated (decodeMsg? (Varint.encode (boundedVarint 3) ++ [110, 97])))
   r.check "mss decode empty input truncated"
     (failsWith DecodeError.truncated (decodeMsg? []))
   r.check "mss decode cap malformed"
-    (failsWith DecodeError.malformed (decodeMsg? (Mock.Varint.encode (Mock.Varint.boundedVarint (maxMsg + 1)) ++ [])))
+    (failsWith DecodeError.malformed (decodeMsg? (Varint.encode (boundedVarint (maxMsg + 1)) ++ [])))
   r.check "mss decode non-byte model value malformed"
-    (failsWith DecodeError.malformed (decodeMsg? (Mock.Varint.encode (Mock.Varint.boundedVarint 2) ++ [300, 10])))
+    (failsWith DecodeError.malformed (decodeMsg? (Varint.encode (boundedVarint 2) ++ [300, 10])))
   let mna ← msgOf "na"
   r.check "mss decode suffix"
     (succeedsWith (mna, [7, 8]) (decodeMsg? (encodeMsg mna ++ [7, 8])))
@@ -138,7 +139,7 @@ def run (r : Runner) : IO Unit := do
   let ids : List Mock.Core.ProtocolId := protos.map fun s => ⟨s⟩
   r.check "mss ls body encode" (lsBody ids == bodyBytes)
   r.check "mss ls reply encode"
-    (encodeLs ids == Mock.Varint.encode (Mock.Varint.boundedVarint bodyBytes.length) ++ bodyBytes)
+    (encodeLs ids == Varint.encode (boundedVarint bodyBytes.length) ++ bodyBytes)
   r.check "mss ls reply decode" (succeedsWith (ids, []) (decodeLs? (encodeLs ids)))
 
   /- The go traces. -/
@@ -226,7 +227,7 @@ def run (r : Runner) : IO Unit := do
 
   r.check "mss step hostile frame errors"
     (failsWith (Error.decode .malformed)
-      (step sNeg (.bytes (Mock.Varint.encode (Mock.Varint.boundedVarint (maxMsg + 1)) ++ []))))
+      (step sNeg (.bytes (Varint.encode (boundedVarint (maxMsg + 1)) ++ []))))
 
   let sBuf : State := { role := .responder, supported := [], proposals := [], buffer := [], phase := .negotiating }
   match step sBuf (.bytes [128]) with
@@ -253,6 +254,6 @@ def run (r : Runner) : IO Unit := do
   r.check "mss generic round-trip harness" (Bytes.checkRoundTrips samples == true)
 
   r.skip "mss generic model pin"
-    "needs the ByteArray adapter, a stretch item this pull request defers; the model decoder is the production path today"
+    "needs the ByteArray adapter, which is not built; the suite runs the model decoder, which is the production path"
 
 end Tests.Negotiate

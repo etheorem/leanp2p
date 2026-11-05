@@ -8,5 +8,6 @@ import Libp2p.Negotiate.Upgrade
 
 The negotiate subpackage: multistream-select 1.0.0 and the upgrader
 (ARCHITECTURE §4.9). One import line per public submodule. The root
-does not import the Mock modules.
+names no Mock module directly. Its submodules still expose `Mock.Core`
+and `Mock.Identity` until W5.1 and W5.2 land.
 -/
