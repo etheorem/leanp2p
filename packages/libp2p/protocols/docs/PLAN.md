@@ -60,8 +60,8 @@ in the codec group wrapping upstream `google/snappy`.
   the load check.
 - The ping initiator rejects a wrong length: the spike's `Ping.ping`
   sends 32 bytes, awaits the echo, and fails on any other size. A
-  partial payload at EOF is a protocol error, a recorded delta from the
-  spike's responder, which closes silently (§5.2).
+  stream that ends before one whole payload arrives is a protocol error
+  (§5.2).
 - The suite passes under `+RTS -N1`.
 
 ## Test milestones (unit 2)

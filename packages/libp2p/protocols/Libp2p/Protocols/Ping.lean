@@ -1,6 +1,7 @@
 import Bytes
 import Conc
-import Streams
+import Streams.Error
+import Streams.Stream
 import Libp2p.Protocols.Mock.Core
 import Libp2p.Protocols.Constants
 
@@ -12,14 +13,13 @@ size, and the echo check. The IO half: the echo handler and the
 initiator, which share the pure `splitPayloads` and its theorems.
 
 Per `vendor/specs/ping/ping.md`: the initiator sends 32 random
-bytes, and the responder echoes them. A payload of another size, or
-an echo that differs from the sent payload, is a protocol error.
+bytes, and the responder echoes them. In this package, the initiator
+treats an echo of another size or other bytes as a protocol error.
 
 The private echo loop `echoLoop` and the initiator's `awaitEcho` are
 `partial def`s: the peer may stay silent, and no measure shows that a
-read returns. A partial payload at the end of the stream is
-`.truncated`, a recorded delta from the spike's responder, which
-closes silently.
+read returns. A stream that ends before one whole payload arrives is
+`.truncated`.
 -/
 
 set_option autoImplicit false
@@ -37,8 +37,7 @@ def payloadSize : Nat := Constants.pingSize
 inductive Error where
   | wrongSize (got : Nat)
   | mismatch
-  /-- The stream ended with a partial payload, a recorded delta from
-  the spike's responder. -/
+  /-- The stream ended before one whole payload arrived. -/
   | truncated
   /-- The stream returned an error. -/
   | stream (e : Streams.Error)

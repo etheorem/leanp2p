@@ -1,9 +1,11 @@
 import Proto
 import Bytes
 import Conc
-import Streams
+import Streams.Error
+import Streams.Framing
+import Streams.Stream
+import Multiformats.Multiaddr.Binary
 import Libp2p.Protocols.Mock.Identity
-import Libp2p.Protocols.Mock.Multiaddr
 import Libp2p.Protocols.Mock.Host
 import Libp2p.Protocols.Constants
 
@@ -11,9 +13,9 @@ import Libp2p.Protocols.Constants
 # Identify
 
 The pure half of `/ipfs/id/1.0.0`: the `Identify` message with its
-`ProtoMessage` instance, the strict field table, the validate, and the
-table theorems. The IO half: the responder, the client, the push
-handler, and the theorems on `clientCore`.
+`ProtoMessage` instance, the strict field table, the validate, the
+table theorems, and `clientCore` with its theorems. The IO half: the
+responder, the client, and the push handler.
 
 The wire shape comes from go-libp2p v0.50.0 `identify.pb.go`: fields
 1, 2, 3, 4, 5, 6, and 8. Field 8 is the signed peer record. The emit
@@ -25,14 +27,12 @@ wrong wire type, or a present string field with invalid UTF-8, is
 permissive: entries of another wire type are skipped, and invalid
 UTF-8 entries are dropped, as the Proto accessors already do.
 
-The strings read back through the real `Bytes.toString?`. `Pb.getStr?`
-runs the opaque mock of `Pb.Mock.Bytes`, which no theorem can relate to
-`Bytes.ofString`.
+The strings read back through `Bytes.toString?`.
 
 The private read loop `readFrameFrom` is a `partial def`: a silent
 peer never ends the loop, and the deadline of `client` or `push` ends
 it. `client` and `push` read one frame per stream and drop the bytes
-after it. Go merges chunked identify messages, a recorded delta.
+after it. Go merges chunked identify messages; this client reads one.
 The read rejects a zero-length frame, the spike's rule.
 -/
 
@@ -56,7 +56,7 @@ structure Identify where
 
 namespace Identify
 
-open Mock.Identity Mock.Multiaddr
+open Mock.Identity
 
 /-- The identify protocol id. -/
 def protocolId : Mock.Core.ProtocolId := Constants.identifyId
@@ -64,9 +64,9 @@ def protocolId : Mock.Core.ProtocolId := Constants.identifyId
 /-- The identify push protocol id. -/
 def pushId : Mock.Core.ProtocolId := Constants.identifyPushId
 
-/-- The wire view: one entry per present field, in the ascending
-order 1, 2, 3, 4, 5, 6, 8. Strings go to bytes with the real
-`Bytes` package. -/
+/-- The wire view: one entry per present singular field and per
+element of a repeated field, in the ascending order 1, 2, 3, 4, 5, 6,
+8. Strings go to bytes with the real `Bytes` package. -/
 def entries (m : Identify) : List Pb.Entry :=
   m.publicKey.toList.map (fun b => (1, Pb.Value.bytes b))
   ++ m.listenAddrs.map (fun b => (2, Pb.Value.bytes b))
@@ -204,18 +204,26 @@ inductive Error where
   | stream (e : Streams.Error)
   deriving DecidableEq, BEq, Repr
 
+/-- A binary address is valid exactly when the real Multiformats codec
+decodes it. The decoder accepts the empty address; a truncated or
+unknown component fails. -/
+def validAddress (bytes : List Nat) : Bool :=
+  (Multiformats.Multiaddr.ofBytes? bytes).isOk
+
 /-- The address checks: every listening address and the observed
-address, when present, must be valid bytes. -/
+address, when present, must decode as a multiaddr. -/
 private def checkAddrs (m : Identify) (k : Mock.Identity.PubKey) :
     Except Error (Identify × Mock.Identity.PeerId) :=
-  if ∀ a ∈ m.listenAddrs, validBytes a then
-    if ∀ a ∈ m.observedAddr.toList, validBytes a then
+  if ∀ a ∈ m.listenAddrs, validAddress a then
+    if ∀ a ∈ m.observedAddr.toList, validAddress a then
       .ok (m, peerIdOfPubKey k)
     else .error .badAddress
   else .error .badAddress
 
-/-- Validate one received response: the derived peer id must match
-the expected id, and the size must be at most the cap. -/
+/-- Validate one received response: the size cap, the decode, the
+presence and parse of `publicKey`, the derived id when the caller
+supplies one, and every listen and observed address through
+`Multiformats.Multiaddr.ofBytes?`. -/
 def validate (payload : List Nat) (expected : Option Mock.Identity.PeerId) :
     Except Error (Identify × Mock.Identity.PeerId) :=
   if Constants.identifyCap < payload.length then .error .overCap
@@ -239,12 +247,12 @@ are all valid. -/
 private theorem checkAddrsSound (m : Identify) (k : Mock.Identity.PubKey)
     (m' : Identify) (pid : Mock.Identity.PeerId)
     (h : checkAddrs m k = .ok (m', pid)) :
-    (∀ a ∈ m.listenAddrs, validBytes a) ∧
-      (∀ a ∈ m.observedAddr.toList, validBytes a) ∧
+    (∀ a ∈ m.listenAddrs, validAddress a) ∧
+      (∀ a ∈ m.observedAddr.toList, validAddress a) ∧
       m' = m ∧ pid = peerIdOfPubKey k := by
   unfold checkAddrs at h
-  by_cases ha : ∀ a ∈ m.listenAddrs, validBytes a
-  · by_cases ho : ∀ a ∈ m.observedAddr.toList, validBytes a
+  by_cases ha : ∀ a ∈ m.listenAddrs, validAddress a
+  · by_cases ho : ∀ a ∈ m.observedAddr.toList, validAddress a
     · rw [ite_eq_left ha, ite_eq_left ho] at h
       simp only [Except.ok.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl⟩ := h
@@ -276,8 +284,8 @@ theorem validateAccepts (payload : List Nat) (m : Identify) (kb : List Nat)
     (hpub : m.publicKey = some kb)
     (hun : Mock.Identity.unmarshalPubKey? kb = some k)
     (hderive : ∀ e, expected = some e → Mock.Identity.peerIdOfPubKey k = e)
-    (haddrs : ∀ a ∈ m.listenAddrs, validBytes a)
-    (hobs : ∀ a ∈ m.observedAddr.toList, validBytes a) :
+    (haddrs : ∀ a ∈ m.listenAddrs, validAddress a)
+    (hobs : ∀ a ∈ m.observedAddr.toList, validAddress a) :
     validate payload expected = .ok (m, peerIdOfPubKey k) := by
   unfold validate
   rw [ite_eq_right (by omega)]
@@ -319,8 +327,8 @@ theorem validateSound (payload : List Nat) (expected : Option Mock.Identity.Peer
       ∃ kb k, m.publicKey = some kb ∧ Mock.Identity.unmarshalPubKey? kb = some k ∧
         pid = Mock.Identity.peerIdOfPubKey k ∧
         (∀ e, expected = some e → Mock.Identity.peerIdOfPubKey k = e) ∧
-        (∀ a ∈ m.listenAddrs, validBytes a) ∧
-        (∀ a ∈ m.observedAddr.toList, validBytes a) := by
+        (∀ a ∈ m.listenAddrs, validAddress a) ∧
+        (∀ a ∈ m.observedAddr.toList, validAddress a) := by
   unfold validate at h
   by_cases hcap : Constants.identifyCap < payload.length
   · rw [ite_eq_left hcap] at h
@@ -412,8 +420,8 @@ path runs. -/
   over `Constants.identifyCap`, or a payload value of 256 or more.
   `Frame.decode?` checks the cap before it takes the body.
 
-`clientCore` and `readFrameFrom` both call it, so the theorems and the
-IO path share every wire decision. -/
+`clientCore` and `readFrameFrom` both call it. Only `readFrameFrom`
+decides the end of the stream, and no theorem covers that decision. -/
 private def decodeFrame? (bytes : List Nat) :
     Except Error (Option (List Nat × List Nat)) :=
   match Streams.Framing.Frame.decode? .uvarint Constants.identifyCap bytes with
@@ -460,8 +468,8 @@ private def readFrame (s : Streams.Stream) :
 /-- `withinDeadline` needs a `BaseIO` expiry. The stream's `close` is
 the write half-close, so it does not wake a parked `read`. `reset` stops
 both directions, so it wakes the read. The body starts the reset with
-`asTask`, as `Conc.Wrap.spawn` does. No owner joins this task, and the
-code ignores its result. -/
+`asTask`, as `Conc.Wrap.spawn` does. Nothing joins this task and the
+code ignores its result, an exception to §4.1 rule 2. -/
 private def resetQuietly (s : Streams.Stream) : BaseIO Unit :=
   discard (s.reset.asTask.toBaseIO)
 

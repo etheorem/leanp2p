@@ -11,8 +11,8 @@ leaves the signatures open. This mock fixes minimal signatures.
 replaces this module at integration.
 
 The stand-in bodies are executable, so the suite can drive both outcomes
-of `unmarshalPubKey?`. The theorems of `Identify` stay true for any
-replacement, because they are conditional on these opaque results.
+of `unmarshalPubKey?`. The theorems take these results as premises, so a
+replacement with the same signatures keeps them.
 -/
 
 set_option autoImplicit false

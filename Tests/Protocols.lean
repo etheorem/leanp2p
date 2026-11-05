@@ -3,10 +3,11 @@ import Proto
 import Bytes
 import Varint
 import Conc
-import Streams
+import Streams.Error
+import Streams.Framing
+import Streams.Stream
 import Libp2p.Protocols
 import Libp2p.Protocols.Mock.Identity
-import Libp2p.Protocols.Mock.Multiaddr
 import Libp2p.Protocols.Mock.Core
 import Libp2p.Protocols.Mock.Host
 
@@ -17,8 +18,9 @@ Mirrors `vendor/specs/ping/ping.md` (32-byte echo, protocol id
 `/ipfs/ping/1.0.0`) and the captured go-libp2p Identify protobuf
 (`identify-go.json`). The suite replays the vector and drives the
 pure `Identify.validate` and `Ping.checkEcho` checks. The mock key
-and multiaddr stand-ins run their executable bodies here, so every
-mock outcome of the validate appears in a check.
+and host stand-ins run their executable bodies here, and the address
+checks run the real Multiformats decoder, so every validate outcome
+appears in a check.
 
 The exchange cases cover the identify client against the responder
 handler, the push handler against the in-memory peerstore double, the
@@ -34,7 +36,6 @@ namespace Tests.Protocols
 
 open Libp2p.Protocols
 open Libp2p.Protocols.Mock.Identity
-open Libp2p.Protocols.Mock.Multiaddr
 
 /-- The model decode over the byte list. -/
 private def decodeModel (bs : List Nat) : Except Pb.Error (Identify × List Nat) :=
@@ -315,7 +316,7 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
       (failsWith (Ping.Error.wrongSize 33) res)
     tc.close
 
-  -- ping: an echo over one payload, split across chunks, is rejected
+  -- ping: an echo whose last read crosses 32 bytes is rejected
   do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
@@ -453,8 +454,8 @@ def run (r : Runner) : IO Unit := do
                 (m.protocols == wantProtocols)
               r.check "identify vector agentVersion equals JSON agentVersion"
                 (m.agentVersion == some wantAgent)
-              -- the binary form of /ip4/127.0.0.1/tcp/35371; the real
-              -- Multiaddr text codec is unmerged
+              -- the binary form of /ip4/127.0.0.1/tcp/35371; the wire
+              -- carries bytes, not text
               r.check "identify vector listenAddrs has one entry, the binary form of JSON listenAddrs[0]"
                 (m.listenAddrs == [[4, 127, 0, 0, 1, 6, 138, 43]])
               -- the full captured bytes, prefix and payload, through `clientCore`
@@ -469,7 +470,8 @@ def run (r : Runner) : IO Unit := do
               r.skip "identify vector peer id derivation skipped"
                 "the peer id derivation is an opaque mock; identity #11 replaces it"
 
-  -- validate: rejection and acceptance, through the mock bodies
+  -- validate: rejection and acceptance, through the mock key and the
+  -- real address decoder
   r.check "identify over-cap payload rejected before decode"
     (failsWith Identify.Error.overCap
       (Identify.validate (List.replicate 65537 0) none))
@@ -486,10 +488,13 @@ def run (r : Runner) : IO Unit := do
   r.check "identify key mismatch rejected"
     (failsWith Identify.Error.keyMismatch
       (Identify.validate (msgPayload mismatchMsg) (some otherId)))
-  let badListen := { emptyIdentify with publicKey := some [1, 2], listenAddrs := [[]] }
+  -- `[4]` is an ip4 tag with no address bytes: the real decoder
+  -- rejects it. The empty list is a valid empty address, so it cannot
+  -- stand in for a bad address.
+  let badListen := { emptyIdentify with publicKey := some [1, 2], listenAddrs := [[4]] }
   r.check "identify invalid listen address rejected"
     (failsWith Identify.Error.badAddress (Identify.validate (msgPayload badListen) none))
-  let badObs := { emptyIdentify with publicKey := some [1, 2], observedAddr := some [] }
+  let badObs := { emptyIdentify with publicKey := some [1, 2], observedAddr := some [4] }
   r.check "identify invalid observed address rejected"
     (failsWith Identify.Error.badAddress (Identify.validate (msgPayload badObs) none))
   -- a continuation byte with no terminator: truncated framing
