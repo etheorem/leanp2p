@@ -3556,6 +3556,139 @@ private def runHalfClose (r : Runner) : Async Unit := do
   | .ok (), .error e => throw e
   | .ok (), .ok () => pure ()
 
+/-- Local reset sends one reset after stream 1 has a buffered byte.
+A second reset draws no frame. Data for the retired id draws no outbound frame. -/
+private def runLocalReset (r : Runner) : Async Unit := do
+  let pair ← ends 55
+  let mut opened : Option MuxSession := none
+  let outcome : Except IO.Error Unit ←
+    try
+      let mut opensOk := false
+      let mut buffered := false
+      let mut wireOk := false
+      let mut readOk := false
+      let mut writeReset := false
+      let mut silenceOk := false
+      let mut siblingRead := false
+      let mut retiredSilent := false
+      let mut healthy := false
+      match ← (test.open .initiator pair.dialer .empty).run with
+      | .error _ => pure ()
+      | .ok sess =>
+        opened := some sess
+        match ← (sess.openStream testId).run with
+        | .error _ => pure ()
+        | .ok stream1 =>
+          match ← (sess.openStream testId).run with
+          | .error _ => pure ()
+          | .ok stream3 =>
+            let (h1, rest1) ← takeHeader pair.peer .empty
+            let (h2, rest2) ← takeHeader pair.peer rest1
+            opensOk :=
+              h1.kind == Kind.open && h1.streamId == 1 && h1.length == 0 &&
+                h2.kind == Kind.open && h2.streamId == 3 && h2.length == 0 &&
+                rest2.isEmpty
+            if opensOk then
+              -- Stream 3's byte follows stream 1's byte in one write.
+              -- Its read is the barrier that stream 1's byte is queued.
+              pair.peer.write (dataFrame 1 5 ++ dataFrame 3 8)
+              buffered :=
+                match ← stream3.read with
+                | .ok (some bytes) => bytes == ⟨#[8]⟩
+                | _ => false
+            if opensOk && buffered then
+              stream1.reset
+              let (resetHeader, resetRest) ← takeHeader pair.peer .empty
+              wireOk :=
+                resetHeader.kind == Kind.reset && resetHeader.streamId == 1 &&
+                  resetHeader.length == 0 && resetRest.isEmpty
+            if opensOk && buffered && wireOk then
+              let dataRead ← stream1.read
+              let resetRead ← stream1.read
+              let eofRead ← stream1.read
+              readOk :=
+                match dataRead, resetRead, eofRead with
+                | .ok (some bytes), .error .reset, .ok none => bytes == ⟨#[5]⟩
+                | _, _, _ => false
+            if opensOk && buffered && wireOk && readOk then
+              match ← stream1.write ⟨#[7]⟩ with
+              | .error .reset => writeReset := true
+              | _ => pure ()
+            if opensOk && buffered && wireOk && readOk && writeReset then
+              stream1.reset
+              match ← stream3.write ⟨#[9]⟩ with
+              | .error _ => pure ()
+              | .ok () =>
+                let (frameOk, _) ← peerReadsData pair.peer .empty 3 9
+                silenceOk := frameOk
+            if opensOk && buffered && wireOk && readOk && writeReset && silenceOk then
+              pair.peer.write (dataFrame 1 6 ++ dataFrame 3 4)
+              siblingRead :=
+                match ← stream3.read with
+                | .ok (some bytes) => bytes == ⟨#[4]⟩
+                | _ => false
+            if opensOk && buffered && wireOk && readOk && writeReset &&
+                silenceOk && siblingRead then
+              match ← stream3.write ⟨#[2]⟩ with
+              | .error _ => pure ()
+              | .ok () =>
+                let (frameOk, _) ← peerReadsData pair.peer .empty 3 2
+                retiredSilent := frameOk
+        let finished :=
+          opensOk && buffered && wireOk && readOk && writeReset &&
+            silenceOk && siblingRead && retiredSilent
+        sess.close
+        match ← sess.join with
+        | .ok () => healthy := finished
+        | .error _ => pure ()
+      r.check "the initiator opens streams 1 and 3" opensOk
+      r.check "stream 3 reads the byte sent after stream 1 data" buffered
+      r.check "the peer reads one zero-length reset for stream 1" wireOk
+      r.check "stream 1 reads its buffered byte, then reset, then eof" readOk
+      r.check "a write on stream 1 returns reset" writeReset
+      r.check "the next frame after a second reset is stream 3 data" silenceOk
+      r.check "stream 3 reads its byte after data for the retired id" siblingRead
+      r.check "the next frame after retired data is stream 3 data" retiredSilent
+      r.check "a local reset leaves the session healthy" healthy
+      pure (.ok ())
+    catch e =>
+      pure (.error e)
+  match outcome with
+  | .error _ =>
+    match opened with
+    | some sess =>
+      try
+        sess.close
+      catch _ =>
+        pure ()
+      try
+        discard <| sess.join
+      catch _ =>
+        pure ()
+    | none =>
+      try
+        pair.dialer.close
+      catch _ =>
+        pure ()
+  | .ok () =>
+    match opened with
+    | some _ => pure ()
+    | none =>
+      try
+        pair.dialer.close
+      catch _ =>
+        pure ()
+  let peerClosed : Except IO.Error Unit ←
+    try
+      pair.peer.close
+      pure (.ok ())
+    catch e =>
+      pure (.error e)
+  match outcome, peerClosed with
+  | .error e, _ => throw e
+  | .ok (), .error e => throw e
+  | .ok (), .ok () => pure ()
+
 private def checks (r : Runner) : Async Unit := do
   r.check "Mux.test.id is Mux.testId" (decide (test.id = testId))
   r.check "the test protocol id is /leanp2p/test-mux/1.0.0"
@@ -3572,6 +3705,7 @@ private def checks (r : Runner) : Async Unit := do
   runAcceptBacklog r
   runPeerReset r
   runHalfClose r
+  runLocalReset r
 
 /-- The public `Mux.test` boundary over the sim connection. -/
 def run (r : Runner) : IO Unit := do
@@ -3602,6 +3736,11 @@ def runReset (r : Runner) : IO Unit := do
 def runFin (r : Runner) : IO Unit := do
   r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
   Async.run (runHalfClose r)
+
+/-- The public local-reset path through `Mux.test.open`. -/
+def runLocal (r : Runner) : IO Unit := do
+  r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
+  Async.run (runLocalReset r)
 
 end Tests.Mux.Public
 
