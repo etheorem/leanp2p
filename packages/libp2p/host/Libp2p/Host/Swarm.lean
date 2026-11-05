@@ -218,9 +218,14 @@ def splitPeer (a : Multiaddr) : Except Error (Multiaddr × Option PeerId) :=
   | some c =>
     if c.proto = .«p2p» then
       -- The multiaddr check already accepted the value as a peer id
-      -- multihash, so both lookups succeed on every valid address.
-      match (PeerId.ofBytes? c.value).toOption, (a.decapsulateCode (Protocol.toCode .«p2p»)).toOption with
-      | some p, some t => .ok (t, some p)
+      -- multihash, so both lookups succeed on every valid address. The
+      -- value is in the `List Nat` byte model, and `PeerId.ofBytes?`
+      -- reads a `ByteArray`.
+      match (PeerId.ofBytes? (Bytes.ofNatList c.value)).toOption,
+        (a.decapsulateCode (Protocol.toCode .«p2p»)).toOption with
+      -- An empty rest is a valid address (root §4.4: it prints as `/`),
+      -- and it names no transport.
+      | some p, some t => if t.components.isEmpty then .error (.noTransport a) else .ok (t, some p)
       | _, _ => .error (.noTransport a)
     else .ok (a, none)
   | none => .ok (a, none)
