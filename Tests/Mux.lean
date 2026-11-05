@@ -2953,6 +2953,45 @@ private def runReaderFault (r : Runner) : Async Unit := do
       (second == boom.toString && second == first)
     pair.peer.close
 
+/-- A kind-zero peer header through `Mux.test.open`.
+Both joins return the same protocol error. -/
+private def runMalformed (r : Runner) : Async Unit := do
+  let pair ← ends 51
+  match ← (test.open .initiator pair.dialer .empty).run with
+  | .error _ =>
+    pair.dialer.close
+    pair.peer.close
+    r.check "a public malformed frame returns a protocol error" false
+    r.check "a second public join returns the same protocol error" false
+  | .ok sess =>
+    let observed : Except IO.Error
+        (Except Mock.Core.Error Unit × Except Mock.Core.Error Unit) ←
+      try
+        pair.peer.write ⟨#[0, 0, 0, 0, 1, 0, 0, 0, 0]⟩
+        pure (.ok (← sess.join, ← sess.join))
+      catch e =>
+        pure (.error e)
+    pair.peer.close
+    match observed with
+    | .error e => throw e
+    | .ok (first, second) =>
+      match first, second with
+      | .error e1, .error e2 =>
+        let firstProtocol :=
+          match e1 with
+          | .protocol _ => true
+          | _ => false
+        let secondProtocol :=
+          match e2 with
+          | .protocol _ => true
+          | _ => false
+        r.check "a public malformed frame returns a protocol error" firstProtocol
+        r.check "a second public join returns the same protocol error"
+          (secondProtocol && decide (e1 = e2))
+      | _, _ =>
+        r.check "a public malformed frame returns a protocol error" false
+        r.check "a second public join returns the same protocol error" false
+
 private def checks (r : Runner) : Async Unit := do
   r.check "Mux.test.id is Mux.testId" (decide (test.id = testId))
   r.check "the test protocol id is /leanp2p/test-mux/1.0.0"
@@ -2965,6 +3004,7 @@ private def checks (r : Runner) : Async Unit := do
   runIdRestart r
   runConcurrentOpens r
   runReaderFault r
+  runMalformed r
 
 /-- The public `Mux.test` boundary over the sim connection. -/
 def run (r : Runner) : IO Unit := do
@@ -2975,6 +3015,11 @@ def run (r : Runner) : IO Unit := do
 def runFault (r : Runner) : IO Unit := do
   r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
   Async.run (runReaderFault r)
+
+/-- The public malformed-frame path through `Mux.test.open`. -/
+def runHostile (r : Runner) : IO Unit := do
+  r.section "mux test value" "packages/libp2p/mux/Libp2p/Mux/Test.lean"
+  Async.run (runMalformed r)
 
 end Tests.Mux.Public
 
