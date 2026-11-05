@@ -41,7 +41,7 @@ set_option autoImplicit false
 
 namespace Streams.Sim
 
-open Conc Streams.Mock.Multiformats
+open Conc Multiformats
 
 /-- The state of one sim network. -/
 private structure Net.State where

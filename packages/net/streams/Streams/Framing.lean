@@ -1,5 +1,6 @@
 import Streams.BufReader
-import Streams.Mock.Varint
+import Bytes
+import Varint
 
 /-!
 # `Framing`: length-prefixed frames
@@ -42,19 +43,17 @@ A connection that ends inside a frame ends the read as `none`, the
 end-of-stream channel of §3.5. A frame over the cap is `malformed`
 before the read takes a payload byte.
 
-## The mocks
-
 `DecodeError`, `Codec`, `LawfulCodec`, and the byte model come from
-`Streams.Mock.Bytes`, and the varint comes from `Streams.Mock.Varint`,
-until W1.2 and W2.1 merge. The proofs use the two axioms of the varint
-mock and nothing from the byte model.
+`base/bytes`, and the varint comes from `codec/varint`. The proofs use
+two theorems of the varint, `decodeEncodeSuffix` and `encodeDecode`,
+and nothing from the byte model.
 -/
 
 set_option autoImplicit false
 
 namespace Streams.Framing
 
-open Conc Streams.Mock.Bytes Streams.Mock
+open Conc Bytes
 
 /-! ## Taking a payload -/
 
@@ -353,10 +352,8 @@ example : decode? .u16be 4 [0, 2, 7, 8, 9] = .ok (⟨[7, 8], by decide, by decid
 example : decode? .u16be 4 [0, 5, 1, 2, 3, 4, 5] = .error .malformed := rfl
 example : decode? .u16be 4 [0] = .error .truncated := rfl
 
--- The varint decoder is `opaque` in the mock, so the kernel cannot
--- reduce a `uvarint` decode. `#guard` runs the compiled body instead.
-#guard decode? .uvarint 4 [3, 1, 2] matches .error .truncated
-#guard decode? .uvarint 4 [5, 1, 2, 3, 4, 5] matches .error .malformed
+example : decode? .uvarint 4 [3, 1, 2] = .error .truncated := rfl
+example : decode? .uvarint 4 [5, 1, 2, 3, 4, 5] = .error .malformed := rfl
 
 end Frame
 
