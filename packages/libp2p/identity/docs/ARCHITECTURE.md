@@ -48,6 +48,13 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   sign over the digest: secp256k1 with BIP-62 low-S, ECDSA P-256, and
   RSA RSASSA-PKCS1-v1_5. Which schemes draw a random nonce is the
   backend's binding table (§3.6).
+- `PrivKey.sign : PrivKey → ByteArray → ExceptT Crypto.CryptoError IO ByteArray`
+  preserves signing errors and carries P-256's random nonce draw. The
+  deterministic schemes lift their pure result into the same surface.
+  `PubKey.verify : PubKey → ByteArray → ByteArray → Bool` stays pure
+  and returns false for malformed inputs, signature mismatches, and
+  backend faults. Both functions pass the original message to the
+  facade, which owns each scheme's hashing.
 - `derivePubKey : PrivKey → Except Crypto.CryptoError PubKey` selects
   `Crypto.ed25519PublicKey`, `Crypto.secp256k1PublicKey`,
   `Crypto.rsaPublicKey`, or `Crypto.p256PublicKey`. Ed25519 passes the
@@ -210,8 +217,8 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   multiaddr for the ENR mapping). The multiformats pair fixes the
   multihash this package validates over. `codec/varint` arrives
   through `codec/proto`.
-- From base, `base/bytes` for the byte model. The package is pure; it
-  spawns no task, so it has no use for `base/conc`.
+- From base, `base/bytes` for the byte model. P-256 signing uses IO
+  for its nonce. The package spawns no task and has no use for `base/conc`.
 - One external Lean dependency, the etheorem monorepo's RLP package
   (`etheorem/etheorem`, LGPL-3.0), for the RLP wrapper, and no other.
   CLAUDE.md's dependency rule records it: the require block,

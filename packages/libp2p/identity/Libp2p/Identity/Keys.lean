@@ -9,6 +9,7 @@ import Crypto
 
 Keys carry the checked Data shape and the protobuf encoding bound.
 The instances emit Type, then Data, through the shared wire codec.
+Signing, verification, and public-key derivation use the Crypto facade.
 -/
 
 set_option autoImplicit false
@@ -100,6 +101,38 @@ private theorem ed25519BackendDataSize (key : PrivKey) (h : key.keyType = .ed255
   simp [PrivKey.backendData, Marshal.privateBackendData, h,
     ByteArray.size_extract, Nat.min_eq_left enough]
 
+private def PrivKey.ed25519Seed (key : PrivKey) (h : key.keyType = .ed25519) : Crypto.Key32 :=
+  ⟨key.backendData, by
+    simpa only [ed25519KeySize] using ed25519BackendDataSize key h⟩
+
+private def PrivKey.secp256k1Scalar (key : PrivKey) (h : key.keyType = .secp256k1) :
+    Crypto.Key32 :=
+  ⟨key.backendData, by
+    have valid := key.valid.1
+    simpa only [privKeyDataValid, h, secp256k1PrivateSize,
+      PrivKey.backendData, Marshal.privateBackendData] using valid⟩
+
+/-- Sign the original message through the crypto facade, which owns hashing.
+P-256 draws a random nonce, so the common dispatch carries IO. The other
+schemes lift their deterministic result into the same error-preserving surface.
+-/
+def PrivKey.sign (key : PrivKey) (msg : ByteArray) : ExceptT Crypto.CryptoError IO ByteArray :=
+  match h : key.keyType with
+  | .ed25519 => ExceptT.mk (pure (Crypto.ed25519Sign (key.ed25519Seed h) msg))
+  | .secp256k1 => ExceptT.mk (pure (Crypto.secp256k1Sign (key.secp256k1Scalar h) msg))
+  | .rsa => ExceptT.mk (pure (Crypto.rsaSign key.backendData msg))
+  | .ecdsa => Crypto.p256Sign key.backendData msg
+
+/-- Verify through the facade's scheme for this key type. Every verifier is
+deterministic and returns false for malformed inputs or a signature mismatch.
+-/
+def PubKey.verify (key : PubKey) (msg sig : ByteArray) : Bool :=
+  match key.keyType with
+  | .ed25519 => Crypto.ed25519Verify key.backendData msg sig
+  | .secp256k1 => Crypto.secp256k1Verify key.backendData msg sig
+  | .rsa => Crypto.rsaVerify key.backendData msg sig
+  | .ecdsa => Crypto.p256Verify key.backendData msg sig
+
 /-- Derive the public key through the crypto facade for the private key's type.
 The checked private key supplies the seed/scalar size proofs. The returned
 public Data crosses its own checked boundary; an unexpected shape is a fault.
@@ -107,15 +140,9 @@ public Data crosses its own checked boundary; an unexpected shape is a fault.
 def derivePubKey (key : PrivKey) : Except Crypto.CryptoError PubKey := do
   let raw : ByteArray ← match h : key.keyType with
     | .ed25519 =>
-        let seed : Crypto.Key32 := ⟨key.backendData, by
-          simpa only [ed25519KeySize] using ed25519BackendDataSize key h⟩
-        (Crypto.ed25519PublicKey seed).map (·.bytes)
+        (Crypto.ed25519PublicKey (key.ed25519Seed h)).map (·.bytes)
     | .secp256k1 =>
-        let scalar : Crypto.Key32 := ⟨key.backendData, by
-          have valid := key.valid.1
-          simpa only [privKeyDataValid, h, secp256k1PrivateSize,
-            PrivKey.backendData, Marshal.privateBackendData] using valid⟩
-        Crypto.secp256k1PublicKey scalar
+        Crypto.secp256k1PublicKey (key.secp256k1Scalar h)
     | .rsa => Crypto.rsaPublicKey key.backendData
     | .ecdsa => Crypto.p256PublicKey key.backendData
   match PubKey.ofData? key.keyType raw with
