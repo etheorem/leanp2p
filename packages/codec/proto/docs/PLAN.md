@@ -18,19 +18,21 @@ lint is green.
 Unit 0 is done. Unit 1 is the only implementation unit of the
 package.
 
-Unit 1 has an implementation and proofs against isolated dependency
-mocks. The local suite includes the four wire types, boundary values,
-2,048 small fields, ordered duplicates, nested messages, UTF-8 checks,
-malformed framing, and the captured fixtures. It runs the generic mock
-harness on 256 generated messages and compares both decoders on all
-256 single-byte inputs and 4,096 generated buffers. Fixture prefixes
-exercise valid field boundaries and truncated values.
+Unit 1 uses the merged byte and varint implementations. Its proofs
+use the varint theorems directly. The suite includes the four wire
+types, boundary values, 2,048 small fields, ordered duplicates, nested
+messages, UTF-8 checks, malformed framing, and the captured fixtures.
+It runs the shared byte harness on 256 generated messages and compares
+both decoders on all 256 single-byte inputs and 4,096 generated
+buffers. Fixture prefixes exercise valid field boundaries and
+truncated values.
 
-Completion still requires W1.2 and W2.1. Replace the mocks and the
-temporary harness with those dependencies, discharge the listed mock
-axioms, and rerun all gates within twelve hours of the last merge.
-The architecture document lists the four assumptions and the API
-mapping needed at integration.
+Both dependency mocks and their four assumed facts are removed.
+`Bytes.Codec Fields` and `Bytes.LawfulCodec Fields` use the real
+classes. The axiom audit covers the public codec theorems and the
+lossless byte conversion theorem. The integration gates are the full
+build, both test modes, the import lint and the unchanged vector
+corpus.
 
 ## Consumers
 

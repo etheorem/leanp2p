@@ -6,7 +6,7 @@ import Proto.Core
 The encoder converts the proved model's output. The decoder walks the
 ByteArray by position, with separate fixed-width and payload reads. Its
 tests compare that path against the pure model, including error kinds
-and consumed counts. Only varint decoding crosses the W2.1 mock seam.
+and consumed counts. Varint decoding uses the merged W2.1 implementation.
 -/
 
 set_option autoImplicit false
@@ -14,13 +14,18 @@ set_option autoImplicit false
 namespace Pb
 
 /-- The model encoder supplies exactly the wire bytes in field order. -/
-def encodeFieldsB (fs : Fields) : ByteArray := Mock.Bytes.ofNatList (encodeFields fs)
+def encodeFieldsB (fs : Fields) : ByteArray := Bytes.ofNatList (encodeFields fs)
+
+/-- The real byte conversion preserves every entry emitted by the proved model. -/
+theorem encodeFieldsBModel (fs : Fields) :
+    Bytes.toNatList (encodeFieldsB fs) = encodeFields fs :=
+  Bytes.toNatListOfNatListOfLt (encodeFields fs) (encodeFieldsBytes fs)
 
 /-- A budget-sized window avoids copying the remaining message for each varint. -/
 private def readVarintAt (bs : ByteArray) (pos : Nat) :
-    Except Error (Mock.Varint.UVarint × Nat) := do
-  let window := bs.extract pos (min bs.size (pos + Mock.Varint.maxBytes))
-  let (v, used) ← (Mock.Varint.decodeB? window).mapError Error.framing
+    Except Error (Varint.UVarint × Nat) := do
+  let window := bs.extract pos (min bs.size (pos + Varint.maxBytes))
+  let (v, used) ← (Varint.decodeB? window).mapError Error.framing
   .ok (v, pos + used)
 
 /-- Check the length before extracting a fixed-width or variable payload. -/
@@ -37,14 +42,14 @@ private def decodeValueAt (wire : Nat) (bs : ByteArray) (pos : Nat) :
       let (v, next) ← readVarintAt bs pos
       .ok (.varint v.val, next)
   | 1 =>
-      let (bytes, next) ← takeBytesAt bs pos 8
+      let (bytes, next) ← takeBytesAt bs pos fixed64Bytes
       .ok (.fixed64 (leOf bytes), next)
   | 2 =>
       let (count, next) ← readVarintAt bs pos
       let (payload, after) ← takeBytesAt bs next count.val
       .ok (.bytes payload, after)
   | 5 =>
-      let (bytes, next) ← takeBytesAt bs pos 4
+      let (bytes, next) ← takeBytesAt bs pos fixed32Bytes
       .ok (.fixed32 (leOf bytes), next)
   | _ => .error .badWireType
 
