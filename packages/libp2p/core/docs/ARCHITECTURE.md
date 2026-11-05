@@ -18,7 +18,8 @@ removes that coupling (§9, delta 10).
 | `Libp2p/Core.lean` | the root module; one import line per public submodule |
 | `Libp2p/Core/ProtocolId.lean` | the wrapped-string protocol id, with its derived classes (§3.4) |
 | `Libp2p/Core/Error.lean` | `Core.Error`, the coarse error every seam returns (§3.5, §4.9) |
-| `Libp2p/Core/Security.lean` | `Role`, `SecureConn`, and the `SecurityProtocol` seam |
+| `Libp2p/Core/Role.lean` | `Role`, the closed set of the two sides; the security, muxer, and policy modules each import it alone |
+| `Libp2p/Core/Security.lean` | `SecureConn` and the `SecurityProtocol` seam |
 | `Libp2p/Core/Mux.lean` | the `Muxer` seam and `MuxSession` |
 | `Libp2p/Core/Handler.lean` | `StreamHandler`, the callback a served stream reaches |
 | `Libp2p/Core/Policy.lean` | the connection gater, the resource manager, and the address ranker |
@@ -77,10 +78,20 @@ The shapes are §4.9's, refined where this section says so.
   leftover `ByteArray` the handshake over-read. The leftover seeds
   the reader of the next stage (§4.7, §5.6). Lifecycle is part of the
   seam (§3.1): `SecureConn` exposes `close`, over the close of the
-  underlying `Connection`, plus the completion the owner joins. The
-  spike's `SecureConn extends Connection` is the reference form
-  (§10 row 12); whether the type extends or holds the `Connection` is
-  a refinement this package fixes at implementation time.
+  underlying `Connection`, plus the completion the owner joins.
+  `SecureConn extends Connection`, the spike form (§10 row 12). The
+  muxer seam and the negotiation shell take a `Connection`, and
+  `sc.toConnection` hands them the secure surface with no wrapper.
+  - The leftover is ciphertext. §4.7 gives the bytes the handshake
+    over-read to the reader of the secure transport, and the secure
+    `read` delivers them, decrypted, before any connection byte. The
+    field records the hand-over in the type, and no stage above `read`
+    takes it.
+  - `Connection.read` has no protocol channel. A frame that fails
+    authentication tears the connection down, `read` answers `none`
+    after the teardown, and the protocol error reaches the owner
+    through the completion, `join : ExceptT Core.Error Async Unit`
+    (§3.5; the security pair, contract 1).
 - `Muxer` carries `id : ProtocolId` and the field that opens a
   session. The spike split the directions into `MuxChoice.client` and
   `MuxChoice.server`; this package follows the `SecurityProtocol`
@@ -93,14 +104,15 @@ The shapes are §4.9's, refined where this section says so.
   `accept : Async (Option Stream)`, which returns `none` when the
   session closes, so a parked accept wakes and ends, as
   `Listener.accept` in `net/streams` does; `close : IO Unit`; and the
-  completion of the session loop, which the owner joins (§3.1, §4.1).
-  Whether `openStream` carries the protocol hint mplex needs in its
-  NewStream frame is a refinement `libp2p/mux` records.
+  completion of the session loop, `join : ExceptT Core.Error Async
+  Unit`, which the owner joins (§3.1, §4.1). `openStream` takes a
+  `ProtocolId`, as `libp2p/mux` records: mplex writes it into its
+  NewStream frame, and yamux drops it.
 - `StreamHandler` carries `id : ProtocolId` and `handle : Stream →
   ExceptT Core.Error Async Unit`. The host keys its registry by the id
-  (§3.10), and a served stream reaches the callback. Whether a
-  handler failure closes the connection is the host's call, so the
-  exact return form is the seam's to refine with the host pair.
+  (§3.10), and a served stream reaches the callback. The host pair
+  settles the failure rule: a handler failure closes the stream,
+  never the session.
 - The policy hooks are three structures in `Policy.lean`. The gater
   answers allow or deny for an outbound dial and for an inbound
   connection. The resource manager answers whether a new connection
@@ -110,6 +122,29 @@ The shapes are §4.9's, refined where this section says so.
   dialing. §4.9 fixes the three hooks and no signatures, so the
   decision inputs beyond these are the seam's to refine as the host
   lands (W5.6).
+
+**The policy shapes** (fixed by W5.6, as the bullet above leaves them
+to the host). The peer of an inbound connection is unknown until the
+handshake ends, so the gater and the resource manager each decide once
+more there, with the proved peer, as go-libp2p does
+(`ConnectionGater.InterceptSecured`, `vendor/go-libp2p/core/connmgr/gater.go`;
+`ResourceScope.SetPeer`, `vendor/go-libp2p/core/network/rcmgr.go`).
+
+- `ConnectionGater`: `allowDial` (the expected peer and the address,
+  before a dial), `allowInbound` (the two addresses, after an accept),
+  and `allowSecured` (the role, the proved peer, and the two
+  addresses, after the handshake and before the muxer stage). Each
+  answers a `Bool` in `BaseIO`, so a policy has no fault channel.
+- `ResourceManager.openConnection` admits a connection by its role,
+  the expected peer, and the remote address, and answers a
+  `ConnectionScope`, or `none` when it does not fit. The scope names
+  the proved peer (`setPeer`), admits streams and buffered bytes
+  (`reserveStream`, `reserveMemory`, each a `Reservation` with its
+  `release`), and returns every share at its own `release`.
+- `AddressRanker.rank` maps a peer's addresses to a dial schedule, an
+  `AddrDelay` (an address and a delay in milliseconds) each: the shape
+  of go-libp2p's `AddrDelay` and `DialRanker`
+  (`vendor/go-libp2p/core/network/network.go`, lines 212 and 218).
 
 **Test values.** §3.1 gives every seam two values from the start, the
 production value and a test value, and every suite above the
@@ -197,8 +232,10 @@ this package's plan check.
   §4.9 says core depends on `identity`, `net/streams`, and `base/conc`
   and on nothing else. The direct `base/conc` import gives the seams
   `Async`, the one base name that core names. The package writes no
-  direct import of a codec or of `base/bytes`, and `base/bytes` arrives
-  through `net/streams`. If a refinement needs another name, the direct
+  direct import of a codec or of `base/bytes`. `base/bytes` arrives
+  through `net/streams`, and so does `Multiaddr`, the address type of
+  `Connection` and the input of the gater and the ranker. If a
+  refinement needs another name, the direct
   import is recorded here as part of that refinement.
 - No protocol knowledge of any kind: no Noise message, no yamux
   header, no multistream reply. The package is the seam, and the
