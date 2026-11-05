@@ -283,6 +283,29 @@ private def inboundChecks (r : Tests.Runner) : Async Unit := do
   try sw.close catch _ => pure ()
   (f.clock.test.close : BaseIO Unit)
 
+/-- The reviewed core emits no local delivery for publish. These 20 trials
+use a peer RPC immediately after subscribe, so they exercise callback
+registration against a real delivery without changing that core policy. -/
+private def subscribeRace (r : Tests.Runner) : Async Unit := do
+  let sw ← (Switch.new : BaseIO Switch)
+  let f ← fixture sw pb
+  let seen ← (Chan.new 64 : BaseIO (Chan Seen))
+  let ended ← (Chan.new 16 : BaseIO (Chan Unit))
+  let source ← (probe sw pa seen ended : BaseIO HostSeam)
+  let stream ← openStream source pb
+  let deliveries ← (Chan.new 32 : BaseIO (Chan Message))
+  let mut successes := 0
+  for i in [0:20] do
+    let t : TopicId := ⟨s!"subscribe-race-{i}"⟩
+    let accepted ← (f.node.subscribe t (fun m => discard <| deliveries.trySend m) : BaseIO Bool)
+    let m := { message [i] with topic := t }
+    discard <| stream.write (frame (Core.publishRpc m))
+    if accepted && (← receive deliveries) == some m then
+      successes := successes + 1
+  r.check "node.surface.subscribe-then-publish-reaches-callback" (successes == 20)
+  stream.close
+  finish sw [f]
+
 /-- Direct handler boundary cases preserve the framing error channel. The
 fake stream returns finite chunks and records reset without a parked task. -/
 private def frameBoundaryChecks (r : Tests.Runner) : Async Unit := do
@@ -595,6 +618,7 @@ def run (r : Tests.Runner) : IO Unit := do
     frameBoundaryChecks r
     pairChecks r
     surfaceChecks r
+    subscribeRace r
     trickleChecks r
     defaultAndOrderChecks r
     pendingBound r

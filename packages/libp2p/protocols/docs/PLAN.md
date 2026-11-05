@@ -100,6 +100,8 @@ in the codec group wrapping upstream `google/snappy`.
 - The loop suite, `Tests/Gossipsub/Node.lean`, runs over the in-memory
   switch of `Mock/Host.lean`:
   - One publish crosses two nodes and reaches the callback.
+  - Subscribe registers the callback before posting its event. A refused
+    post takes back its own registration by id.
   - A subscribe after the join reaches the peer, and an unsubscribe sends
     the negative record.
   - A bad frame fails its handler and resets its stream. A body that does
