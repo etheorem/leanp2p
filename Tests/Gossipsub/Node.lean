@@ -255,6 +255,14 @@ private def inboundChecks (r : Tests.Runner) : Async Unit := do
   r.check "node.inbound.single-byte-chunks" (← delivered f [8])
   discard <| stream.write (Bytes.ofNatList [1, 255] ++ frame (Core.publishRpc (message [9])))
   r.check "node.inbound.bad-protobuf-keeps-the-loop" (← delivered f [9])
+  -- Distinct messages in one chunk both deliver, in order.
+  discard <| stream.write (frame (Core.publishRpc (message [10])) ++
+    frame (Core.publishRpc (message [11])))
+  r.check "node.inbound.distinct-frames-first" (← delivered f [10])
+  r.check "node.inbound.distinct-frames-second" (← delivered f [11])
+  -- The empty frame is legal and does not end the stream.
+  discard <| stream.write (Bytes.ofNatList [0] ++ frame (Core.publishRpc (message [12])))
+  r.check "node.inbound.zero-length-frame-keeps-stream-open" (← delivered f [12])
   stream.close
   -- Drain the successful handler before testing a framing fault.
   r.check "node.inbound.barrier-before-fault" (← barrier f)
@@ -274,6 +282,30 @@ private def inboundChecks (r : Tests.Runner) : Async Unit := do
   -- A bad handler error is reported by the host owner.
   try sw.close catch _ => pure ()
   (f.clock.test.close : BaseIO Unit)
+
+/-- Direct handler boundary cases preserve the framing error channel. The
+fake stream returns finite chunks and records reset without a parked task. -/
+private def frameBoundaryChecks (r : Tests.Runner) : Async Unit := do
+  let cases : List (String × List ByteArray) :=
+    [ ("bad-prefix", [Bytes.ofNatList (List.replicate 12 128)])
+    , ("eof-inside-prefix", [Bytes.ofNatList [128]])
+    , ("eof-inside-body", [Bytes.ofNatList [5,1]])
+    , ("large-malformed-chunk", [Bytes.ofNatList (List.replicate (Constants.rpcCap + 6) 128)]) ]
+  for (name, chunks) in cases do
+    let remaining ← (OnceRef.new chunks : BaseIO (OnceRef (List ByteArray)))
+    let reset ← (OnceRef.new false : BaseIO (OnceRef Bool))
+    let events ← (Chan.new 16 : BaseIO (Chan Input))
+    let stream : Streams.Stream :=
+      { read := do
+          let next ← (remaining.updateGet (fun xs => (xs.head?, xs.drop 1)) : BaseIO (Option ByteArray))
+          return .ok next
+        write := fun _ => pure (.ok ())
+        close := pure ()
+        reset := (reset.set true : BaseIO Unit) }
+    let result ← ((handler events).handle pa stream).run
+    r.check s!"node.framing.{name}"
+      ((match result with | .error (.protocol _) => true | _ => false) &&
+        (← (reset.get : BaseIO Bool)))
 
 /-- Two real nodes learn subscriptions and deliver a publish without a
 heartbeat or an explicit peerJoined call at the receiver. -/
@@ -560,6 +592,7 @@ def run (r : Tests.Runner) : IO Unit := do
     localChecks r
     systemClockChecks r
     inboundChecks r
+    frameBoundaryChecks r
     pairChecks r
     surfaceChecks r
     trickleChecks r

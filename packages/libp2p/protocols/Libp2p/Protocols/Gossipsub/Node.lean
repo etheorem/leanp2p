@@ -77,11 +77,15 @@ updateGet (root ARCHITECTURE §4.1). Only the first stop caller joins.
   writes frames in queue order. A failed write closes the queue and posts
   peerLeft. Stop resets installed streams to wake parked writes and joins
   the writer tasks. The host must end a newStream call when its session ends.
-- **The inbound handler serves consecutive frames.** Go keeps one reader
-  loop per stream (comm.go, lines 75 to 120). Go and rust write many RPCs on
-  one stream. A one-frame rule would break interop on the second RPC. The
-  handler bounds each frame before appending bytes and preserves frame order.
-  A zero-length frame decodes as an empty RPC and reaches the core.
+- **The inbound handler serves every frame of a stream.** The pubsub spec
+  uses separate long-lived inbound and outbound streams (pubsub/README.md,
+  lines 78 to 83). Go reads messages in a loop (comm.go, lines 75 to 120).
+  Rust keeps one inbound substream (protocols/gossipsub/src/handler.rs,
+  lines 78 to 82). Both peers write many RPCs on one stream. The handler
+  preserves frame order and checks each length before appending body bytes.
+  A bad prefix, an over-cap frame or EOF inside a frame is a protocol error.
+  A zero-length frame is legal (Rpc.lean, line 867). Go skips it; this handler
+  decodes it as an empty RPC that the core accepts.
 - **The receipt observer runs before the core step.** The interop harness
   logs every received message, including duplicates (gossipsub-interop,
   test-specs/implementation.md, lines 71 to 78). Its go participant logs
