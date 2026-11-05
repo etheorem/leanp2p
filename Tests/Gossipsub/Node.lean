@@ -412,17 +412,39 @@ private def sendChecks (r : Tests.Runner) : Async Unit := do
   r.check "node.send.second-frame-on-the-same-stream"
     (next.any (fun s => s.rpc == subOptRpc ta false))
   r.check "node.send.reuses-the-peer-stream" ((← (opened.get : BaseIO Nat)) == 2)
-  -- End the pipe behind the cached stream. Its next write fails, so the send
-  -- removes the stream. A later send opens a fresh one.
+  -- The cached pipe fails its next write. The same action opens a fresh
+  -- stream and retries its frame once.
   for (_, stream) in streams do stream.reset
   let streams ← sendRpc counting streams pa (subOptRpc ta true)
-  r.check "node.send.failed-write-retires-the-stream" streams.isEmpty
-  let streams ← sendRpc counting streams pa (subOptRpc ta true)
   let reopened ← within seen
-  r.check "node.send.reopens-after-failure"
+  r.check "node.send.failed-write-retries-on-a-fresh-stream"
     ((← (opened.get : BaseIO Nat)) == 3 && reopened.any (fun s => s.rpc == subOptRpc ta true))
+  r.check "node.send.retry-keeps-one-entry" (streams.length == 1)
+  discard <| probe sw pb seen
+  let streams ← sendRpc counting streams pb (subOptRpc ta true)
+  discard <| within seen
+  r.check "node.send.two-peers-have-two-streams"
+    (streams.length == 2 && (← (opened.get : BaseIO Nat)) == 4)
   for (_, stream) in streams do stream.close
   sw.close
+  -- Both attempts fail. The retry bound prevents a third open, and both
+  -- failed streams are reset and removed.
+  let attempts : OnceRef Nat ← (OnceRef.new 0 : BaseIO (OnceRef Nat))
+  let resets : OnceRef Nat ← (OnceRef.new 0 : BaseIO (OnceRef Nat))
+  let failing : HostSeam :=
+    { setHandler := fun _ => pure ()
+      newStream := fun _ _ => do
+        (attempts.update (· + 1) : BaseIO Unit)
+        return .ok (Constants.meshsubId,
+          { read := pure (.ok none)
+            write := fun _ => pure (.error .closed)
+            close := pure ()
+            reset := (resets.update (· + 1) : BaseIO Unit) }) }
+  let failed ← sendRpc failing [] pa (subOptRpc ta true)
+  r.check "node.send.retry-is-bounded-to-two-attempts"
+    ((← (attempts.get : BaseIO Nat)) == 2)
+  r.check "node.send.failed-attempts-reset-and-drop-their-streams"
+    (failed.isEmpty && (← (resets.get : BaseIO Nat)) == 2)
 
 /-! ## Receipt observation and stream ownership -/
 
@@ -469,9 +491,14 @@ private def streamOwnership (r : Tests.Runner) : Async Unit := do
   discard <| probe sw pc seen
   let (seam, _) ← (sw.host pa : BaseIO (HostSeam × TaskSet))
   let opens : OnceRef Nat ← (OnceRef.new 0 : BaseIO (OnceRef Nat))
+  let closes : OnceRef Nat ← (OnceRef.new 0 : BaseIO (OnceRef Nat))
   let counting : HostSeam := { seam with newStream := fun peer protocols => do
     (opens.update (· + 1) : BaseIO Unit)
-    seam.newStream peer protocols }
+    match ← seam.newStream peer protocols with
+    | .error e => return .error e
+    | .ok (id, stream) => return .ok (id, { stream with close := do
+        (closes.update (· + 1) : BaseIO Unit)
+        stream.close }) }
   let n ← (start counting (configOn tc) : BaseIO Node)
   discard (n.peerJoined pc .meshsub : BaseIO Bool)
   discard <| within seen
@@ -484,7 +511,9 @@ private def streamOwnership (r : Tests.Runner) : Async Unit := do
   discard (n.peerJoined pc .meshsub : BaseIO Bool)
   discard <| within seen
   r.check "node.stream.peer-leave-retires-the-stream" ((← (opens.get : BaseIO Nat)) == 2)
+  r.check "node.stream.peer-leave-closes-the-stream" ((← (closes.get : BaseIO Nat)) == 1)
   n.stop
+  r.check "node.stream.stop-closes-the-cached-stream" ((← (closes.get : BaseIO Nat)) == 2)
   sw.close
   r.check "node.stream.stop-closes-outbound-before-the-host-joins" true
   (tc.close : BaseIO Unit)

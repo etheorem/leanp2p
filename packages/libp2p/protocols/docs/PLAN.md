@@ -106,8 +106,9 @@ in the codec group wrapping upstream `google/snappy`.
     not decode leaves the loop running.
   - The handler serves consecutive frames in any chunking. It checks the
     length before it appends body bytes, and EOF between frames is clean.
-  - The node reuses one outbound stream per peer and retires failed streams.
-    A peer leave resets its stream, and stop closes the outbound streams.
+  - The node reuses one outbound stream per peer. A failed write resets its
+    stream and retries once on a fresh stream. Two peers use two streams.
+    A peer leave closes its stream, and stop closes the outbound streams.
   - The receipt observer sees duplicates before validation and delivery.
   - The default gossip delay is zero. Tests supply an explicit spread.
   - A heartbeat sends the graft, and a later publish reaches the mesh.

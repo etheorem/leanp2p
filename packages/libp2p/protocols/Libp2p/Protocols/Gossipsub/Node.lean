@@ -62,13 +62,20 @@ through `OnceRef.update` (root ARCHITECTURE §4.1).
 - **The default gossip delay is zero.** The pinned go implementation flushes
   heartbeat gossip at once. Config.trickle keeps an explicit delay for tests
   and callers that need one, as section 12 of the brief records.
-- **The loop keeps one outbound stream per peer.** Each action returns the
-  updated stream table. The loop closes the streams when it ends, and resets
-  a stream when its peer leaves or a write fails. The next send can reopen it.
-  Opening and writing run on the loop task, so either call can park the loop.
-- **The inbound handler serves consecutive frames.** Go and rust keep their
-  outbound stream open. The handler bounds each frame before appending bytes,
-  and serves several frames from one chunk in order.
+- **The loop keeps one outbound stream per peer.** The pinned go pubsub
+  version a01777894f4c resets the previous inbound stream on a duplicate
+  open (comm.go, lines 55 to 65). Its sender keeps one stream per peer
+  (lines 181 to 233). Each action returns the updated stream table. A failed
+  write resets and removes its stream, then retries once on a fresh stream.
+  A peer leave closes its stream. The loop closes all streams on exit.
+- **A slow peer can park the loop.** A peer that stops reading parks the loop
+  inside write until it reads or its session ends. Go writes from a per-peer
+  goroutine with a bounded queue and drops on a full queue. This loop has no
+  such queue yet. Opening a stream can also park the loop.
+- **The inbound handler serves consecutive frames.** Go keeps one reader
+  loop per stream (comm.go, lines 75 to 120). Go and rust write many RPCs on
+  one stream. A one-frame rule would break interop on the second RPC. The
+  handler bounds each frame before appending bytes and preserves frame order.
 - **The receipt observer runs before the core step.** Config.onRpc receives
   the sender and payload bytes of every RPC, including duplicates and bad
   protobuf bodies. Frame errors fail the handler before they reach it.
@@ -152,29 +159,53 @@ private def retire (streams : Outbound) (peer : Peer) : Conc.Async Outbound := d
     if p = peer then stream.reset
   return streams.filter (fun e => e.1 != peer)
 
-/-- Write one frame and return the stream table. A successful write keeps
-its stream open. A failed write resets and removes it. -/
+/-- Close and drop a peer's stream when the peer leaves. The half-close
+wakes the peer's reader with EOF after its queued bytes. -/
+private def closePeer (streams : Outbound) (peer : Peer) : Conc.Async Outbound := do
+  for (p, stream) in streams do
+    if p = peer then stream.close
+  return streams.filter (fun e => e.1 != peer)
+
+/-- Write one frame and return the stream table and success flag. A failed
+write resets and removes its stream before the caller can retry. -/
 private def writeFrame (streams : Outbound) (peer : Peer) (stream : Streams.Stream)
-    (frame : List Nat) : Conc.Async Outbound := do
-  try
+    (frame : List Nat) : Conc.Async (Outbound × Bool) := do
+  let sent ← try
     match ← stream.write (Bytes.ofNatList frame) with
-    | .ok () => return streams
-    | .error _ => retire streams peer
-  catch _ => retire streams peer
+    | .ok () => pure true
+    | .error _ => pure false
+  catch _ => pure false
+  if sent then return (streams, true)
+  return (← retire streams peer, false)
+
+/-- Try at most attempts writes. A failed open ends the action. A failed
+write removes its stream, so the next attempt opens a fresh stream. -/
+private def sendFrame (host : HostSeam) (streams : Outbound) (to : Peer)
+    (frame : List Nat) : Nat → Conc.Async Outbound
+  | 0 => pure streams
+  | attempts + 1 => do
+    let stream? ← match streams.find? (fun e => e.1 == to) with
+      | some (_, stream) => pure (some stream)
+      | none =>
+        try
+          match ← host.newStream to [Constants.meshsubId] with
+          | .ok (_, stream) => pure (some stream)
+          | .error _ => pure none
+        catch _ => pure none
+    let some stream := stream? | return streams
+    let streams := (to, stream) :: streams.filter (fun e => e.1 != to)
+    let (streams, sent) ← writeFrame streams to stream frame
+    if sent then return streams
+    sendFrame host streams to frame attempts
 
 /-- Send one RPC through the peer's stream and return the next stream table.
-An RPC over Constants.rpcCap opens no stream. A failed open leaves the table
-unchanged. The host reports send failures at integration. -/
+An RPC over Constants.rpcCap opens no stream. A failed write retries once
+on a fresh stream. A failed open drops the action. The host reports send
+failures at integration. -/
 def sendRpc (host : HostSeam) (streams : Outbound) (to : Peer) (rpc : Rpc.RPC) :
     Conc.Async Outbound := do
   let some frame := Rpc.encodeFrame? rpc | return streams
-  if let some (_, stream) := streams.find? (fun e => e.1 == to) then
-    return ← writeFrame streams to stream frame
-  try
-    match ← host.newStream to [Constants.meshsubId] with
-    | .error _ => return streams
-    | .ok (_, stream) => writeFrame ((to, stream) :: streams) to stream frame
-  catch _ => return streams
+  sendFrame host streams to frame 2
 
 /-- Half-close each outbound stream when the loop ends. The peer's read
 wakes at EOF, and its host joins the inbound handler. -/
@@ -340,7 +371,7 @@ private def stepAndAct (env : Env) (st : LoopState) (event : Core.Event) : Conc.
     (env.config.onRpc peer bytes : BaseIO Unit)
   let st ← match event with
     | .peerLeft peer => do
-      let streams ← retire st.streams peer
+      let streams ← closePeer st.streams peer
       pure { st with streams, pending := st.pending.filter (fun p => p.peer != peer) }
     | _ => pure st
   match Core.step env.config.params st.router event with
