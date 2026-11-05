@@ -60,8 +60,9 @@ public functions (§7 row 9). The muxer entry itself moves to
 
 §3.3 fixes the shape, with the signature
 `step : State → Event → Except ProtocolError (State × List Action)`.
-`step` is total, and the loop that drives it is the one `partial def`
-the package needs. `State`, `Event`, and `Action` are plain data: they
+`step` is total. The shell's loops run as `repeat`, which ends when
+the channel it parks on closes, so the package needs no `partial def`.
+`State`, `Event`, and `Action` are plain data: they
 derive `Repr` and `DecidableEq` (and so `BEq`), and they carry no
 `IO.Ref`, no `Task`, no promise, and no function. Their bytes sit in
 `Bytes.Blob`, the shared wrapper with a `Repr` instance, since §3.2
