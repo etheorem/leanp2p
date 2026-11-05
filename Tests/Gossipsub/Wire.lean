@@ -17,8 +17,10 @@ whose payload carries no field that this codec leaves out, the re-encoding is th
 The suite reads one fixture and needs no network, no clock and no task.
 
 The plan records that gossipsub has no vectors (`docs/PLAN.md`, "Vector stance"). This fixture is
-the first one, and its home is `Tests/fixtures` rather than `Tests/vectors`, because a random
-draw does not reproduce it; the generator records where every byte came from.
+the first one. It lives in `Tests/fixtures` because the CI provenance step regenerates
+`Tests/vectors` with `scripts/extract-vectors.py` and diffs the result, while this file comes from
+its own committed generator. The fixture records the generator, the module and the version, so a
+stale file fails its own provenance check.
 -/
 
 set_option autoImplicit false
