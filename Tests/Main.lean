@@ -1,5 +1,10 @@
 import Tests.Support
 import Tests.Vectors
+import Tests.Gossipsub.Core
+import Tests.Gossipsub.Sign
+import Tests.Gossipsub.Cache
+import Tests.Gossipsub.Score
+import Tests.Gossipsub.Rpc
 import Tests.Concurrency
 import Tests.Protobuf
 import Tests.Bytes
@@ -31,6 +36,11 @@ pass under a single capability: `lake test -- +RTS -N1 -RTS`
 def main : IO UInt32 := do
   let r ← Tests.Runner.new
   Tests.Vectors.run r
+  Tests.Gossipsub.Core.run r
+  Tests.Gossipsub.Sign.run r
+  Tests.Gossipsub.Cache.run r
+  Tests.Gossipsub.Score.run r
+  Tests.Gossipsub.Rpc.run r
   Tests.Concurrency.run r
   Tests.Protobuf.run r
   Bytes.runTests r

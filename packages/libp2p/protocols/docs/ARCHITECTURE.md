@@ -22,7 +22,11 @@ group is §7, row 10). The spike has no req/resp or gossipsub code.
 | `Libp2p/Protocols/ReqResp/Frame.lean` | the `/eth2/.../ssz_sn` framing, a uvarint length over a snappy-compressed chunk, as a `Codec` with a `LawfulCodec` instance (§3.2); the snappy call goes through the `codec/snappy` binding (root PLAN W6.2); the codec feeds the core |
 | `Libp2p/Protocols/ReqResp/Core.lean` | the response-chunk state machine of §3.3: `State`, `Event`, `Action`, the error inductive, and the total `step`; the snappy decompression context carries across chunks, and the chunk count and the error/EOF distinction live in the state |
 | `Libp2p/Protocols/ReqResp/Exchange.lean` | the client and handler seam over the loop: the client function, the handler value the registry stores, and the deadlines |
+| `Libp2p/Protocols/Gossipsub/Types.lean` | the shared gossipsub types: topic and message ids, the published message, the fixed-point score and its thresholds, and the time unit |
 | `Libp2p/Protocols/Gossipsub/Rpc.lean` | the RPC message with its `ProtoMessage` instance (§3.2) |
+| `Libp2p/Protocols/Gossipsub/Score.lean` | the peer score function of v1.1 over its counters, with decay; pure, so the core calls it on its state |
+| `Libp2p/Protocols/Gossipsub/Cache.lean` | the message cache, the seen cache, the backoff table, and the IWANT promises; pure data with the core's time as input |
+| `Libp2p/Protocols/Gossipsub/Sign.lean` | the signature policy check, the signature input, and the default message id; generic over the verify function |
 | `Libp2p/Protocols/Gossipsub/Core.lean` | `State`, `Event`, `Action`, `ProtocolError`, and the total `step` that holds mesh, scoring, and heartbeat (§3.3) |
 | `Libp2p/Protocols/Gossipsub/Node.lean` | the loop task over the core, and the publish and subscribe surface at the seam level |
 
