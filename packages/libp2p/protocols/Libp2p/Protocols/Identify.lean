@@ -5,7 +5,7 @@ import Streams.Error
 import Streams.Framing
 import Streams.Stream
 import Multiformats.Multiaddr.Binary
-import Libp2p.Protocols.Mock.Identity
+import Libp2p.Protocols.Identity
 import Libp2p.Protocols.Mock.Host
 import Libp2p.Protocols.Constants
 
@@ -56,7 +56,6 @@ structure Identify where
 
 namespace Identify
 
-open Mock.Identity
 
 /-- The identify protocol id. -/
 def protocolId : Mock.Core.ProtocolId := Constants.identifyId
@@ -212,8 +211,8 @@ def validAddress (bytes : List Nat) : Bool :=
 
 /-- The address checks: every listening address and the observed
 address, when present, must decode as a multiaddr. -/
-private def checkAddrs (m : Identify) (k : Mock.Identity.PubKey) :
-    Except Error (Identify × Mock.Identity.PeerId) :=
+private def checkAddrs (m : Identify) (k : Libp2p.Identity.PubKey) :
+    Except Error (Identify × Libp2p.Identity.PeerId) :=
   if ∀ a ∈ m.listenAddrs, validAddress a then
     if ∀ a ∈ m.observedAddr.toList, validAddress a then
       .ok (m, peerIdOfPubKey k)
@@ -224,8 +223,8 @@ private def checkAddrs (m : Identify) (k : Mock.Identity.PubKey) :
 presence and parse of `publicKey`, the derived id when the caller
 supplies one, and every listen and observed address through
 `Multiformats.Multiaddr.ofBytes?`. -/
-def validate (payload : List Nat) (expected : Option Mock.Identity.PeerId) :
-    Except Error (Identify × Mock.Identity.PeerId) :=
+def validate (payload : List Nat) (expected : Option Libp2p.Identity.PeerId) :
+    Except Error (Identify × Libp2p.Identity.PeerId) :=
   if Constants.identifyCap < payload.length then .error .overCap
   else match (Pb.decodeMessage? payload : Except Pb.Error (Identify × List Nat)) with
     | .error e => .error (.badMessage e)
@@ -244,8 +243,8 @@ def validate (payload : List Nat) (expected : Option Mock.Identity.PeerId) :
 
 /-- The address check accepts exactly the messages whose addresses
 are all valid. -/
-private theorem checkAddrsSound (m : Identify) (k : Mock.Identity.PubKey)
-    (m' : Identify) (pid : Mock.Identity.PeerId)
+private theorem checkAddrsSound (m : Identify) (k : Libp2p.Identity.PubKey)
+    (m' : Identify) (pid : Libp2p.Identity.PeerId)
     (h : checkAddrs m k = .ok (m', pid)) :
     (∀ a ∈ m.listenAddrs, validAddress a) ∧
       (∀ a ∈ m.observedAddr.toList, validAddress a) ∧
@@ -263,7 +262,7 @@ private theorem checkAddrsSound (m : Identify) (k : Mock.Identity.PubKey)
     cases h
 
 /-- An over-cap payload fails before any decode. -/
-theorem validateOverCap (payload : List Nat) (expected : Option Mock.Identity.PeerId)
+theorem validateOverCap (payload : List Nat) (expected : Option Libp2p.Identity.PeerId)
     (h : Constants.identifyCap < payload.length) :
     validate payload expected = .error .overCap := by
   simp [validate, h]
@@ -276,14 +275,14 @@ theorem decodeEmpty :
 /-- The empty message has no key, so `validate` rejects it. -/
 theorem validateEmptyNoKey : validate [] none = .error .missingKey := rfl
 
-/-- Acceptance, conditional on the opaque mock results. -/
+/-- Acceptance, conditional on the parsed key. -/
 theorem validateAccepts (payload : List Nat) (m : Identify) (kb : List Nat)
-    (k : Mock.Identity.PubKey) (expected : Option Mock.Identity.PeerId)
+    (k : Libp2p.Identity.PubKey) (expected : Option Libp2p.Identity.PeerId)
     (hsize : payload.length ≤ Constants.identifyCap)
     (hdec : Pb.decodeMessage? (α := Identify) payload = .ok (m, []))
     (hpub : m.publicKey = some kb)
-    (hun : Mock.Identity.unmarshalPubKey? kb = some k)
-    (hderive : ∀ e, expected = some e → Mock.Identity.peerIdOfPubKey k = e)
+    (hun : unmarshalPubKey? kb = some k)
+    (hderive : ∀ e, expected = some e → peerIdOfPubKey k = e)
     (haddrs : ∀ a ∈ m.listenAddrs, validAddress a)
     (hobs : ∀ a ∈ m.observedAddr.toList, validAddress a) :
     validate payload expected = .ok (m, peerIdOfPubKey k) := by
@@ -294,19 +293,19 @@ theorem validateAccepts (payload : List Nat) (m : Identify) (kb : List Nat)
   · simp only [checkAddrs]
     rw [ite_eq_left haddrs, ite_eq_left hobs]
   · rename_i e
-    have hk : Mock.Identity.peerIdOfPubKey k = e := hderive e rfl
+    have hk : peerIdOfPubKey k = e := hderive e rfl
     rw [ite_eq_left hk]
     simp only [checkAddrs]
     rw [ite_eq_left haddrs, ite_eq_left hobs]
 
 /-- `validate` rejects a derived id that differs from the expected id. -/
 theorem validateKeyMismatch (payload : List Nat) (m : Identify) (kb : List Nat)
-    (k : Mock.Identity.PubKey) (e : Mock.Identity.PeerId)
+    (k : Libp2p.Identity.PubKey) (e : Libp2p.Identity.PeerId)
     (hsize : payload.length ≤ Constants.identifyCap)
     (hdec : Pb.decodeMessage? (α := Identify) payload = .ok (m, []))
     (hpub : m.publicKey = some kb)
-    (hun : Mock.Identity.unmarshalPubKey? kb = some k)
-    (hne : Mock.Identity.peerIdOfPubKey k ≠ e) :
+    (hun : unmarshalPubKey? kb = some k)
+    (hne : peerIdOfPubKey k ≠ e) :
     validate payload (some e) = .error .keyMismatch := by
   unfold validate
   rw [ite_eq_right (by omega)]
@@ -320,13 +319,13 @@ theorem validateKeyMismatch (payload : List Nat) (m : Identify) (kb : List Nat)
 facts, the derivation match, and the address validity. The statement
 does not tie `m` to the decode of `payload`; it omits the conjunct
 `∃ rest, Pb.decodeMessage? (α := Identify) payload = .ok (m, rest)`. -/
-theorem validateSound (payload : List Nat) (expected : Option Mock.Identity.PeerId)
-    (m : Identify) (pid : Mock.Identity.PeerId)
+theorem validateSound (payload : List Nat) (expected : Option Libp2p.Identity.PeerId)
+    (m : Identify) (pid : Libp2p.Identity.PeerId)
     (h : validate payload expected = .ok (m, pid)) :
     payload.length ≤ Constants.identifyCap ∧
-      ∃ kb k, m.publicKey = some kb ∧ Mock.Identity.unmarshalPubKey? kb = some k ∧
-        pid = Mock.Identity.peerIdOfPubKey k ∧
-        (∀ e, expected = some e → Mock.Identity.peerIdOfPubKey k = e) ∧
+      ∃ kb k, m.publicKey = some kb ∧ unmarshalPubKey? kb = some k ∧
+        pid = peerIdOfPubKey k ∧
+        (∀ e, expected = some e → peerIdOfPubKey k = e) ∧
         (∀ a ∈ m.listenAddrs, validAddress a) ∧
         (∀ a ∈ m.observedAddr.toList, validAddress a) := by
   unfold validate at h
@@ -347,7 +346,7 @@ theorem validateSound (payload : List Nat) (expected : Option Mock.Identity.Peer
             cases h
         | some kb =>
             simp only [hm] at h
-            cases hu : Mock.Identity.unmarshalPubKey? kb with
+            cases hu : unmarshalPubKey? kb with
             | none =>
                 simp only [hu] at h
                 cases h
@@ -364,7 +363,7 @@ theorem validateSound (payload : List Nat) (expected : Option Mock.Identity.Peer
                     cases he'
                 | some e =>
                     simp only [he] at h
-                    by_cases hkey : Mock.Identity.peerIdOfPubKey k = e
+                    by_cases hkey : peerIdOfPubKey k = e
                     · rw [ite_eq_left hkey] at h
                       have hs := checkAddrsSound m' k m pid h
                       rcases hs with ⟨ha, ho, rfl, rfl⟩
@@ -384,7 +383,7 @@ the entries do not fit the wire model: such a message would encode to
 an empty one and write a zero-length frame. -/
 
 /-- Build one identify response from the host data. -/
-def respond (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+def respond (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat) := none) : Identify :=
   { protocolVersion := some Constants.identifyProtocolVersion,
@@ -397,7 +396,7 @@ def respond (key : Mock.Identity.PubKey) (addrs : List (List Nat))
 
 /-- Build the response, and fail closed when its entries do not fit the
 wire model. -/
-def respond? (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+def respond? (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat) := none) : Except Error Identify :=
   let m := respond key addrs protocols observed agent spr
@@ -437,8 +436,8 @@ caller supplies all the bytes at once, so a buffer that ends inside a
 frame is the `.truncated` framing error. An empty buffer is also
 `.truncated`, and the core never answers `.ok none`, while `client`
 answers `.ok none` on a clean end. -/
-def clientCore (bytes : List Nat) (expected : Option Mock.Identity.PeerId) :
-    Except Error (Option (Identify × Mock.Identity.PeerId)) :=
+def clientCore (bytes : List Nat) (expected : Option Libp2p.Identity.PeerId) :
+    Except Error (Option (Identify × Libp2p.Identity.PeerId)) :=
   match decodeFrame? bytes with
   | .error e => .error e
   | .ok none => .error (.badMessage (.framing .truncated))
@@ -476,8 +475,8 @@ private def resetQuietly (s : Streams.Stream) : BaseIO Unit :=
 /-- Read one response under the cap and the deadline, then validate
 it. `.ok none` means that the stream ended before any byte arrived. -/
 def client (s : Streams.Stream) (clock : Conc.Clock) (timeoutMs : Nat)
-    (expected : Option Mock.Identity.PeerId) :
-    Conc.Async (Except Error (Option (Identify × Mock.Identity.PeerId))) := do
+    (expected : Option Libp2p.Identity.PeerId) :
+    Conc.Async (Except Error (Option (Identify × Libp2p.Identity.PeerId))) := do
   match ← Conc.withinDeadline clock timeoutMs (resetQuietly s) (readFrame s) with
   | .error .deadlineExpired => return .error .timeout
   | .error .closed => return .error (.stream .closed)
@@ -497,7 +496,7 @@ def mapIdentifyError : Error → Mock.Core.Error
 An empty read leaves the peerstore unchanged. This is a delta from go,
 whose `consumeMessage` runs on the empty message and clears the peer's
 protocols. -/
-def push (store : Mock.Host.Peerstore) (expected : Mock.Identity.PeerId)
+def push (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
     (clock : Conc.Clock) (timeoutMs : Nat) (s : Streams.Stream) :
     Conc.Async (Except Error Unit) := do
   match ← Conc.withinDeadline clock timeoutMs (resetQuietly s) (readFrame s) with
@@ -513,7 +512,7 @@ def push (store : Mock.Host.Peerstore) (expected : Mock.Identity.PeerId)
           return .ok ()
 
 /-- The push handler value. -/
-def pushHandler (store : Mock.Host.Peerstore) (expected : Mock.Identity.PeerId)
+def pushHandler (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
     (clock : Conc.Clock) (timeoutMs : Nat) : Mock.Core.StreamHandler :=
   { id := pushId,
     handle := fun s => ExceptT.mk ((Except.mapError mapIdentifyError) <$>
@@ -522,7 +521,7 @@ def pushHandler (store : Mock.Host.Peerstore) (expected : Mock.Identity.PeerId)
 /-- Write one length-delimited message and half-close. The
 responder and the push sender share this body: both announce the same
 record, and only the protocol id of the stream differs. -/
-private def writeRecord (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+private def writeRecord (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat)) (s : Streams.Stream) :
     Conc.Async (Except Mock.Core.Error Unit) := do
@@ -541,7 +540,7 @@ private def writeRecord (key : Mock.Identity.PubKey) (addrs : List (List Nat))
 
 /-- The responder body. Write one length-delimited message and
 half-close. -/
-def respondTo (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+def respondTo (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat) := none) (s : Streams.Stream) :
     Conc.Async (Except Mock.Core.Error Unit) :=
@@ -557,14 +556,14 @@ skips a connection that already carries the current record (the
 spike's `vendor/go-libp2p/p2p/protocol/identify/id.go`, the `loop` and
 `sendPushes` functions). This package sends one record per call and
 starts no timer. -/
-def pushTo (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+def pushTo (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat) := none) (s : Streams.Stream) :
     Conc.Async (Except Mock.Core.Error Unit) :=
   writeRecord key addrs protocols observed agent spr s
 
 /-- The responder handler value. -/
-def respondHandler (key : Mock.Identity.PubKey) (addrs : List (List Nat))
+def respondHandler (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat) := none) : Mock.Core.StreamHandler :=
   { id := protocolId,
@@ -593,7 +592,7 @@ private theorem decodeFrame?Encode
 
 /-- The client validates the payload bytes of the frame that it read. -/
 theorem clientCoreFrame (f : Streams.Framing.Frame .uvarint Constants.identifyCap)
-    (rest : List Nat) (expected : Option Mock.Identity.PeerId)
+    (rest : List Nat) (expected : Option Libp2p.Identity.PeerId)
     (h : 0 < f.payload.length) :
     clientCore (Streams.Framing.Frame.encode f ++ rest) expected =
       some <$> validate f.payload expected := by
@@ -617,7 +616,7 @@ private theorem decodeFrame?OverCap (len : Nat) (rest : List Nat)
 /-- `clientCore` rejects a length over the cap before it reads the
 body. The statement has no premise about the bytes after the prefix. -/
 theorem clientCoreOverCap (len : Nat) (rest : List Nat)
-    (expected : Option Mock.Identity.PeerId)
+    (expected : Option Libp2p.Identity.PeerId)
     (hlen : len ≤ Streams.Framing.Prefix.maxLen .uvarint)
     (hcap : Constants.identifyCap < len) :
     clientCore (Streams.Framing.encodeLength .uvarint len ++ rest) expected =
@@ -635,7 +634,7 @@ private theorem decodeFrame?EncodeLengthZero :
   simp [Bytes.take?]
 
 /-- The zero-length rule on `clientCore`, the spike's rule. -/
-theorem clientCoreEmptyFrame (expected : Option Mock.Identity.PeerId) :
+theorem clientCoreEmptyFrame (expected : Option Libp2p.Identity.PeerId) :
     clientCore (Streams.Framing.encodeLength .uvarint 0) expected =
       .error .emptyFrame := by
   unfold clientCore
