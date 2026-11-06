@@ -64,7 +64,7 @@ private def emptyMuxer : Muxer where
 private def closer (id : ProtocolId) : StreamHandler where
   id := id
   -- `s.close` runs in `Async`; `ExceptT` lifts it with no error.
-  handle := fun s => s.close
+  handle := fun _ s => s.close
 
 /-! ## Compile milestones -/
 

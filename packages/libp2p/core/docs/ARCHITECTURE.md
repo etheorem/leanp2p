@@ -21,7 +21,7 @@ removes that coupling (§9, delta 10).
 | `Libp2p/Core/Role.lean` | `Role`, the closed set of the two sides; the security, muxer, and policy modules each import it alone |
 | `Libp2p/Core/Security.lean` | `SecureConn` and the `SecurityProtocol` seam |
 | `Libp2p/Core/Mux.lean` | the `Muxer` seam and `MuxSession` |
-| `Libp2p/Core/Handler.lean` | `StreamHandler`, the callback a served stream reaches |
+| `Libp2p/Core/Handler.lean` | `StreamHandler`, the callback a served stream reaches, and `StreamContext`, the connection facts the callback gets |
 | `Libp2p/Core/Policy.lean` | the connection gater, the resource manager, and the address ranker |
 
 All declarations live in the `Libp2p.Core` namespace, and the root
@@ -108,9 +108,14 @@ The shapes are §4.9's, refined where this section says so.
   Unit`, which the owner joins (§3.1, §4.1). `openStream` takes a
   `ProtocolId`, as `libp2p/mux` records: mplex writes it into its
   NewStream frame, and yamux drops it.
-- `StreamHandler` carries `id : ProtocolId` and `handle : Stream →
-  ExceptT Core.Error Async Unit`. The host keys its registry by the id
-  (§3.10), and a served stream reaches the callback. The host pair
+- `StreamHandler` carries `id : ProtocolId` and `handle :
+  StreamContext → Stream → ExceptT Core.Error Async Unit`. The host
+  keys its registry by the id (§3.10), and a served stream reaches the
+  callback. `StreamContext` holds the proved `remotePeer` and the
+  connection's `remoteAddr`. One handler serves every peer, so identify
+  push needs the peer to key the peerstore, and the identify responder
+  needs the address for `observedAddr`. go-libp2p reads both from
+  `s.Conn()` (`vendor/go-libp2p/p2p/protocol/identify/id.go`). The host pair
   settles the failure rule: a handler failure closes the stream,
   never the session.
 - The policy hooks are three structures in `Policy.lean`. The gater
