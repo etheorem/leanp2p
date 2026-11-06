@@ -880,7 +880,7 @@ def recvStream (s : State) (h : Header) : Except ProtocolError (State × Array A
       -- of concurrent opens arrive out of order. Like go-yamux and
       -- rust-yamux, the core opens any id of the peer's parity that is
       -- not live; parity alone keeps the two sides apart (the package
-      -- ARCHITECTURE, "How this package reads two root rules"). The new stream
+      -- ARCHITECTURE, "How this package reads a root rule"). The new stream
       -- gets a new epoch, so a handle of an earlier stream on the id
       -- cannot reach it (`StreamKey`).
       if (s.find? id).isSome then .error (.duplicateStream id)

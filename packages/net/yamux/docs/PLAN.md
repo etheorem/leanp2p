@@ -85,17 +85,16 @@ Units 0, 1a, and 1b are done: the suite is
 
 ## Vector stance
 
-`VECTORS.lock` holds no yamux entry, and `Tests/vectors/` on the spike
-branch holds no yamux file. No go-libp2p yamux transcript was
+`VECTORS.lock` holds no yamux vectors, and `Tests/vectors/` on the
+spike branch holds no yamux file. No go-libp2p yamux transcript was
 captured. What the spike holds instead: fixed header bytes derived
 from the spec field table, the header round-trip theorem, session
 exchanges over the byte-splitting sim transport, and the hostile-frame
-cases of `Tests/Yamux.lean`. Those carry over as the suite of §7 row
-9, and the spec-frame tests cover the header codec. The `spike` branch
-is not on the remote, so the suite on `main` derives each check from
-the vendored spec (`vendor/specs/yamux/README.md`) and from the
-milestones above, and the fixed header bytes come from the spec field
-table.
+cases of its `Tests/Yamux.lean`. Those carry over as the suite of §7
+row 9, and the spec-frame tests cover the header codec. This suite
+keeps every spike check, and it derives each new check from the
+vendored spec (`vendor/specs/yamux/README.md`) and from the milestones
+above, with the fixed header bytes from the spec field table.
 
 The go-libp2p interop matrix is the gate of W5.9; it runs after this
 unit lands. Before it, `scripts/yamux-interop.sh` runs this session

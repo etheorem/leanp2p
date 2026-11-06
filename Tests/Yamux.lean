@@ -6,7 +6,8 @@ import Bytes
 # Yamux suite (unit W4.3)
 
 The checks of `packages/net/yamux/docs/PLAN.md`, "Test milestones",
-units 1a and 1b. The spike's yamux suite is not on the remote, so the
+units 1a and 1b. The spike's yamux suite (`spike`, `Tests/Yamux.lean`)
+guards the same contracts, and this suite keeps each one. The new
 checks derive from the spec (`vendor/specs/yamux/README.md`) and the
 package documents:
 
