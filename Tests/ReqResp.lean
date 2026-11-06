@@ -189,8 +189,8 @@ def requestChecks (r : Runner) : IO Unit := do
     if n ≤ 34 then
       r.check s!"a request of {n} bytes reads back one byte at a time"
         (succeedsWith [p] (readRequest m (bytewise wire)))
-  -- Repetitive data: the mock writes literals, so the chunks stay raw;
-  -- the go fixtures below carry compressed chunks.
+  -- Repetitive data: snappy shortens it, so the writer emits compressed
+  -- chunks; the go fixtures below carry go's compressed chunks.
   let rep := bs ((List.range 100000).map (· % 7))
   let wire := (encodeRequestB m (some rep)).toOption.getD ByteArray.empty
   r.check "a repetitive request of 100000 bytes reads back" (succeedsWith [rep] (readRequest m [wire]))
@@ -377,8 +377,8 @@ def fixtureChecks (r : Runner) : IO Unit := do
       (match (feed (responseReader (method (maxChunks := 1))) [resp]).map (payloads ·.2) with
         | .ok ps => ps == [payload]
         | .error _ => false)
-    -- Our writer's bytes differ where go compresses (the mock never
-    -- does), and they read back the same.
+    -- Our writer's bytes can differ from go's, since the two snappy
+    -- encoders can pick other matches, and they read back the same.
     let ours := (encodeRequestB m (some payload)).toOption.getD ByteArray.empty
     r.check s!"go {name}: our encoding reads back" (succeedsWith [payload] (readRequest m [ours]))
     if payload.size = 0 then
