@@ -1,14 +1,15 @@
 import Std
 import Conc
 import Streams
+import Libp2p.Identity
 
 /-!
 # Core seam mock
 
-`Libp2p.Core` (issue #15, PR #37) is not merged. This mock declares
+`Libp2p.Core` (issue #15, PR #64) is not merged. This mock declares
 the frozen seam shapes from `packages/libp2p/core/docs/ARCHITECTURE.md`:
-`ProtocolId`, the coarse `Error`, and `StreamHandler`. The real core
-package replaces this module at integration.
+`ProtocolId`, the coarse `Error`, `StreamContext`, and `StreamHandler`.
+The real core package replaces this module at integration.
 -/
 
 set_option autoImplicit false
@@ -29,11 +30,17 @@ inductive Error where
   | closed (rendered : String)
   deriving DecidableEq, BEq, Repr
 
+/-- What the host knows about the connection under a served stream:
+the proved peer id and the peer's transport address. -/
+structure StreamContext where
+  remotePeer : Libp2p.Identity.PeerId
+  remoteAddr : Multiformats.Multiaddr
+
 /-- The handler seam: the id it registers under, and the callback a
 served stream reaches. -/
 structure StreamHandler where
   id : ProtocolId
-  handle : Streams.Stream → ExceptT Error Conc.Async Unit
+  handle : StreamContext → Streams.Stream → ExceptT Error Conc.Async Unit
 
 /-- One map from a stream error to the coarse error, shared by every
 handler of this package. `closed` stays closed, `reset` is a protocol

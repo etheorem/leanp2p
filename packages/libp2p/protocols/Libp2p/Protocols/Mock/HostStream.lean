@@ -46,13 +46,16 @@ set_option autoImplicit false
 namespace Libp2p.Protocols.Mock.HostStream
 
 open Conc Streams
-open Libp2p.Protocols.Mock.Core (ProtocolId StreamHandler)
+open Libp2p.Protocols.Mock.Core (ProtocolId StreamContext StreamHandler)
 open Libp2p.Protocols.Mock.Muxer
 
 /-- One end of a peer connection, with its handler registry. -/
 structure Host where
   /-- The mock session to the peer. -/
   session : MuxSession
+  /-- The context every served stream of the session gets: the peer and
+  its address, which the real host takes from the upgrade. -/
+  ctx : StreamContext
   /-- The registry, by protocol id; changed only through `update`. -/
   handlers : OnceRef (List StreamHandler)
   /-- The handler failures, newest first. -/
@@ -60,9 +63,9 @@ structure Host where
   /-- The tasks of the served streams and the serve loop. -/
   owner : TaskSet
 
-/-- A host over a session. -/
-def Host.new (session : MuxSession) : BaseIO Host := do
-  return ⟨session, ← OnceRef.new [], ← OnceRef.new [], ← TaskSet.new⟩
+/-- A host over a session to the peer that `ctx` names. -/
+def Host.new (session : MuxSession) (ctx : StreamContext) : BaseIO Host := do
+  return ⟨session, ctx, ← OnceRef.new [], ← OnceRef.new [], ← TaskSet.new⟩
 
 /-- Store one handler under its id; a second store replaces the first. -/
 def Host.setHandler (h : Host) (sh : StreamHandler) : BaseIO Unit :=
@@ -107,7 +110,7 @@ def serveStream (h : Host) (s : Stream) : Async Unit := do
   | none => s.reset
   | some sh =>
     let s ← s.prependBytes rest
-    match ← (sh.handle s).run with
+    match ← (sh.handle h.ctx s).run with
     | .ok () => pure ()
     | .error e =>
       h.failures.update (e :: ·)

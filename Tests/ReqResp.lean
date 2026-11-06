@@ -609,7 +609,17 @@ def limiterChecks (r : Runner) : IO Unit := do
 open Libp2p.Protocols.Mock.Muxer (muxer)
 open Libp2p.Protocols.Mock.HostStream (Host)
 
-/-- A connected pair of hosts over a new sim net and the mock muxer. -/
+/-- The peer id of a fixed Ed25519 seed of 32 copies of `v`. -/
+private def seedPeer (v : UInt8) : Async Libp2p.Identity.PeerId := do
+  let seed : ByteArray := ⟨Array.replicate 32 v⟩
+  match (do Libp2p.Identity.PeerId.ofPubKey (← (← Libp2p.Identity.PrivKey.ofData? .ed25519 seed).toPublic)
+      : Except Libp2p.Identity.Error Libp2p.Identity.PeerId) with
+  | .ok p => return p
+  | .error _ => throw (IO.userError "test: the fixed seed derives no peer id")
+
+/-- A connected pair of hosts over a new sim net and the mock muxer.
+Each end's handler context names the other end's peer and its own
+connection's remote address. -/
 def hostPair (split : Bool := false) : Async (Host × Host) := do
   let net ← Streams.Sim.Net.new split
   let addr ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/4100" with
@@ -621,7 +631,10 @@ def hostPair (split : Bool := false) : Async (Host × Host) := do
   l.close
   let .ok cs ← (muxer.«open» .initiator c ByteArray.empty).run | throw (IO.userError "open failed")
   let .ok ss ← (muxer.«open» .responder s ByteArray.empty).run | throw (IO.userError "open failed")
-  return (← Host.new cs, ← Host.new ss)
+  let client ← seedPeer 1
+  let server ← seedPeer 2
+  return (← Host.new cs { remotePeer := server, remoteAddr := c.remoteAddr },
+    ← Host.new ss { remotePeer := client, remoteAddr := s.remoteAddr })
 
 def simChecks (r : Runner) : Async Unit := do
   r.section "over the sim" "phase0 Req/Resp interaction; ARCHITECTURE §5.4; PRINCIPLES 1.4"
@@ -666,7 +679,7 @@ def simChecks (r : Runner) : Async Unit := do
     let tc ← TestClock.new
     let (client, server) ← hostPair
     -- The handler takes one read and ends with no answer and no close.
-    server.setHandler ⟨m.id, fun s => ExceptT.mk do
+    server.setHandler ⟨m.id, fun _ s => ExceptT.mk do
       discard <| s.read
       return .ok ()⟩
     server.serve
@@ -689,7 +702,7 @@ def simChecks (r : Runner) : Async Unit := do
     let tc ← TestClock.new
     let (client, server) ← hostPair
     let parked : Chan Unit ← Chan.new 1
-    server.setHandler ⟨m.id, fun _ => ExceptT.mk do
+    server.setHandler ⟨m.id, fun _ _ => ExceptT.mk do
       discard <| parked.send ()
       return .ok ()⟩
     server.serve

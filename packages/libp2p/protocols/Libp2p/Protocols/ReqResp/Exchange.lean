@@ -209,6 +209,6 @@ def mapError : Error → Mock.Core.Error
 /-- The handler value the host registers under `m.id`. -/
 def handler (m : Method) (clock : Conc.Clock) (timeoutMs : Nat)
     (respond : Option ByteArray → Async (List Chunk)) : Mock.Core.StreamHandler :=
-  ⟨m.id, fun s => ExceptT.mk do return (← serve s m clock timeoutMs respond).mapError mapError⟩
+  ⟨m.id, fun _ s => ExceptT.mk do return (← serve s m clock timeoutMs respond).mapError mapError⟩
 
 end Libp2p.Protocols.ReqResp
