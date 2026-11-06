@@ -110,12 +110,20 @@ structure Muxer where
   leftover. -/
   «open» : Role → Connection → ByteArray → ExceptT Error Async MuxSession
 
+/-- What the host knows about the connection under a served stream. -/
+structure StreamContext where
+  /-- The peer id the security handshake proved. -/
+  remotePeer : PeerId
+  /-- The peer's transport address, as the connection reports it. -/
+  remoteAddr : Multiaddr
+
 /-- The callback a served stream reaches. -/
 structure StreamHandler where
   /-- The id the handler serves. -/
   id : ProtocolId
-  /-- Serve one stream. -/
-  handle : Stream → ExceptT Error Async Unit
+  /-- Serve one stream of the connection that `StreamContext`
+  describes. -/
+  handle : StreamContext → Stream → ExceptT Error Async Unit
 
 /-! ## The policy hooks (module doc, "The policy shapes") -/
 

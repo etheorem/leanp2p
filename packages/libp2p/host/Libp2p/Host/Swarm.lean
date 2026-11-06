@@ -115,12 +115,15 @@ structure Config where
   task, so it answers at once. -/
   onFailure : Failure → BaseIO Unit := fun _ => pure ()
 
-/-- A session the host serves: the upgraded connection and the
-resource scope it holds. -/
+/-- A session the host serves: the upgraded connection, the peer's
+transport address, and the resource scope it holds. -/
 structure Served where
   /-- The upgrade's answer: the muxer session, the proved peer, and
   the join of the session and the secure connection. -/
   upgraded : Upgraded
+  /-- The connection's remote address; every served stream's
+  `StreamContext` carries it. -/
+  remoteAddr : Multiaddr
   /-- The connection's resource scope; the serve task releases it when
   the session ends. -/
   scope : ConnectionScope
@@ -280,8 +283,9 @@ the handler table, and run the handler. A refused admission, a failed
 negotiation, an id with no handler, and a failed handler each reset
 the stream, and the session stays (contracts 5 and 6; the package
 ARCHITECTURE, public surface). -/
-private def serveStream (h : Host) (peer : PeerId) (scope : ConnectionScope) (s : Stream) :
-    Async Unit := do
+private def serveStream (h : Host) (ctx : StreamContext) (scope : ConnectionScope)
+    (s : Stream) : Async Unit := do
+  let peer := ctx.remotePeer
   let some share ← (scope.reserveStream : BaseIO (Option Reservation))
     | s.reset
   let ids := Handlers.ids (← (h.handlers.get : BaseIO Handlers))
@@ -303,7 +307,7 @@ private def serveStream (h : Host) (peer : PeerId) (scope : ConnectionScope) (s 
     | some handler =>
       -- The handler owns the stream from here. Its answer reaches the
       -- owner of the host; a fault passes on to the session's join.
-      let r ← try (handler.handle s).run
+      let r ← try (handler.handle ctx s).run
         catch e =>
           s.reset
           share.release
@@ -319,13 +323,14 @@ the entry dead (contract 3), join the stream tasks, release the scope,
 and join the session. -/
 private def serveSession (h : Host) (peer : PeerId) (e : Entry Served) : Async Unit := do
   let u := e.session.upgraded
+  let ctx : StreamContext := { remotePeer := peer, remoteAddr := e.session.remoteAddr }
   let streams ← TaskSet.new
   let acceptFault ← try
       repeat
         -- Park: a stream of the peer wakes it, and so does the end of the
         -- session, by the peer or by `MuxSession.close` (contract 4).
         let some s ← u.session.accept | break
-        streams.spawn (h.serveStream peer e.session.scope s)
+        streams.spawn (h.serveStream ctx e.session.scope s)
       pure (none : Option IO.Error)
     catch err => pure (some err)
   h.sessions.update (SessionTable.markDead peer e.id)
@@ -344,11 +349,12 @@ private def serveSession (h : Host) (peer : PeerId) (e : Entry Served) : Async U
 
 /-- Commit an upgraded session through the dedup rule (contract 2), and
 start its serve task. The answer is the peer the host now serves. -/
-private def register (h : Host) (role : Role) (u : Upgraded) (scope : ConnectionScope) :
-    Async (Except Error PeerId) := do
+private def register (h : Host) (role : Role) (u : Upgraded) (remoteAddr : Multiaddr)
+    (scope : ConnectionScope) : Async (Except Error PeerId) := do
   let id ← (h.draw : BaseIO Nat)
   let bornMs ← (h.config.clock.nowMs : BaseIO Nat)
-  let entry : Entry Served := { id, role, bornMs, live := true, session := { upgraded := u, scope } }
+  let entry : Entry Served :=
+    { id, role, bornMs, live := true, session := { upgraded := u, remoteAddr, scope } }
   let decision ← (h.sessions.updateGet (dedup h.localPeer u.remotePeer entry) :
     BaseIO (Decision Served))
   match decision with
@@ -401,7 +407,7 @@ private def dialAddr (h : Host) (addr : Multiaddr) (expected : Option PeerId) :
   match ← h.upgradeConn .initiator conn expected scope with
   | .error e => return .error e
   | .ok u =>
-    let r ← h.register .initiator u scope
+    let r ← h.register .initiator u conn.remoteAddr scope
     if let .ok p := r then h.addAddrs p [addr]
     return r
 
@@ -452,7 +458,7 @@ private def inbound (h : Host) (conn : Connection) : Async Unit := do
     | conn.closeQuietly
   match ← h.upgradeConn .responder conn none scope with
   | .ok u =>
-    if let .error e ← h.register .responder u scope then
+    if let .error e ← h.register .responder u conn.remoteAddr scope then
       unless e matches .closing do h.report (some u.remotePeer) none e
   | .error (.gated _) | .error .closing => pure ()
   | .error e => h.report none none e
