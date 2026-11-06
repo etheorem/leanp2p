@@ -1,15 +1,17 @@
 import Conc
 import Streams
+import Libp2p.Identity
 
 /-!
 # Mock: the unmerged stack under the harness
 
 The harness composes a host from `libp2p/identity` (W5.1),
 `libp2p/core` (W5.2), `libp2p/security` (W5.3), `libp2p/mux` (W5.4),
-`libp2p/host` (W5.6), and `libp2p/protocols` (W5.7). None has merged,
-so the harness builds against mocks of their frozen surfaces (RULES.md,
-"Working ahead of the tree"). The mock imports nothing from those
-packages. It states no axiom.
+`libp2p/host` (W5.6), and `libp2p/protocols` (W5.7). W5.1 has merged,
+so the keys and the peer id come from `Libp2p.Identity`. The others
+have not, so the harness builds against mocks of their frozen surfaces
+(RULES.md, "Working ahead of the tree"). The mock imports nothing from
+those packages. It states no axiom.
 
 The forms:
 
@@ -36,23 +38,7 @@ set_option autoImplicit false
 
 namespace Interop.Mock
 
-/-! ## `libp2p/identity` -/
-
-/-- A peer id. The harness prints it, and puts it in a `/p2p`
-component. -/
-structure PeerId where
-  /-- The base58 text of the multihash. -/
-  text : String
-  deriving DecidableEq, Repr
-
-/-- The host identity key. -/
-structure PrivKey where
-  /-- The key bytes. -/
-  raw : ByteArray
-
-/-- A fresh Ed25519 identity. -/
-opaque generateKey : IO PrivKey :=
-  throw (IO.userError "libp2p/identity (W5.1) is not integrated")
+open Libp2p.Identity
 
 /-! ## `libp2p/core` -/
 

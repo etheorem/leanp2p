@@ -217,11 +217,18 @@ private def addrChecks (r : Runner) : IO Unit := do
   let any ← parse "/ip4/0.0.0.0/tcp/4001"
   let fixed ← parse "/ip4/192.168.1.9/tcp/4001"
   let redisLocal ← parse "/ip4/172.18.0.1/tcp/51000"
-  let peer : Mock.PeerId := ⟨"12D3KooWExample"⟩
+  -- The peer id of a fixed Ed25519 seed, through the real identity
+  -- package; the suffix is its printed text.
+  let peer ← match (do
+      let k ← Libp2p.Identity.PrivKey.ofData? .ed25519 ⟨Array.replicate 32 7⟩
+      Libp2p.Identity.PeerId.ofPubKey (← k.toPublic)) with
+    | .ok p => pure p
+    | .error e => throw <| IO.userError s!"test peer: {reprStr e}"
+  r.check "address: the peer id prints as a 12D3KooW id" ((toString peer).startsWith "12D3KooW")
   r.check "address: 0.0.0.0 takes the IP of the Redis connection, and keeps the port"
-    (publishedAddr any redisLocal peer matches .ok "/ip4/172.18.0.1/tcp/4001/p2p/12D3KooWExample")
+    ((publishedAddr any redisLocal peer).toOption == some s!"/ip4/172.18.0.1/tcp/4001/p2p/{peer}")
   r.check "address: a concrete IP stays"
-    (publishedAddr fixed redisLocal peer matches .ok "/ip4/192.168.1.9/tcp/4001/p2p/12D3KooWExample")
+    ((publishedAddr fixed redisLocal peer).toOption == some s!"/ip4/192.168.1.9/tcp/4001/p2p/{peer}")
 
 def run (r : Runner) : IO Unit := do
   r.section "interop" "(packages/cli/docs/PLAN.md, test milestones, unit 2)"

@@ -22,7 +22,7 @@ row 18).
 | `Interop/Config.lean` | the test plan's environment variables, read into a `Config`, and the timing record |
 | `Interop/Resp.lean` | RESP2, pure: the reply header parse with its caps, and the command encoding |
 | `Interop/Redis.lean` | the harness coordination client, private to the `interop` executable: `PING`, `RPUSH`, and `BLPOP` over one connection; the spike's `LeanP2P/Interop/Redis.lean` mapped here |
-| `Interop/Mock/Stack.lean` | the mock of the unmerged stack under the harness (RULES.md, "Working ahead of the tree"), until W5.1 to W5.7 merge |
+| `Interop/Mock/Stack.lean` | the mock of the unmerged stack under the harness (RULES.md, "Working ahead of the tree"), until W5.2 to W5.7 merge |
 
 The package is executables only, with no library root (see
 Decisions). The W0.1 scaffold gives every leaf a nominal `lean_lib`;
@@ -152,13 +152,14 @@ three CLI contracts.
 
 ## The mock
 
-W5.1, W5.2, W5.3, W5.4, W5.6, and W5.7 are open, so the harness builds
+W5.2, W5.3, W5.4, W5.6, and W5.7 are open, so the harness builds
 against `Interop/Mock/Stack.lean`, a mock of their frozen surfaces
 (RULES.md, "Working ahead of the tree"). A type is a copy of the frozen
 shape, reduced to the fields the harness touches. An operation is
 `opaque`, and its body fails with the name of the missing package: no
-body fakes a connection, a handshake, or an identity. The mock states
-no axiom. Until the integration, a live run stops at the first host
+body fakes a connection or a handshake. The mock states no axiom.
+W5.1 has merged, so the identity key and the peer id come from the
+real `Libp2p.Identity`, and the harness generates its key through it. Until the integration, a live run stops at the first host
 call, and the gate cannot pass. At the integration, `Interop.lean`
 imports the real packages, and the module goes.
 
