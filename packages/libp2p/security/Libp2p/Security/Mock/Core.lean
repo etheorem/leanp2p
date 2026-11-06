@@ -47,7 +47,7 @@ inductive Error where
   | authentication (detail : String)
   | timeout (detail : String)
   | closed (detail : String)
-  deriving DecidableEq, Repr
+  deriving DecidableEq, Repr, Hashable
 
 /-- The log line of the error: the kind, then the rendered detail. -/
 def Error.render : Error → String
