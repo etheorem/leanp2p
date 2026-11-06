@@ -333,13 +333,27 @@ private def checkHosts (r : Runner) : IO Unit := do
   r.check "comment and blank rows ignored" (parseHosts "# only\n\n   # tail\n" == [])
   r.check "multiaddr prefix" (multiaddrPrefix [11,0,0,2] == some "/ip4/11.0.0.2/tcp/9000")
 
+private def nondecreasing : List ScheduledAction → Bool
+  | [] | [_] => true
+  | left :: right :: rest => left.time ≤ right.time && nondecreasing (right :: rest)
+
+private def publishRowsFor (script : Script) (nodeId : Nat) : List (Nat × Nat × Nat × Nat × String) :=
+  match plan script (Int.ofNat nodeId) with
+  | .error _ => []
+  | .ok actions => actions.filterMap fun item => match item.action with
+    | .publish id size topic => some (nodeId, item.time, id.toNat, size.toNat, topic)
+    | _ => none
+
+private def allPublishRows (script : Script) : List (Nat × Nat × Nat × Nat × String) :=
+  (List.range 32).flatMap (publishRowsFor script)
+
 private def checkPlan (r : Runner) : IO Unit := do
   let source ← loadFixture fixture
   match parseScriptJson source with
   | .error _ => r.check "virtual plan parses fixture" false
   | .ok script =>
-      match plan script 0, plan script 0, plan script 2, plan script 31 with
-      | .ok node0, .ok again, .ok node2, .ok node31 =>
+      match plan script 0, plan script 0, plan script 1, plan script 2, plan script 31 with
+      | .ok node0, .ok again, .ok node1, .ok node2, .ok node31 =>
           r.check "virtual plan is deterministic" (node0 == again)
           r.check "node pruning differs" (node0 != node2 && node2 != node31)
           r.check "node0 first action is init at t=0" (match node0.head? with
@@ -359,6 +373,15 @@ private def checkPlan (r : Runner) : IO Unit := do
           r.check "node2 publish times and fields" (publishes ==
             [(168000, 4, 98304, "a-subnet"), (180000, 5, 98304, "a-subnet"),
              (252000, 11, 98304, "a-subnet")])
+          r.check "all 16 fixture publishes stay attached to their nodes" (allPublishRows script ==
+            [(2, 168000, 4, 98304, "a-subnet"), (2, 180000, 5, 98304, "a-subnet"),
+             (2, 252000, 11, 98304, "a-subnet"), (3, 132000, 1, 98304, "a-subnet"),
+             (3, 264000, 12, 98304, "a-subnet"), (5, 240000, 10, 98304, "a-subnet"),
+             (6, 156000, 3, 98304, "a-subnet"), (7, 300000, 15, 98304, "a-subnet"),
+             (8, 192000, 6, 98304, "a-subnet"), (16, 228000, 9, 98304, "a-subnet"),
+             (16, 288000, 14, 98304, "a-subnet"), (17, 216000, 8, 98304, "a-subnet"),
+             (20, 276000, 13, 98304, "a-subnet"), (27, 120000, 0, 98304, "a-subnet"),
+             (28, 204000, 7, 98304, "a-subnet"), (30, 144000, 2, 98304, "a-subnet")])
           r.check "node0 subscribe is full at t=0" (node0.any fun item => item.time == 0 && match item.action with
             | .subscribeToTopic topic isPartial => topic == "a-subnet" && !isPartial
             | _ => false)
@@ -372,8 +395,17 @@ private def checkPlan (r : Runner) : IO Unit := do
             | .waitUntil deadline => deadline == 342 && item.time == 342000
             | _ => false)
           r.check "node0 has no action after 342s" (node0.all (fun item => item.time ≤ 342000))
-      | _, _, _, _ =>
-          r.check "virtual plan builds for nodes 0, 2, and 31" false
+          r.check "node1 has full startup and wait sequence" (node1.length == 22 &&
+            node1.head?.map (fun item => item.time == 0) == some true &&
+            node1.getLast?.map (fun item => item.time == 342000) == some true)
+          r.check "node31 has full startup and wait sequence" (node31.length == 22 &&
+            node31.head?.map (fun item => item.time == 0) == some true &&
+            node31.getLast?.map (fun item => item.time == 342000) == some true)
+          r.check "positive waits never move virtual time backwards" (match plan script 0 with
+            | .ok actions => nondecreasing actions
+            | .error _ => false)
+      | _, _, _, _, _ =>
+          r.check "virtual plan builds for nodes 0, 1, 2, and 31" false
 
 /-- The suite. -/
 def run (r : Runner) : IO Unit := do

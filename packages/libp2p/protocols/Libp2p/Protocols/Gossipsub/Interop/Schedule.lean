@@ -84,15 +84,16 @@ private def actionOf : Instruction → Action
 
 /-- Stamp each instruction with the virtual time a driver reaches it at.
 
-The clock starts at zero. A `waitUntil` moves the clock to its deadline in
-milliseconds. A negative deadline would move the clock backwards, so it
-clamps to the current time instead. -/
+The clock starts at zero. A `waitUntil` requests its deadline in milliseconds.
+The plan keeps the clock monotonic when a later deadline is already past. A
+nonpositive deadline also keeps the current time. -/
 private def expand (clock : Millis) : List Instruction → List ScheduledAction
   | [] => []
   | instruction :: rest =>
       match instruction with
       | .waitUntil deadline =>
-          let next := if deadline ≤ 0 then clock else deadline.toNat * 1000
+          let requested := if deadline ≤ 0 then clock else deadline.toNat * 1000
+          let next := max clock requested
           { time := next, action := actionOf instruction } :: expand next rest
       | _ => { time := clock, action := actionOf instruction } :: expand clock rest
 
