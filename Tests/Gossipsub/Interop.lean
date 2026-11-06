@@ -337,15 +337,35 @@ private def nondecreasing : List ScheduledAction → Bool
   | [] | [_] => true
   | left :: right :: rest => left.time ≤ right.time && nondecreasing (right :: rest)
 
-private def publishRowsFor (script : Script) (nodeId : Nat) : List (Nat × Nat × Nat × Nat × String) :=
+private structure FixturePublish where
+  messageId : Nat
+  nodeId : Nat
+  time : Nat
+  size : Nat
+  topic : String
+  deriving BEq, DecidableEq
+
+private def publishRowsFor (script : Script) (nodeId : Nat) : List FixturePublish :=
   match plan script (Int.ofNat nodeId) with
   | .error _ => []
   | .ok actions => actions.filterMap fun item => match item.action with
-    | .publish id size topic => some (nodeId, item.time, id.toNat, size.toNat, topic)
+    | .publish id size topic => some ⟨id.toNat, nodeId, item.time, size.toNat, topic⟩
     | _ => none
 
-private def allPublishRows (script : Script) : List (Nat × Nat × Nat × Nat × String) :=
+private def allPublishRows (script : Script) : List FixturePublish :=
   (List.range 32).flatMap (publishRowsFor script)
+
+private def publishRowsForPlan (script : Script) (nodeId : Nat) : List (Nat × Nat × Nat × String) :=
+  match plan script (Int.ofNat nodeId) with
+  | .error _ => []
+  | .ok actions => actions.filterMap fun item => match item.action with
+    | .publish id size topic => some (item.time, id.toNat, size.toNat, topic)
+    | _ => none
+
+private def waitPlan (source : String) : Option (List ScheduledAction) :=
+  match parseScript source with
+  | .error _ => none
+  | .ok script => (plan script 0).toOption
 
 private def checkPlan (r : Runner) : IO Unit := do
   let source ← loadFixture fixture
@@ -373,15 +393,44 @@ private def checkPlan (r : Runner) : IO Unit := do
           r.check "node2 publish times and fields" (publishes ==
             [(168000, 4, 98304, "a-subnet"), (180000, 5, 98304, "a-subnet"),
              (252000, 11, 98304, "a-subnet")])
+          r.check "node 1 publish subset empty" (publishRowsForPlan script 1 == [])
+          r.check "node 2 publish subset exact" (publishRowsForPlan script 2 ==
+            [(168000, 4, 98304, "a-subnet"), (180000, 5, 98304, "a-subnet"),
+             (252000, 11, 98304, "a-subnet")])
+          r.check "node 3 publish subset exact" (publishRowsForPlan script 3 ==
+            [(132000, 1, 98304, "a-subnet"), (264000, 12, 98304, "a-subnet")])
+          r.check "node 16 publish subset exact" (publishRowsForPlan script 16 ==
+            [(228000, 9, 98304, "a-subnet"), (288000, 14, 98304, "a-subnet")])
+          r.check "node 31 publish subset empty" (publishRowsForPlan script 31 == [])
+          r.check "publish count per node" (((List.range 32).filterMap fun nodeId =>
+            let count := (publishRowsFor script nodeId).length
+            if count == 0 then none else some (nodeId, count)) ==
+              [(2,3), (3,2), (5,1), (6,1), (7,1), (8,1), (16,2), (17,1), (20,1), (27,1), (28,1), (30,1)])
+          r.check "all 32 node plans succeed" ((List.range 32).all fun nodeId =>
+            (plan script (Int.ofNat nodeId)).isOk)
+          let publishRows := allPublishRows script
+          let publishIds := publishRows.map (·.messageId)
+          r.check "fixture has exactly 16 publishes" (publishRows.length == 16)
+          r.check "publish IDs cover 0 through 15 exactly once" (publishIds.length == 16 &&
+            publishIds.eraseDups.length == 16 && publishIds.all (fun id => id ≤ 15))
+          r.check "all publish sizes and topics match fixture" (publishRows.all (fun row => row.size == 98304 && row.topic == "a-subnet"))
           r.check "all 16 fixture publishes stay attached to their nodes" (allPublishRows script ==
-            [(2, 168000, 4, 98304, "a-subnet"), (2, 180000, 5, 98304, "a-subnet"),
-             (2, 252000, 11, 98304, "a-subnet"), (3, 132000, 1, 98304, "a-subnet"),
-             (3, 264000, 12, 98304, "a-subnet"), (5, 240000, 10, 98304, "a-subnet"),
-             (6, 156000, 3, 98304, "a-subnet"), (7, 300000, 15, 98304, "a-subnet"),
-             (8, 192000, 6, 98304, "a-subnet"), (16, 228000, 9, 98304, "a-subnet"),
-             (16, 288000, 14, 98304, "a-subnet"), (17, 216000, 8, 98304, "a-subnet"),
-             (20, 276000, 13, 98304, "a-subnet"), (27, 120000, 0, 98304, "a-subnet"),
-             (28, 204000, 7, 98304, "a-subnet"), (30, 144000, 2, 98304, "a-subnet")])
+            [⟨4, 2, 168000, 98304, "a-subnet"⟩,
+             ⟨5, 2, 180000, 98304, "a-subnet"⟩,
+             ⟨11, 2, 252000, 98304, "a-subnet"⟩,
+             ⟨1, 3, 132000, 98304, "a-subnet"⟩,
+             ⟨12, 3, 264000, 98304, "a-subnet"⟩,
+             ⟨10, 5, 240000, 98304, "a-subnet"⟩,
+             ⟨3, 6, 156000, 98304, "a-subnet"⟩,
+             ⟨15, 7, 300000, 98304, "a-subnet"⟩,
+             ⟨6, 8, 192000, 98304, "a-subnet"⟩,
+             ⟨9, 16, 228000, 98304, "a-subnet"⟩,
+             ⟨14, 16, 288000, 98304, "a-subnet"⟩,
+             ⟨8, 17, 216000, 98304, "a-subnet"⟩,
+             ⟨13, 20, 276000, 98304, "a-subnet"⟩,
+             ⟨0, 27, 120000, 98304, "a-subnet"⟩,
+             ⟨7, 28, 204000, 98304, "a-subnet"⟩,
+             ⟨2, 30, 144000, 98304, "a-subnet"⟩])
           r.check "node0 subscribe is full at t=0" (node0.any fun item => item.time == 0 && match item.action with
             | .subscribeToTopic topic isPartial => topic == "a-subnet" && !isPartial
             | _ => false)
@@ -401,6 +450,25 @@ private def checkPlan (r : Runner) : IO Unit := do
           r.check "node31 has full startup and wait sequence" (node31.length == 22 &&
             node31.head?.map (fun item => item.time == 0) == some true &&
             node31.getLast?.map (fun item => item.time == 342000) == some true)
+          let reverseWait := waitPlan "{\"script\":[{\"type\":\"initGossipSub\",\"gossipSubParams\":{}},{\"type\":\"waitUntil\",\"elapsedSeconds\":300},{\"type\":\"waitUntil\",\"elapsedSeconds\":100},{\"type\":\"connect\",\"connectTo\":[]}] }"
+          r.check "earlier wait barrier remains at t=300" (match reverseWait with
+            | some actions => nondecreasing actions && actions.length == 4 &&
+                actions[2]?.map (·.time) == some 300000 && actions.getLast?.map (·.time) == some 300000
+            | none => false)
+          r.check "action after earlier wait stays at t=300" (match reverseWait with
+            | some actions => actions.getLast?.map (fun item => match item.action with
+                | .connect _ => item.time == 300000
+                | _ => false) == some true
+            | none => false)
+          let sameWait := waitPlan "{\"script\":[{\"type\":\"initGossipSub\",\"gossipSubParams\":{}},{\"type\":\"waitUntil\",\"elapsedSeconds\":300},{\"type\":\"waitUntil\",\"elapsedSeconds\":300}] }"
+          r.check "equal wait barrier is idempotent" (match sameWait with
+            | some actions => actions.length == 3 && actions[1]?.map (·.time) == some 300000 &&
+                actions[2]?.map (·.time) == some 300000
+            | none => false)
+          let zeroWait := waitPlan "{\"script\":[{\"type\":\"initGossipSub\",\"gossipSubParams\":{}},{\"type\":\"waitUntil\",\"elapsedSeconds\":0},{\"type\":\"connect\",\"connectTo\":[]}] }"
+          r.check "zero wait as first action adds no delay" (match zeroWait with
+            | some actions => actions.length == 3 && actions.all (fun item => item.time == 0)
+            | none => false)
           r.check "positive waits never move virtual time backwards" (match plan script 0 with
             | .ok actions => nondecreasing actions
             | .error _ => false)
