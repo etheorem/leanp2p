@@ -953,29 +953,35 @@ private def leftoverChecks (r : Runner) : Async Unit := do
 
 /-- A write whose frame goes out after the loop has ended answers `.ok`.
 The client's connection reads park until the test closes `fin`, then
-end, as after a peer FIN, while its writes still reach the server. Once
-`armed` is set, the writes wait at `gate`, so the write's frame is still
-queued when the teardown runs. -/
+end, as after a peer FIN, while its writes still reach the server. The
+DATA frame signals entry, then waits at `gate` until teardown ends. The
+stream-opening frame passes the gate so it cannot block the DATA frame. -/
 private def writeAcrossEndChecks (r : Runner) : Async Unit := do
   let (c, s) ← pair
   let fin : Chan Unit ← Chan.new 1
   let gate : Chan Unit ← Chan.new 1
-  let armed : OnceRef Bool ← OnceRef.new false
+  let entered : Chan Unit ← Chan.new 1
   let c' : Connection := { c with
     read := do discard fin.recv; return none
     write := fun bytes => do
-      if ← (armed.get : BaseIO Bool) then discard gate.recv
+      match Header.decodeB? bytes with
+      | .ok (h, _) =>
+        if h.type == .data && h.streamId == 1 then
+          discard <| entered.send ()
+          discard gate.recv
+      | .error _ => pure ()
       c.write bytes }
   let client ← Session.new .client c'
   let server ← Session.new .server s
   let .ok cs ← client.openStream | throw <| IO.userError "open failed"
-  armed.set true
   let tasks ← TaskSet.new
   let wrote : OnceRef Bool ← OnceRef.new false
   tasks.spawn do
     if let .ok () ← cs.write (b "late") then wrote.set true
+  -- Wait until the target DATA frame has entered the wrapped write.
   -- The end of the reads ends the loop; the teardown closes the accept
   -- queue, so this accept answers `none` only after the teardown.
+  discard entered.recv
   fin.close
   r.check "session: the reader's end ends the session" ((← client.acceptStream).isNone)
   gate.close
