@@ -1,5 +1,6 @@
 import Streams.BufReader
-import Streams.Mock.Varint
+import Bytes
+import Varint
 
 /-!
 # `Framing`: length-prefixed frames
@@ -42,70 +43,17 @@ A connection that ends inside a frame ends the read as `none`, the
 end-of-stream channel of §3.5. A frame over the cap is `malformed`
 before the read takes a payload byte.
 
-## The mocks
-
 `DecodeError`, `Codec`, `LawfulCodec`, and the byte model come from
-`Streams.Mock.Bytes`, and the varint comes from `Streams.Mock.Varint`,
-until W1.2 and W2.1 merge. The proofs use the two axioms of the varint
-mock and nothing from the byte model.
+`base/bytes`, and the varint comes from `codec/varint`. The proofs use
+two theorems of the varint, `decodeEncodeSuffix` and `encodeDecode`,
+and nothing from the byte model.
 -/
 
 set_option autoImplicit false
 
 namespace Streams.Framing
 
-open Conc Streams.Mock.Bytes Streams.Mock
-
-/-! ## Taking a payload -/
-
-/-- The first `k` bytes of the input, and the rest. A non-byte among the
-bytes present is `malformed`, since no suffix can repair it. Fewer than
-`k` bytes is `truncated`, since more input can complete the payload. -/
-def take? (k : Nat) (l : List Nat) : Except DecodeError (List Nat × List Nat) :=
-  if ¬∀ x ∈ l.take k, x < 256 then .error .malformed
-  else if l.length < k then .error .truncated
-  else .ok (l.take k, l.drop k)
-
-/-- A take of the bytes in front of any rest returns them whole. -/
-theorem take?Append {b : List Nat} (rest : List Nat) (h : ∀ x ∈ b, x < 256) :
-    take? b.length (b ++ rest) = .ok (b, rest) := by
-  have htake : (b ++ rest).take b.length = b := by simp
-  unfold take?
-  rw [htake]
-  split
-  · next hn => exact absurd h hn
-  · split
-    · next hl => simp at hl; omega
-    · simp
-
-/-- A successful take split the input at `k`, and the part it took holds
-bytes. -/
-theorem ofTake? {k : Nat} {l b rest : List Nat} (h : take? k l = .ok (b, rest)) :
-    b ++ rest = l ∧ b.length = k ∧ ∀ x ∈ b, x < 256 := by
-  unfold take? at h
-  split at h
-  · cases h
-  · next hbytes =>
-    split at h
-    · cases h
-    · next hlen =>
-      simp only [Except.ok.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl⟩ := h
-      refine ⟨List.take_append_drop k l, ?_, by simpa using hbytes⟩
-      simp only [List.length_take]
-      omega
-
-/-- A take from an input shorter than `k` that holds bytes is
-`truncated`. -/
-theorem take?Short {k : Nat} {l : List Nat} (hb : ∀ x ∈ l, x < 256) (hl : l.length < k) :
-    take? k l = .error .truncated := by
-  have hall : ∀ x ∈ l.take k, x < 256 := fun x hx => hb x (List.mem_of_mem_take hx)
-  unfold take?
-  rw [ite_eq_right (fun hn => hn hall), ite_eq_left hl]
-
-example : take? 2 [1, 2, 3] = .ok ([1, 2], [3]) := rfl
-example : take? 4 [1, 2, 3] = .error .truncated := rfl
-example : take? 2 [1, 300, 3] = .error .malformed := rfl
+open Conc Bytes
 
 /-! ## The prefix shapes -/
 
@@ -353,10 +301,8 @@ example : decode? .u16be 4 [0, 2, 7, 8, 9] = .ok (⟨[7, 8], by decide, by decid
 example : decode? .u16be 4 [0, 5, 1, 2, 3, 4, 5] = .error .malformed := rfl
 example : decode? .u16be 4 [0] = .error .truncated := rfl
 
--- The varint decoder is `opaque` in the mock, so the kernel cannot
--- reduce a `uvarint` decode. `#guard` runs the compiled body instead.
-#guard decode? .uvarint 4 [3, 1, 2] matches .error .truncated
-#guard decode? .uvarint 4 [5, 1, 2, 3, 4, 5] matches .error .malformed
+example : decode? .uvarint 4 [3, 1, 2] = .error .truncated := rfl
+example : decode? .uvarint 4 [5, 1, 2, 3, 4, 5] = .error .malformed := rfl
 
 end Frame
 

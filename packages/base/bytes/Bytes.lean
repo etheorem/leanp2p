@@ -3,6 +3,8 @@ import Bytes.Codec
 import Bytes.Model
 import Bytes.Text
 import Bytes.Harness
+import Bytes.Take
+import Bytes.Blob
 
 /-!
 # Bytes

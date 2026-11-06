@@ -107,7 +107,7 @@ set_option autoImplicit false
 
 namespace Streams.Tcp
 
-open Conc Streams.Mock.Multiformats
+open Conc Multiformats
 
 /-- The native socket. -/
 abbrev Socket := Std.Internal.UV.TCP.Socket

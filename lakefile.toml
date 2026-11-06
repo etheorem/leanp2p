@@ -139,6 +139,7 @@ globs = ["Streams.*"]
 name = "Yamux"
 srcDir = "packages/net/yamux"
 roots = ["Yamux"]
+globs = ["Yamux.*"]
 
 [[lean_lib]]
 name = "Libp2pIdentity"
@@ -192,3 +193,10 @@ globs = ["Tests.+"]
 [[lean_exe]]
 name = "tests"
 root = "Tests.Main"
+
+# The Lean side of the yamux interop check against go-yamux; run it
+# through `scripts/yamux-interop.sh`. It is not part of `lake test`,
+# which stays free of Go tooling.
+[[lean_exe]]
+name = "yamux-interop"
+root = "Tests.Interop.Yamux"

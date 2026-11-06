@@ -23,6 +23,7 @@ import Tests.BackendSoak
 import Tests.Hashes
 import Tests.Facade
 import Tests.CryptoCross
+import Tests.Yamux
 
 /-!
 # Test entry point
@@ -61,4 +62,5 @@ def main : IO UInt32 := do
   Tests.Hashes.run r
   Tests.Facade.run r
   Tests.CryptoCross.run r
+  Tests.Yamux.run r
   r.summary
