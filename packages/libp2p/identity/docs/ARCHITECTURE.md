@@ -25,7 +25,7 @@ imports it for `PeerId`, and nothing in it knows a connection (§2,
 | `Libp2p/Identity/Rlp/Bytes.lean` | the `ByteArray` decoder and encoder, the production path that the harness of `base/bytes` pins to the model |
 | `Libp2p/Identity/Enr.lean` | the ENR record, its typed pairs, the `v4` signature check and signer, and the text form |
 | `Libp2p/Identity/Enr/Mapping.lean` | the peer-id mapping and the multiaddr mapping |
-| `Libp2p/Identity/Mock/*.lean` | the mocks of the W5.1 key surface and of the W2.3 multiaddr and multibase surface while their units are open (RULES.md, "Working ahead of the tree"); the integration deletes them |
+| `Libp2p/Identity/Mock/Keys.lean` | the mock of the W5.1 key surface while that unit is open (RULES.md, "Working ahead of the tree"); the integration deletes it |
 
 All declarations live in the `Libp2p.Identity` namespace, and the root
 module re-exports the public submodules. The spike reference for this

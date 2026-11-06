@@ -3,7 +3,7 @@ import Crypto
 import Libp2p.Identity.Constants
 import Libp2p.Identity.Rlp
 import Libp2p.Identity.Rlp.Bytes
-import Libp2p.Identity.Mock.Multiformats
+import Multiformats
 
 /-!
 # Ethereum Node Records
@@ -304,24 +304,35 @@ def sign (scalar : Crypto.Key32) (seq : Nat) (pairs : List Pair) : Except Error 
 
 /-! ## The text form -/
 
-open Mock.Multiformats in
+open Multiformats in
+/-- The multibase text of the bytes under `base64url`. `Multibase.encode`
+answers an `Except`, because Proquint refuses an odd byte count; the
+`base64url` arm always answers `.ok`, so `simp` closes the other arm,
+as `Multibase.encodeBase32` does for its base. -/
+private def base64urlText (b : ByteArray) : String :=
+  match h : Multibase.encode .base64url b with
+  | .ok text => text
+  | .error _ => by simp [Multibase.encode, Multibase.encode?, Bind.bind, Except.bind] at h
+
 /-- The multibase prefix of `base64url`. The encoding of no bytes is
 the prefix alone, so the prefix character is never written twice. -/
-private def base64urlPrefix : String := Multibase.encode .base64url .empty
+private def base64urlPrefix : String := base64urlText .empty
 
-open Mock.Multiformats in
 /-- The text form: `enr:`, then the base64url body of the encoding. -/
 def toText (r : Enr) : String :=
   -- `String.drop` gives a `String.Slice`; `toString` copies it out.
-  textPrefix ++ ((Multibase.encode .base64url r.encode).drop base64urlPrefix.length).toString
+  textPrefix ++ ((base64urlText r.encode).drop base64urlPrefix.length).toString
 
-open Mock.Multiformats in
-/-- Read a record from its text form, then decode and verify it. -/
+open Multiformats in
+/-- Read a record from its text form, then decode and verify it. The
+reader puts the `base64url` prefix in front of the body, so a decode
+under any other base cannot occur; the arm refuses it all the same. -/
 def ofText? (s : String) : Except Error Enr := do
   unless s.startsWith textPrefix do throw .text
   let body := (s.drop textPrefix.length).toString
   match Multibase.decode? (base64urlPrefix ++ body) with
   | .ok (.base64url, b) => decode? b
+  | .ok _ => throw .text
   | .error _ => throw .text
 
 end Enr
