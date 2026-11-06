@@ -159,9 +159,10 @@ shape, reduced to the fields the harness touches. An operation is
 `opaque`, and its body fails with the name of the missing package: no
 body fakes a connection or a handshake. The mock states no axiom.
 W5.1 has merged, so the identity key and the peer id come from the
-real `Libp2p.Identity`, and the harness generates its key through it. Until the integration, a live run stops at the first host
-call, and the gate cannot pass. At the integration, `Interop.lean`
-imports the real packages, and the module goes.
+real `Libp2p.Identity`, and the harness generates its key through it.
+Until the integration, a live run stops at the first host call, and
+the gate cannot pass. At the integration, `Interop.lean` imports the
+real packages, and the module goes.
 
 ## What the package must not depend on
 
