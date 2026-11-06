@@ -1,0 +1,329 @@
+import Tests.Support
+import Libp2p.Protocols.Gossipsub.Interop
+
+/-!
+# GossipSub interop pure-core suite
+
+This suite checks the adapter against the captured 32-node script and the
+pure edge cases required by specification sections 2, 3, 5, 6, and 7.
+The fixture count is top-level 100. Recursive instruction counts include the
+80 conditional wrappers and their nested instructions, so they total 180.
+-/
+
+set_option autoImplicit false
+
+namespace Tests.Gossipsub.Interop
+
+open Lean (Json)
+open Tests (Runner loadFixture)
+open Libp2p.Protocols.Gossipsub
+open Libp2p.Protocols.Gossipsub.Interop
+
+private def fixture : String := "gossipsub-interop-params.json"
+
+structure Counts where
+  total : Nat := 0
+  ifNode : Nat := 0
+  init : Nat := 0
+  connect : Nat := 0
+  subscribe : Nat := 0
+  publish : Nat := 0
+  validationDelay : Nat := 0
+  wait : Nat := 0
+
+private def add (left right : Counts) : Counts :=
+  { total := left.total + right.total
+    ifNode := left.ifNode + right.ifNode
+    init := left.init + right.init
+    connect := left.connect + right.connect
+    subscribe := left.subscribe + right.subscribe
+    publish := left.publish + right.publish
+    validationDelay := left.validationDelay + right.validationDelay
+    wait := left.wait + right.wait }
+
+private def countInstruction : Instruction → Counts
+  | .initGossipSub _ => { total := 1, init := 1 }
+  | .ifNodeIDEquals _ nested => add { total := 1, ifNode := 1 } (countInstruction nested)
+  | .connect _ => { total := 1, connect := 1 }
+  | .subscribeToTopic _ _ => { total := 1, subscribe := 1 }
+  | .publish _ _ _ => { total := 1, publish := 1 }
+  | .setTopicValidationDelay _ _ => { total := 1, validationDelay := 1 }
+  | .waitUntil _ => { total := 1, wait := 1 }
+
+private def countInstructions (instructions : List Instruction) : Counts :=
+  instructions.foldl (fun counts instruction => add counts (countInstruction instruction)) {}
+
+private def firstInit : List Instruction → Option GossipSubParams
+  | [] => none
+  | .initGossipSub params :: _ => some params
+  | .ifNodeIDEquals _ nested :: rest => firstInit (nested :: rest)
+  | _ :: rest => firstInit rest
+
+private def firstNested : List Instruction → Option Instruction
+  | [] => none
+  | .ifNodeIDEquals nodeId nested :: _ => some (.ifNodeIDEquals nodeId nested)
+  | _ :: rest => firstNested rest
+
+private def hasConnect : List Instruction → Bool
+  | [] => false
+  | .connect peers :: _ => !peers.isEmpty
+  | .ifNodeIDEquals _ nested :: rest => hasConnect (nested :: rest)
+  | _ :: rest => hasConnect rest
+
+private def hasSubscribe : List Instruction → Bool
+  | [] => false
+  | .subscribeToTopic topic isPartial :: _ => topic == "a-subnet" && !isPartial
+  | .ifNodeIDEquals _ nested :: rest => hasSubscribe (nested :: rest)
+  | _ :: rest => hasSubscribe rest
+
+private def hasPublish : List Instruction → Bool
+  | [] => false
+  | .publish messageId size topic :: _ => messageId == 0 && size == 98304 && topic == "a-subnet"
+  | .ifNodeIDEquals _ nested :: rest => hasPublish (nested :: rest)
+  | _ :: rest => hasPublish rest
+
+private def hasDelay : List Instruction → Bool
+  | [] => false
+  | .setTopicValidationDelay topic delay :: _ => topic == "a-subnet" && delay == 0.005
+  | .ifNodeIDEquals _ nested :: rest => hasDelay (nested :: rest)
+  | _ :: rest => hasDelay rest
+
+private def hasWait : List Instruction → Bool
+  | [] => false
+  | .waitUntil seconds :: rest => seconds == 342 || hasWait rest
+  | .ifNodeIDEquals _ nested :: rest => hasWait (nested :: rest)
+  | _ :: rest => hasWait rest
+
+private def parsedJson (source : String) : Json :=
+  match Json.parse source with
+  | .ok value => value
+  | .error _ => Json.null
+
+private def isError {α : Type} : Except String α → Bool
+  | .error _ => true
+  | .ok _ => false
+
+private def errorIs {α : Type} (message : String) : Except String α → Bool
+  | .error error => error == message
+  | .ok _ => false
+
+private def stringField (value : Json) (name : String) : Option String :=
+  match value.getObjVal? name with
+  | .ok field => field.getStr?.toOption
+  | .error _ => none
+
+private def intField (value : Json) (name : String) : Option Int :=
+  match value.getObjVal? name with
+  | .ok field => field.getInt?.toOption
+  | .error _ => none
+
+/-- The fixture, instruction fields, and parameter conversion. -/
+private def checkScript (r : Runner) : IO Unit := do
+  r.section "gossipsub interop script" "vendor/test-plans/gossipsub-interop/script_instruction.py"
+  let fixtureJson ← loadFixture fixture
+  let parsed := parseScriptJson fixtureJson
+  match parsed with
+  | .error _ =>
+      r.check "captured script parses" false
+  | .ok script =>
+      let counts := countInstructions script.instructions
+      r.check "top-level instruction count" (script.instructions.length == 100)
+      r.check "recursive instruction count" (counts.total == 180)
+      r.check "ifNodeIDEquals count" (counts.ifNode == 80)
+      r.check "initGossipSub count" (counts.init == 32)
+      r.check "connect count" (counts.connect == 32)
+      r.check "publish count" (counts.publish == 16)
+      r.check "waitUntil count" (counts.wait == 18)
+      r.check "setTopicValidationDelay count" (counts.validationDelay == 1)
+      r.check "subscribeToTopic count" (counts.subscribe == 1)
+      r.check "connect fields decode" (hasConnect script.instructions)
+      r.check "subscribe fields decode" (hasSubscribe script.instructions)
+      r.check "publish fields decode" (hasPublish script.instructions)
+      r.check "validation delay fields decode" (hasDelay script.instructions)
+      r.check "wait fields decode" (hasWait script.instructions)
+      match firstNested script.instructions with
+      | some (.ifNodeIDEquals nodeId (.initGossipSub _)) =>
+          r.check "nested node id decodes" (nodeId == 0)
+      | _ => r.check "nested instruction decodes" false
+      match firstInit script.instructions with
+      | none => r.check "captured parameters present" false
+      | some params =>
+          r.check "captured parameter pair retained" (params.raw.length == 1)
+          r.check "HeartbeatInitialDelay retained" (params.heartbeatInitialDelay.map nanosecondsToMillis == some 100)
+          r.check "HeartbeatInitialDelay is not mapped" (match toCoreParams params with
+            | .ok core => core.heartbeatInterval == Core.defaults.heartbeatInterval
+            | .error _ => false)
+          r.check "HeartbeatInitialDelay is unmapped" (params.unmapped.length == 1 &&
+            params.unmapped.any (fun pair => pair.1 == "HeartbeatInitialDelay"))
+
+/-- Each unsupported and malformed input returns a typed parse error. -/
+private def checkErrors (r : Runner) : IO Unit := do
+  r.check "script scalar rejected" (errorIs "root.script: expected array" (parseScript "{\"script\":5}"))
+  r.check "unknown instruction rejected" (errorIs "script[0].type: unknown instruction type nope" (parseScript "{\"script\":[{\"type\":\"nope\"}]}"))
+  r.check "publish missing topic rejected" (isError (parseScriptJson (parsedJson "{\"script\":[{\"type\":\"publish\",\"messageID\":1,\"messageSizeBytes\":8}]}")))
+  r.check "connect non-integer rejected" (isError (parseScriptJson (parsedJson "{\"script\":[{\"type\":\"connect\",\"connectTo\":[\"x\"]}]}")))
+  r.check "addPartialMessage rejected explicitly"
+    (errorIs "script[0]: addPartialMessage is out of scope for v1.1"
+      (parseScriptJson (parsedJson "{\"script\":[{\"type\":\"addPartialMessage\"}]}")))
+  r.check "publishPartial rejected explicitly"
+    (errorIs "script[0]: publishPartial is out of scope for v1.1"
+      (parseScriptJson (parsedJson "{\"script\":[{\"type\":\"publishPartial\"}]}")))
+
+/-- The record encoder emits compact, escaped JSON objects. -/
+private def checkRecords (r : Runner) : IO Unit := do
+  let peer := peerIdLine "2026-11-06T00:00:00Z" "peer" 3
+  let received := receivedMessageLine "2026-11-06T00:00:00Z" 31 (some "peer\"\\") (some "topic\"\\")
+  r.check "PeerID line exact shape"
+    (peer == "{\"id\":\"peer\",\"msg\":\"PeerID\",\"node_id\":3,\"time\":\"2026-11-06T00:00:00Z\"}")
+  r.check "PeerID line has required fields"
+    (stringField (parsedJson peer) "msg" == some "PeerID" && intField (parsedJson peer) "node_id" == some 3)
+  r.check "received line exact shape"
+    (received == "{\"from\":\"peer\\\"\\\\\",\"id\":\"31\",\"msg\":\"Received Message\",\"time\":\"2026-11-06T00:00:00Z\",\"topic\":\"topic\\\"\\\\\"}")
+  r.check "received line parses back"
+    (stringField (parsedJson received) "topic" == some "topic\"\\" && stringField (parsedJson received) "id" == some "31")
+  r.check "records stay single line" (!peer.contains '\n' && !received.contains '\n')
+/-- The message id and node address edge cases. -/
+private def checkIds (r : Runner) : IO Unit := do
+  r.check "message id one" (messageIdString [0, 0, 0, 0, 0, 0, 0, 1] == "1")
+  r.check "message id maximum" (messageIdString [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff] == "18446744073709551615")
+  r.check "message id big endian" (messageIdString [1, 0, 0, 0, 0, 0, 0, 0] == "72057594037927936")
+  r.check "short message id is right padded" (messageIdString [1] == "72057594037927936")
+  r.check "node zero" (nodeId? "node0" == some 0)
+  r.check "node thirty one" (nodeId? "node31" == some 31)
+  r.check "node without number rejected" (nodeId? "node" == none)
+  r.check "leading zero rejected" (nodeId? "node01" == none)
+  r.check "negative node rejected" (nodeId? "node-1" == none)
+  r.check "uppercase node rejected" (nodeId? "Node1" == none)
+  r.check "suffix text rejected" (nodeId? "node1x" == none)
+  r.check "empty hostname rejected" (nodeId? "" == none)
+  r.check "overflow node rejected" (nodeId? "node18446744073709551616" == none)
+  r.check "peer seed is 32 bytes" ((peerSeed 31).length == 32)
+  r.check "peer seed uses little endian" ((peerSeed 31).take 8 == [31, 0, 0, 0, 0, 0, 0, 0])
+
+
+/-- All mapped fields, retained fields, and pure scheduling contracts. -/
+private def checkParameters (r : Runner) : IO Unit := do
+  let json := parsedJson "{\"D\":8,\"Dlo\":6,\"Dhi\":14,\"Dscore\":5,\"Dlazy\":7,\"HistoryLength\":9,\"HistoryGossip\":4,\"GossipFactor\":0.255,\"HeartbeatInitialDelay\":100100000,\"HeartbeatInterval\":100100000,\"FanoutTTL\":1201000000,\"PruneBackoff\":2001999999,\"Dout\":2}"
+  match parseGossipSubParams "params" json with
+  | .error _ => r.check "all parameter fields parse" false
+  | .ok params =>
+      r.check "all source parameter pairs retained" (params.raw.length == 13)
+      r.check "unsupported fields retained" (params.unmapped.map Prod.fst ==
+        ["Dout", "HeartbeatInitialDelay"])
+      match toCoreParams params with
+      | .error _ => r.check "valid parameters map" false
+      | .ok core =>
+          r.check "mesh D maps" (core.mesh.d == 8)
+          r.check "mesh Dlo maps" (core.mesh.dLow == 6)
+          r.check "mesh Dhi maps" (core.mesh.dHigh == 14)
+          r.check "mesh Dscore maps" (core.mesh.dScore == 5)
+          r.check "mesh Dlazy maps" (core.mesh.dLazy == 7)
+          r.check "heartbeat truncates nanoseconds" (core.heartbeatInterval == 100)
+          r.check "fanout truncates nanoseconds" (core.fanoutTtl == 1201)
+          r.check "prune truncates nanoseconds" (core.pruneBackoff == 2001)
+          r.check "gossip fraction truncates percent" (core.gossipFactor == 25)
+          r.check "history length maps" (core.window.historyLength == 9)
+          r.check "history gossip maps" (core.window.historyGossip == 4)
+          let message : Message := {
+            «from» := none
+            data := some [0,0,0,0,0,0,0,1,9]
+            seqno := none
+            topic := ⟨"topic"⟩
+            signature := none
+            key := none }
+          r.check "core message id uses eight bytes" ((core.msgId message).bytes == [0,0,0,0,0,0,0,1])
+  match parseGossipSubParams "params" (parsedJson "{}") with
+  | .error _ => r.check "empty parameters parse" false
+  | .ok params =>
+      match toCoreParams params with
+      | .error _ => r.check "defaults map" false
+      | .ok core =>
+          let defaults := Core.defaults
+          r.check "absent mesh fields use defaults" (core.mesh == defaults.mesh)
+          r.check "absent times use defaults" (core.heartbeatInterval == defaults.heartbeatInterval &&
+            core.fanoutTtl == defaults.fanoutTtl && core.pruneBackoff == defaults.pruneBackoff)
+          r.check "absent cache uses defaults" (core.window.historyLength == defaults.window.historyLength &&
+            core.window.historyGossip == defaults.window.historyGossip)
+  r.check "unknown parameter rejected" (isError
+    (parseGossipSubParams "params" (parsedJson "{\"FutureField\":1}")))
+  r.check "negative parameter rejected" (isError
+    (parseGossipSubParams "params" (parsedJson "{\"HeartbeatInterval\":-1}")))
+  match parseGossipSubParams "params" (parsedJson "{\"HistoryLength\":1,\"HistoryGossip\":2}") with
+  | .error _ => r.check "invalid cache bound rejected" false
+  | .ok params => r.check "invalid cache bound rejected" (isError (toCoreParams params))
+  r.check "exact conversion near millisecond boundary"
+    (nanosecondsToMillis ⟨999999999999999999, 3⟩ == 999999999)
+  r.check "fractional nanosecond truncates" (nanosecondsToMillis ⟨1001000005, 1⟩ == 100)
+  r.check "wait blocks before deadline" (!waitComplete 119 120)
+  r.check "wait releases at deadline" (waitComplete 120 120)
+  r.check "wait releases after deadline" (waitComplete 121 120)
+  let captured ← loadFixture fixture
+  match parseScriptJson captured with
+  | .error _ => r.check "startup script parses" false
+  | .ok script =>
+      for nodeId in List.range 32 do
+        r.check s!"node {nodeId} initializes first" (match prepareScript nodeId script with
+          | .ok (_, rest) => !rest.isEmpty
+          | .error _ => false)
+      r.check "missing startup rejected" (isError (prepareScript 32 script))
+  let late := parseScript "{\"script\":[{\"type\":\"waitUntil\",\"elapsedSeconds\":0},{\"type\":\"initGossipSub\",\"gossipSubParams\":{}}]}"
+  r.check "late initialization rejected" (match late with
+    | .ok script => isError (prepareScript 0 script)
+    | .error _ => false)
+  r.check "partial default false" (match parseInstruction "i"
+      (parsedJson "{\"type\":\"subscribeToTopic\",\"topicID\":\"t\"}") with
+    | .ok (.subscribeToTopic topic flag) => topic == "t" && !flag
+    | _ => false)
+  r.check "partial explicit true retained" (match parseInstruction "i"
+      (parsedJson "{\"type\":\"subscribeToTopic\",\"topicID\":\"t\",\"partial\":true}") with
+    | .ok (.subscribeToTopic _ flag) => flag
+    | _ => false)
+  let topic := "quote\"slash\\line\nreturn\rtab\t" ++ String.singleton (Char.ofNat 1)
+  let line := receivedMessageLine "2026-11-06T00:00:00Z" 1 none (some topic)
+  r.check "all control characters escape" (!line.contains '\n' && !line.contains '\r' &&
+    !line.contains '\t' && stringField (parsedJson line) "topic" == some topic)
+  r.check "empty message id zero" (messageIdString [] == "0")
+  r.check "message tail does not change id" (messageIdString [0,0,0,0,0,0,0,1,255] == "1")
+  r.check "maximum node accepted" (nodeId? "node18446744073709551615" == some 18446744073709551615)
+  r.check "seed spans all eight bytes" ((peerSeed 72623859790382856).take 8 == [8,7,6,5,4,3,2,1])
+  r.check "seed suffix zero" ((peerSeed 72623859790382856).drop 8 == List.replicate 24 0)
+
+/-- The decoder preserves recursion and reports the exact failing field. -/
+private def checkDecoderDetails (r : Runner) : IO Unit := do
+  let source ← IO.FS.readFile "Tests/fixtures/gossipsub-interop-params.json"
+  r.check "captured source parses through Json.parse" (match parseScript source with
+    | .ok script => script.instructions.length == 100
+    | .error _ => false)
+  r.check "missing publish topic names field"
+    (errorIs "script[0]: missing field topicID"
+      (parseScript "{\"script\":[{\"type\":\"publish\",\"messageID\":1,\"messageSizeBytes\":8}]}"))
+  r.check "bad connect element names index"
+    (errorIs "script[0].connectTo[1]: expected integer"
+      (parseScript "{\"script\":[{\"type\":\"connect\",\"connectTo\":[1,\"x\"]}]}"))
+  r.check "partial publish alias rejected explicitly"
+    (errorIs "script[0]: publishToNodeIDs is out of scope for v1.1"
+      (parseScript "{\"script\":[{\"type\":\"publishToNodeIDs\"}]}"))
+  r.check "nested condition recurses twice" (match parseInstruction "i"
+      (parsedJson "{\"type\":\"ifNodeIDEquals\",\"nodeID\":7,\"instruction\":{\"type\":\"ifNodeIDEquals\",\"nodeID\":7,\"instruction\":{\"type\":\"waitUntil\",\"elapsedSeconds\":42}}}") with
+    | .ok instruction => match instructionForNode 7 instruction with
+      | some (.waitUntil seconds) => seconds == 42
+      | _ => false
+    | _ => false)
+  r.check "nested bad field includes full path" (errorIs "i.instruction: missing field elapsedSeconds"
+    (parseInstruction "i" (parsedJson "{\"type\":\"ifNodeIDEquals\",\"nodeID\":0,\"instruction\":{\"type\":\"waitUntil\"}}")))
+  r.check "bounded decoder rejects excess nesting" (isError
+    (parseInstructionFuel 1 "i" (parsedJson "{\"type\":\"ifNodeIDEquals\",\"nodeID\":0,\"instruction\":{\"type\":\"waitUntil\",\"elapsedSeconds\":1}}")))
+  let minimal := receivedMessageLine "2026-11-06T00:00:00Z" 18446744073709551615 none none
+  r.check "received optional fields omitted" (minimal ==
+    "{\"id\":\"18446744073709551615\",\"msg\":\"Received Message\",\"time\":\"2026-11-06T00:00:00Z\"}")
+
+/-- The suite. -/
+def run (r : Runner) : IO Unit := do
+  checkScript r
+  checkErrors r
+  checkRecords r
+  checkIds r
+  checkParameters r
+  checkDecoderDetails r
+
+end Tests.Gossipsub.Interop
