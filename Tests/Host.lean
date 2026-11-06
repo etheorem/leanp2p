@@ -211,7 +211,7 @@ private def livenessChecks (r : Runner) : Async Unit := do
 /-- A handler that half-closes its stream. -/
 private def closer (id : ProtocolId) : StreamHandler where
   id := id
-  handle := fun s => s.close
+  handle := fun _ s => s.close
 
 private def handlerChecks (r : Runner) : Async Unit := do
   let ping : ProtocolId := ⟨"/ipfs/ping/1.0.0"⟩
