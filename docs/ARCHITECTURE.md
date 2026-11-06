@@ -301,8 +301,9 @@ by one and take a mutex per writer. It gives four things:
   of `Event`s, and the expected frames are a list of `Action`s. The
   test needs no network, no tasks, and no timing. The hostile-frame
   suite is the same test with a different list.
-- **`-N1` holds by construction.** The loop blocks on one channel.
-  Nothing inside a session spins, polls, or takes a lock.
+- **`-N1` holds by construction.** The loop blocks only on channels its
+  shutdown closes. Nothing inside a session spins, polls, or takes a
+  lock.
 - **Little shared state remains.** One task owns the session state, so
   §4.1 rule 3 applies only to the host registries (§3.8).
 - **Invariants become theorems.** The receive window never goes

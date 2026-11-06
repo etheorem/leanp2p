@@ -19,6 +19,8 @@ knows no wire format, and it imports no other group (ARCHITECTURE §2).
 | `Bytes/Error.lean` | the shared `DecodeError` inductive (ARCHITECTURE §3.2) |
 | `Bytes/Codec.lean` | the `Codec` and `LawfulCodec` classes (ARCHITECTURE §3.2) |
 | `Bytes/Harness.lean` | the generic round-trip harness; it runs once per `Codec`/`LawfulCodec` instance pair (ARCHITECTURE §3.2, §6) |
+| `Bytes/Take.lean` | `take?`, the split of a length-prefixed payload off the model input, with its three lemmas, and `sliceAt?`, the same step on `ByteArray`; every codec that reads a length reads the bytes through it, so the `truncated`/`malformed` split has one home |
+| `Bytes/Blob.lean` | `Blob`, the wrapper that puts bytes inside core data with a `Repr` (ARCHITECTURE §3.2, §3.3), so the instance has one home |
 
 All declarations live in the `Bytes` namespace. The root module
 re-exports the public submodules.
@@ -46,6 +48,14 @@ follow the spike.
 - `xorWith (key : ByteArray) (data : ByteArray) : ByteArray` XORs each
   byte of the data with the repeating key. An empty key returns the
   data unchanged.
+- `take? (k : Nat) (l : List Nat) : Except DecodeError (List Nat ×
+  List Nat)` splits the first `k` bytes off the model input. A non-byte
+  among the bytes present is `malformed`, and fewer than `k` bytes is
+  `truncated`. The caller checks its length cap before the take (§5.1).
+  `sliceAt? (b : ByteArray) (pos k : Nat)` is the same step on
+  `ByteArray`, by offset.
+- `Blob` wraps a `ByteArray` for core data. It derives
+  `DecidableEq`, and its `Repr` prints hex.
 - `Codec α` carries the two methods over the model:
   `encode : α → List Nat` and
   `decode? : List Nat → Except DecodeError (α × List Nat)`
@@ -138,6 +148,20 @@ the budget, such as a non-minimal varint, is `malformed` too.
   distinction. The two `Option` returns here, `toString?` and
   `ofHex?`, have one `none` meaning each, stated in the docstring, as
   §3.5 allows.
+- **`take?` lives here, with its lemmas.** `net/streams` framing and
+  the yamux core both split a payload off the model input at a length,
+  with the same two failures. §3.8 asks for one home per fact, and this
+  package owns `DecodeError` and the model. The step knows no prefix
+  shape and no cap: the caller reads its length and checks its cap
+  first (§5.1).
+- **One `Blob` for the bytes inside core data.** A pure core's state,
+  events, and actions derive `Repr` and `DecidableEq` so a test compares
+  and prints them by value (§3.3). Core Lean gives `ByteArray` no
+  `Repr`, and §3.2 rules out an instance on a type the package does not
+  own, so a core holds its bytes in `Blob`. The yamux core does; every
+  later core uses the same wrapper, so the instance has one home
+  (§3.8). The `Repr` prints hex, which keeps a frame short in a failed
+  test.
 - **The spike's `fnv1a` placeholder stays out.** ARCHITECTURE §10,
   row 2 maps the whole spike module here, and the placeholder is toy
   crypto. The real digests come from the `Crypto` facade (§3.6), so
