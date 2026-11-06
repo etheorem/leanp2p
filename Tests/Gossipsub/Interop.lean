@@ -317,6 +317,64 @@ private def checkDecoderDetails (r : Runner) : IO Unit := do
   r.check "received optional fields omitted" (minimal ==
     "{\"id\":\"18446744073709551615\",\"msg\":\"Received Message\",\"time\":\"2026-11-06T00:00:00Z\"}")
 
+/-- Hosts parsing and exact name resolution. -/
+private def checkHosts (r : Runner) : IO Unit := do
+  let shadow := "127.0.0.1 localhost\n11.0.0.1 node0\n11.0.0.2 node1 node-one n1 # aliases\n11.0.0.3 node10\n"
+  let hosts := parseHosts shadow
+  r.check "Shadow hosts IPv4 rows parse" (hosts.length == 4)
+  r.check "primary name lookup" (lookup? hosts "node0" == some [11,0,0,1])
+  r.check "alias lookup" (lookup? hosts "node-one" == some [11,0,0,2])
+  r.check "missing name lookup" (lookup? hosts "node2" == none)
+  r.check "prefix node1 does not match node10" (lookup? hosts "node1" == some [11,0,0,2])
+  r.check "suffix node1x does not match" (lookup? hosts "node1x" == none)
+  r.check "CRLF and whitespace parse" (lookup? (parseHosts " 11.0.0.4\tnode4\r\n") "node4" == some [11,0,0,4])
+  r.check "IPv6 row ignored" (lookup? (parseHosts "::1 localhost\n") "localhost" == none)
+  r.check "malformed row ignored" (lookup? (parseHosts "11.0.0 node-bad\n") "node-bad" == none)
+  r.check "comment and blank rows ignored" (parseHosts "# only\n\n   # tail\n" == [])
+  r.check "multiaddr prefix" (multiaddrPrefix [11,0,0,2] == some "/ip4/11.0.0.2/tcp/9000")
+
+private def checkPlan (r : Runner) : IO Unit := do
+  let source ← loadFixture fixture
+  match parseScriptJson source with
+  | .error _ => r.check "virtual plan parses fixture" false
+  | .ok script =>
+      match plan script 0, plan script 0, plan script 2, plan script 31 with
+      | .ok node0, .ok again, .ok node2, .ok node31 =>
+          r.check "virtual plan is deterministic" (node0 == again)
+          r.check "node pruning differs" (node0 != node2 && node2 != node31)
+          r.check "node0 first action is init at t=0" (match node0.head? with
+            | some action =>
+                action.time == 0 && (match action.action with
+                | .initGossipSub _ => true
+                | _ => false)
+            | none => false)
+          let node0Publishes := node0.filterMap fun item => match item.action with
+            | .publish _ _ _ => some item.time
+            | _ => none
+          r.check "node0 has zero publishes in this fixture" (node0Publishes == [])
+          let publishes := node2.filterMap fun item => match item.action with
+            | .publish id size topic => some (item.time, id.toNat, size.toNat, topic)
+            | _ => none
+          r.check "node2 has three publishes" (publishes.length == 3)
+          r.check "node2 publish times and fields" (publishes ==
+            [(168000, 4, 98304, "a-subnet"), (180000, 5, 98304, "a-subnet"),
+             (252000, 11, 98304, "a-subnet")])
+          r.check "node0 subscribe is full at t=0" (node0.any fun item => item.time == 0 && match item.action with
+            | .subscribeToTopic topic isPartial => topic == "a-subnet" && !isPartial
+            | _ => false)
+          r.check "validation delay is topic scoped at 5ms" (node0.any fun item => match item.action with
+            | .setTopicValidationDelay topic delay => topic == "a-subnet" && delay == 5 && item.time == 0
+            | _ => false)
+          r.check "node0 connects at t=0" (node0.any fun item => item.time == 0 && match item.action with
+            | .connect _ => true
+            | _ => false)
+          r.check "node0 wait reaches 342s" (node0.any fun item => match item.action with
+            | .waitUntil deadline => deadline == 342 && item.time == 342000
+            | _ => false)
+          r.check "node0 has no action after 342s" (node0.all (fun item => item.time ≤ 342000))
+      | _, _, _, _ =>
+          r.check "virtual plan builds for nodes 0, 2, and 31" false
+
 /-- The suite. -/
 def run (r : Runner) : IO Unit := do
   checkScript r
@@ -325,5 +383,7 @@ def run (r : Runner) : IO Unit := do
   checkIds r
   checkParameters r
   checkDecoderDetails r
+  checkHosts r
+  checkPlan r
 
 end Tests.Gossipsub.Interop
