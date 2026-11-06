@@ -1,4 +1,5 @@
 import Tests.Support
+import Tests.Gossipsub.Identity
 import Libp2p.Protocols.Gossipsub.Sign
 
 /-!
@@ -21,7 +22,7 @@ namespace Tests.Gossipsub.Sign
 
 open Libp2p.Protocols.Gossipsub
 open Libp2p.Protocols.Gossipsub.Sign
-open Libp2p.Protocols.Mock.Identity
+open Libp2p.Identity
 
 /-- An encoder that reads the `from`, `data`, `seqno`, and topic fields.
 It reads neither the `signature` nor the `key` field. -/
@@ -45,9 +46,9 @@ private def tagEncode (m : Message) : List Nat :=
 key, the derived peer id carries the key bytes, and the verifier
 accepts. -/
 private def testPrimsOk : Prims :=
-  { unmarshalKey := fun bs => if bs.isEmpty then none else some ⟨.ed25519, bs⟩
-    inlineKey := fun bs => if bs.isEmpty then none else some ⟨.ed25519, bs⟩
-    idOfKey := fun k => k.data
+  { unmarshalKey := fun bs => if bs.isEmpty then none else some (Identity.publicKey (bs.headD 0))
+    inlineKey := fun bs => if bs.isEmpty then none else some (Identity.publicKey (bs.headD 0))
+    idOfKey := fun k => [k.data[0]!.toNat]
     verify := fun _ _ _ => true }
 
 /-- The rejecting stand-ins: the verifier rejects. -/

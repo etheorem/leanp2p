@@ -1,4 +1,5 @@
 import Tests.Support
+import Tests.Gossipsub.Identity
 import Libp2p.Protocols.Gossipsub.Core
 
 /-!
@@ -27,11 +28,11 @@ open Libp2p.Protocols.Gossipsub.Core
 private def ta : TopicId := ⟨"t"⟩
 private def tb : TopicId := ⟨"u"⟩
 
-private def pa : Peer := ⟨[1], "a"⟩
-private def pb : Peer := ⟨[2], "b"⟩
-private def pc : Peer := ⟨[3], "c"⟩
-private def pd : Peer := ⟨[4], "d"⟩
-private def px : Peer := ⟨[9], "x"⟩
+private def pa : Peer := Identity.peer 1
+private def pb : Peer := Identity.peer 2
+private def pc : Peer := Identity.peer 3
+private def pd : Peer := Identity.peer 4
+private def px : Peer := Identity.peer 9
 
 private def prims : Sign.Prims :=
   { unmarshalKey := fun _ => none

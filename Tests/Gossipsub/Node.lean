@@ -1,4 +1,5 @@
 import Tests.Support
+import Tests.Gossipsub.Identity
 import Libp2p.Protocols.Gossipsub.Node
 
 /-!
@@ -21,11 +22,11 @@ open Libp2p.Protocols.Gossipsub
 open Libp2p.Protocols.Gossipsub.Node
 open Libp2p.Protocols.Mock.Host (Switch HostSeam)
 
-private def pa : Peer := ⟨[1], "a"⟩
-private def pb : Peer := ⟨[2], "b"⟩
-private def pc : Peer := ⟨[3], "c"⟩
-private def pd : Peer := ⟨[4], "d"⟩
-private def px : Peer := ⟨[9], "control"⟩
+private def pa : Peer := Identity.peer 1
+private def pb : Peer := Identity.peer 2
+private def pc : Peer := Identity.peer 3
+private def pd : Peer := Identity.peer 4
+private def px : Peer := Identity.peer 9
 private def topic : TopicId := ⟨"t"⟩
 private def patience : Nat := 5000
 
@@ -121,7 +122,7 @@ private def fixture (sw : Switch) (me : Peer) (config : Config := {}) : Async Fi
   let barriers ← (Chan.new 64 : BaseIO (Chan Unit))
   let receipts ← (Chan.new 2048 : BaseIO (Chan (Peer × List Nat)))
   let deliveries ← (Chan.new 2048 : BaseIO (Chan Message))
-  let controlPeer : Peer := ⟨me.bytes ++ [99], me.text ++ "-control"⟩
+  let controlPeer := Identity.peer (100 + me.hash.digest.headD 0)
   let cfg := { config with
     clock := clock.clock
     order := fun tick peers => config.order tick (peers.filter (· != controlPeer))

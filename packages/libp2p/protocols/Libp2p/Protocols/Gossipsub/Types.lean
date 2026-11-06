@@ -1,4 +1,4 @@
-import Libp2p.Protocols.Mock.Identity
+import Libp2p.Identity
 
 /-!
 # Gossipsub shared types
@@ -21,7 +21,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Protocols.Gossipsub
 
-open Libp2p.Protocols.Mock.Identity
+open Libp2p.Identity
 
 /-- A topic, by its name. -/
 structure TopicId where
@@ -77,8 +77,7 @@ structure Thresholds where
 /-- A point in time, in milliseconds. -/
 abbrev Millis := Nat
 
-/-- The peer id of the identity mock. The real identity package
-replaces it at integration. -/
-abbrev Peer := PeerId
+/-- The validated peer id of the identity package. -/
+abbrev Peer := Libp2p.Identity.PeerId
 
 end Libp2p.Protocols.Gossipsub

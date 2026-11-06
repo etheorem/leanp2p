@@ -1,7 +1,7 @@
 import Std
 import Conc
 import Streams
-import Libp2p.Protocols.Mock.Identity
+import Libp2p.Identity
 import Libp2p.Protocols.Mock.Core
 
 /-!
@@ -33,7 +33,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Protocols.Mock.Host
 
-open Libp2p.Protocols.Mock.Identity
+open Libp2p.Identity
 
 /-- The peerstore seam the push handler updates: addresses by peer,
 deduplicated at add. -/
@@ -149,9 +149,9 @@ private def open_ (sw : Switch) (me peer : PeerId) (protocols : List Core.Protoc
     BaseIO (Except Core.Error (Core.ProtocolId × Streams.Stream)) := do
   let st ← sw.state.get
   let some entry := st.entries.find? (fun e => decide (e.peer = peer))
-    | return .error (.protocol s!"no peer {peer.text}")
+    | return .error (.protocol s!"no peer {peer}")
   let some (id, handler) := choose entry.handlers protocols
-    | return .error (.protocol s!"peer {peer.text} serves none of the protocols")
+    | return .error (.protocol s!"peer {peer} serves none of the protocols")
   let toPeer ← Conc.Pipe.new 8
   let fromPeer ← Conc.Pipe.new 8
   -- One atomic step checks the flag and records the pipes, so `close`

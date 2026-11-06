@@ -1,4 +1,5 @@
 import Tests.Support
+import Tests.Gossipsub.Identity
 import Libp2p.Protocols.Gossipsub.Cache
 
 /-!
@@ -47,7 +48,7 @@ def msg (t : TopicId) (n : Nat) : Message :=
   { «from» := none, data := some [n], seqno := none, topic := t, signature := none, key := none }
 
 /-- A peer from one number. -/
-def peer (n : Nat) : Peer := { bytes := [n], text := s!"p{n}" }
+def peer (n : Nat) : Peer := Identity.peer n
 
 /-- A promise with explicit fields, for the expected lists. -/
 def promiseOf (p : Peer) (i : MessageId) (d : Millis) : IwantPromise :=

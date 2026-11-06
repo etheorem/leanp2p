@@ -1,5 +1,5 @@
 import Libp2p.Protocols.Gossipsub.Types
-import Libp2p.Protocols.Mock.Identity
+import Libp2p.Identity
 import Bytes
 
 /-!
@@ -62,7 +62,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Protocols.Gossipsub.Sign
 
-open Libp2p.Protocols.Mock.Identity
+open Libp2p.Identity
 
 /-- The two deterministic signature policies of the spec. The spec
 names no numeric codes for the policies, so this is a plain inductive
@@ -126,6 +126,19 @@ structure Prims where
   idOfKey : PubKey → List Nat
   /-- Check a signature over the signed bytes. -/
   verify : PubKey → List Nat → List Nat → Bool
+
+/-- The identity functions at the router boundary. A failed derivation
+gives empty bytes, which cannot encode a peer id. The inline path reads
+only an identity multihash and checks its public key protobuf. -/
+def Prims.identity : Prims where
+  unmarshalKey bs := (PubKey.unmarshal? (Bytes.ofNatList bs)).toOption
+  inlineKey bs := do
+    let peer ← (PeerId.ofBytes? (Bytes.ofNatList bs)).toOption
+    if peer.hash.code != .«identity» then none
+    else (PubKey.unmarshal? (Bytes.ofNatList peer.hash.digest)).toOption
+  idOfKey k := ((PeerId.ofPubKey k).toOption.map
+    (fun peer => Bytes.toNatList peer.toBytes)).getD []
+  verify k msg sig := k.verify (Bytes.ofNatList msg) (Bytes.ofNatList sig)
 
 /-- The bytes a signature covers: the prefix, then the encoded message
 with the `signature` and `key` fields absent. -/

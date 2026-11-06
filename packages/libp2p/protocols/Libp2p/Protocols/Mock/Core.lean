@@ -1,7 +1,7 @@
 import Std
 import Conc
 import Streams
-import Libp2p.Protocols.Mock.Identity
+import Libp2p.Identity
 
 /-!
 # Core seam mock
@@ -39,7 +39,7 @@ structure StreamHandler where
   /-- The id the handler serves. -/
   id : ProtocolId
   /-- The offered stream and the peer that opened it. -/
-  handle : Identity.PeerId → Streams.Stream → ExceptT Error Conc.Async Unit
+  handle : Libp2p.Identity.PeerId → Streams.Stream → ExceptT Error Conc.Async Unit
 
 /-- One map from a stream error to the coarse error, shared by every
 handler of this package. `closed` stays closed, `reset` is a protocol

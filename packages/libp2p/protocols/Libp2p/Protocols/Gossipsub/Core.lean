@@ -884,11 +884,7 @@ def defaults : Params where
   iwantDeadline := 3000
   window := { historyLength := 5, historyGossip := 3, valid := by decide }
   seen := { capacity := 65536, ttl := 120000, valid := by decide }
-  prims :=
-    { unmarshalKey := fun _ => none
-      inlineKey := fun _ => none
-      idOfKey := fun _ => []
-      verify := fun _ _ _ => false }
+  prims := Sign.Prims.identity
   msgId := fun m => ⟨m.data.getD []⟩
 
 /-! ## Accessor lemmas -/

@@ -119,7 +119,7 @@ def spread (i : Nat) : Millis := (i * 7919 + 1) % 1000
 /-- Replayable peer order for a heartbeat. The hash combines its counter
 with each peer's identity bytes. The loop supplies only known peers. -/
 def defaultOrder (tick : Nat) (peers : List Peer) : List Peer :=
-  let key (peer : Peer) : UInt64 := mixHash (hash tick) (hash peer.bytes)
+  let key (peer : Peer) : UInt64 := mixHash (hash tick) (hash (Bytes.toNatList peer.toBytes))
   peers.mergeSort (fun a b => key a ≤ key b)
 
 /-- The configuration of one node: the router parameters, the clock the
