@@ -1,7 +1,7 @@
 import Libp2p.Negotiate.Step
 import Libp2p.Negotiate.Message
 import Libp2p.Negotiate.Mock.Core
-import Libp2p.Negotiate.Mock.Identity
+import Libp2p.Identity
 import Streams.Conn
 import Streams.BufReader
 import Streams.Constants
@@ -167,8 +167,8 @@ def mapNegotiateError : Error → Mock.Core.Error
 peer. The dial path compares the derived id against the expectation
 and answers `authentication` on a difference, before any muxer byte
 moves (negotiate ARCHITECTURE, "Decisions"). -/
-def checkIdentity (expected : Option Mock.Identity.PeerId)
-    (remote : Mock.Identity.PeerId) : Except Mock.Core.Error Unit :=
+def checkIdentity (expected : Option Libp2p.Identity.PeerId)
+    (remote : Libp2p.Identity.PeerId) : Except Mock.Core.Error Unit :=
   match expected with
   | none => .ok ()
   | some e =>
@@ -373,19 +373,19 @@ theorem mapNegotiateErrorSpec {e : Bytes.DecodeError} :
 
 /-- A differing derived id is authentication, before any muxer
 byte moves. -/
-theorem checkIdentityReject {expected remote : Mock.Identity.PeerId}
+theorem checkIdentityReject {expected remote : Libp2p.Identity.PeerId}
     (h : expected ≠ remote) :
     checkIdentity (some expected) remote =
       .error (.authentication "remote peer id differs from the expected peer id") := by
   simp [checkIdentity, h]
 
 /-- The dial to the expected peer passes. -/
-theorem checkIdentityAccept {e : Mock.Identity.PeerId} :
+theorem checkIdentityAccept {e : Libp2p.Identity.PeerId} :
     checkIdentity (some e) e = .ok () := by
   simp [checkIdentity]
 
 /-- The listen path accepts any peer. -/
-theorem checkIdentityNone {r : Mock.Identity.PeerId} :
+theorem checkIdentityNone {r : Libp2p.Identity.PeerId} :
     checkIdentity none r = .ok () := rfl
 
 /-- The deadline wiring of contract 6: the race's expiry is the
@@ -483,9 +483,9 @@ def negotiate (role : Mock.Core.Role) (reader : Streams.BufReader)
 check the identity, negotiate the muxer, open the session. Each lookup
 is total; a miss after a selection is `protocol`. -/
 private def upgradeCore (role : Mock.Core.Role) (conn : Streams.Connection)
-    (leftover : ByteArray) (expected : Option Mock.Identity.PeerId)
+    (leftover : ByteArray) (expected : Option Libp2p.Identity.PeerId)
     (secs : List Mock.Core.SecurityProtocol) (muxers : List Mock.Core.Muxer) :
-    Conc.Async (Except Mock.Core.Error (Mock.Core.MuxSession × Mock.Identity.PeerId)) := do
+    Conc.Async (Except Mock.Core.Error (Mock.Core.MuxSession × Libp2p.Identity.PeerId)) := do
   let reader := Streams.BufReader.new conn
   match ← negotiate role reader conn leftover (secs.map (·.id)) with
   | .error e => return .error e
@@ -520,7 +520,7 @@ private def boundaryClosed {α : Type} : Except Conc.Error α → Bool
 /-- Close a session that finished after the timer won. No caller
 receives that session. -/
 private def releaseLate (r : Except Mock.Core.Error
-    (Mock.Core.MuxSession × Mock.Identity.PeerId)) : BaseIO Unit :=
+    (Mock.Core.MuxSession × Libp2p.Identity.PeerId)) : BaseIO Unit :=
   match r with
   | .ok pair => pair.1.close
   | .error _ => pure ()
@@ -532,9 +532,9 @@ The clock is a seam, so the deadline test can advance it. -/
 
 def upgradeWith (clock : Conc.Clock) (role : Mock.Core.Role)
     (conn : Streams.Connection) (leftover : ByteArray)
-    (expected : Option Mock.Identity.PeerId)
+    (expected : Option Libp2p.Identity.PeerId)
     (secs : List Mock.Core.SecurityProtocol) (muxers : List Mock.Core.Muxer) :
-    ExceptT Mock.Core.Error Conc.Async (Mock.Core.MuxSession × Mock.Identity.PeerId) := do
+    ExceptT Mock.Core.Error Conc.Async (Mock.Core.MuxSession × Libp2p.Identity.PeerId) := do
   let answer ← Conc.withinDeadline clock Streams.unauthDeadlineMs
     (Streams.Connection.closeQuietly conn)
     (upgradeCore role conn leftover expected secs muxers)
@@ -553,9 +553,9 @@ def upgradeWith (clock : Conc.Clock) (role : Mock.Core.Role)
 system clock here and stays a seam in `upgradeWith` for the deadline
 test. -/
 def upgrade (role : Mock.Core.Role) (conn : Streams.Connection)
-    (leftover : ByteArray) (expected : Option Mock.Identity.PeerId)
+    (leftover : ByteArray) (expected : Option Libp2p.Identity.PeerId)
     (secs : List Mock.Core.SecurityProtocol) (muxers : List Mock.Core.Muxer) :
-    ExceptT Mock.Core.Error Conc.Async (Mock.Core.MuxSession × Mock.Identity.PeerId) :=
+    ExceptT Mock.Core.Error Conc.Async (Mock.Core.MuxSession × Libp2p.Identity.PeerId) :=
   upgradeWith Conc.Clock.system role conn leftover expected secs muxers
 
 end Libp2p.Negotiate
