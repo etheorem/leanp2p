@@ -3,6 +3,7 @@ import Streams
 import Interop.Config
 import Interop.Redis
 import Interop.Mock.Stack
+import Libp2p.Identity
 
 /-!
 # The transport-interop harness
@@ -50,6 +51,7 @@ namespace Interop
 open Conc (Async)
 open Interop.Config (Config)
 open Interop.Mock
+open Libp2p.Identity (PeerId PrivKey)
 
 /-- The interval between two `PING`s while Redis starts, in milliseconds.
 The go peer waits the same 100 ms (line 84 of its `main.go`). -/
@@ -86,10 +88,18 @@ partial def connectRedis (cfg : Config) (deadlineMs : Nat) : Run Redis.Client :=
   (Conc.select #[sleep] : Async Unit)
   connectRedis cfg deadlineMs
 
+/-- A fresh Ed25519 identity: a seed from the backend generator, as the
+Ed25519 private `Data` of the peer-ids spec. The go peer sets no
+identity, so it takes go-libp2p's default, a random Ed25519 key
+(`RandomIdentity`, `vendor/go-libp2p/defaults.go`, line 73). -/
+def generateKey : Run PrivKey := do
+  let seed ← orFail "identity seed" (fun e => reprStr e) (← Crypto.ed25519Generate.run)
+  orFail "identity key" (fun e => reprStr e) (PrivKey.ofData? .ed25519 seed.bytes)
+
 /-- The host of one run: TCP, Noise, and the configured muxer, with the
 ping handler (root §3.1: the ordered lists are assembled here). -/
 def startHost (cfg : Config) : Run Host := do
-  let key ← (generateKey : IO PrivKey)
+  let key ← generateKey
   let muxer := match cfg.muxer with
     | .yamux => yamux
     | .mplex => mplex
@@ -112,7 +122,7 @@ def publishedAddr (bound redisLocal : Multiformats.Multiaddr) (peer : PeerId) :
   let rest := bound.components.drop 1
   let some addr := Multiformats.Multiaddr.ofComponents? (ip :: rest)
     | throw "the published address does not check"
-  return s!"{addr.describe}/p2p/{peer.text}"
+  return s!"{addr.describe}/p2p/{peer}"
 
 /-- The listener: publish the address, then sleep for the timeout. -/
 def listen (cfg : Config) (redis : Redis.Client) (h : Host) : Run Unit := do
