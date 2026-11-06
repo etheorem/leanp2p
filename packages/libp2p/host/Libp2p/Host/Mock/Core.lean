@@ -1,6 +1,6 @@
 import Conc
 import Streams
-import Libp2p.Host.Mock.Identity
+import Libp2p.Identity
 
 /-!
 # Mock: the surface of `libp2p/core` that the host uses
@@ -36,7 +36,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Host.Mock.Core
 
-open Conc Streams Multiformats Libp2p.Host.Mock.Identity
+open Conc Streams Multiformats Libp2p.Identity
 
 /-- A protocol id, wrapped (§3.4). -/
 structure ProtocolId where

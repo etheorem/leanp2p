@@ -24,7 +24,7 @@ libp2p group is §7, row 10).
 | `Libp2p/Host/Swarm.lean` | `Config`, the `Host` state, `dial`, `dialPeer`, `startListening`, `newStream`, the accept loop, the upgrade pipeline, and stream serving |
 | `Libp2p/Host/Shutdown.lean` | `Host.close`, the §5.5 sequence |
 | `Libp2p/Host/Policy.lean` | the permissive default gater, and the permissive and denying test doubles the core pair assigned here; the default resource manager (admits everything) and the default ranker (keeps the order, no delay) |
-| `Libp2p/Host/Mock/{Identity,Core,Negotiate}.lean` | the mocks of W5.1, W5.2, and W5.5 until they merge (see "The mocks") |
+| `Libp2p/Host/Mock/{Core,Negotiate}.lean` | the mocks of W5.2 and W5.5 until they merge (see "The mocks") |
 
 All declarations live in the `Libp2p.Host` namespace, and the root
 module re-exports the public submodules.
@@ -297,20 +297,20 @@ fixes them as follows.
 
 ## The mocks
 
-W5.1 (`libp2p/identity`), W5.2 (`libp2p/core`), and W5.5
-(`libp2p/negotiate`) have not merged, so the package builds against
-mocks of their frozen surfaces (RULES.md, "Working ahead of the tree"),
-under `Libp2p/Host/Mock/`. A type is a copy of the frozen shape; an
-operation is `opaque`, and its body fails with the name of the missing
-package. No body derives an identity, negotiates, or opens a session,
-and the mocks state no axiom. The host modules open
+W5.2 (`libp2p/core`) and W5.5 (`libp2p/negotiate`) have not merged,
+so the package builds against mocks of their frozen surfaces (RULES.md,
+"Working ahead of the tree"), under `Libp2p/Host/Mock/`. A type is a
+copy of the frozen shape; an operation is `opaque`, and its body fails
+with the name of the missing package. No body negotiates or opens a
+session, and the mocks state no axiom. The host modules open
 `Libp2p.Host.Mock`, so `Core.Error` and `Negotiate.upgradeWith` resolve
 as they will against the real packages, and the integration swaps the
-imports and drops the `open`.
+imports and drops the `open`. The keys and the peer id come from the
+merged `libp2p/identity`.
 
-`Host.new` derives the peer id through the identity mock, so no host
-starts against the mocks, and the unit 1b milestones run at the
-integration. Unit 1a runs in full.
+Every upgrade runs through the negotiate mock and fails there, and the
+legs also need the Noise and yamux values (W5.3, W5.4), so the unit 1b
+milestones run at the integration. Unit 1a runs in full.
 
 ## What the package must not depend on
 
