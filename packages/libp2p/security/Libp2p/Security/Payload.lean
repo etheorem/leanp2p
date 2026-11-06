@@ -1,5 +1,5 @@
 import Proto
-import Libp2p.Security.Mock.Identity
+import Libp2p.Identity
 import Libp2p.Security.Constants
 import Libp2p.Security.Handshake
 
@@ -37,9 +37,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Security.Noise
 
--- The keys and the peer id come from the mock of W5.1 (RULES.md,
--- "Working ahead of the tree").
-open Bytes Libp2p.Security.Mock.Identity
+open Bytes Libp2p.Identity
 
 /-- The bytes of one present payload field, with the varint budget of
 its length prefix (`Pb.Value.Valid`), so `toFields` needs no check. -/

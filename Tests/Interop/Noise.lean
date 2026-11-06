@@ -31,9 +31,7 @@ set_option autoImplicit false
 namespace Tests.Interop.Noise
 
 open Conc (Async)
--- The keys and the peer id come from the identity mock of the package
--- until W5.1 merges (RULES.md, "Working ahead of the tree").
-open Libp2p.Security.Mock.Identity
+open Libp2p.Identity
 open Libp2p.Security
 
 /-- 32 bytes of one value, the form of both identity seeds. -/

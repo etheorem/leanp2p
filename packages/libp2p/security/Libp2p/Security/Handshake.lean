@@ -2,7 +2,7 @@ import Crypto
 import Bytes
 import Proto
 import Streams.Framing
-import Libp2p.Security.Mock.Identity
+import Libp2p.Identity
 import Libp2p.Security.Mock.Core
 import Libp2p.Security.Constants
 
@@ -83,8 +83,8 @@ set_option autoImplicit false
 
 namespace Libp2p.Security.Noise
 
--- `Role` and the identity error come from the mocks of W5.2 and W5.1
--- (RULES.md, "Working ahead of the tree").
+-- `Role` comes from the mock of W5.2 (RULES.md, "Working ahead of the
+-- tree").
 open Bytes Libp2p.Security.Mock.Core
 
 /-! ## Data types
@@ -159,7 +159,7 @@ inductive Error where
   | missingIdentity
   /-- The identity key did not unmarshal, or no peer id derives from
   it. -/
-  | identity (e : Mock.Identity.Error)
+  | identity (e : Libp2p.Identity.Error)
   /-- The signature does not verify over the static key of the
   handshake (owned contract 4). -/
   | badSignature
