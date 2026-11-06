@@ -66,7 +66,15 @@ docker network create "$net" >/dev/null
 gateway=$(docker network inspect -f '{{(index .IPAM.Config 0).Gateway}}' "$net")
 docker run -d --rm --name "$redis" --network "$net" -p 127.0.0.1::6379 redis:7-alpine >/dev/null
 redis_host=$(docker port "$redis" 6379/tcp)
-until docker exec "$redis" redis-cli PING >/dev/null 2>/dev/null; do sleep 0.1; done
+# The readiness wait has a bound, like every wait in this script: a
+# server that never answers PING fails the run, and the script exits
+# instead of hanging CI.
+waited=0
+until docker exec "$redis" redis-cli PING >/dev/null 2>/dev/null; do
+  [ "$waited" -lt 100 ] || { echo "interop-matrix: redis did not answer PING" >&2; exit 2; }
+  sleep 0.1
+  waited=$((waited + 1))
+done
 
 # The test plan's variables, for one side. $1 is_dialer, $2 redis_addr.
 plan_env() {
