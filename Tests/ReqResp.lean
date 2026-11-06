@@ -1,7 +1,7 @@
 import Tests.Support
 import Libp2p.Protocols.ReqResp.Exchange
 import Libp2p.Protocols.Mock.HostStream
-import Streams.Mock.Multiaddr
+import Multiformats.Multiaddr
 
 /-!
 # The req/resp suite (root PLAN W6.3)
@@ -612,7 +612,7 @@ open Libp2p.Protocols.Mock.HostStream (Host)
 /-- A connected pair of hosts over a new sim net and the mock muxer. -/
 def hostPair (split : Bool := false) : Async (Host × Host) := do
   let net ← Streams.Sim.Net.new split
-  let addr ← match Streams.Mock.Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/4100" with
+  let addr ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/4100" with
     | .ok a => pure a
     | .error _ => throw (IO.userError "test address")
   let l ← net.transport.listen addr
