@@ -33,6 +33,7 @@ namespace.
 | ECDSA P-256 verify | `LeanHazmatP256`, through `Crypto/P256.lean` | §4.6. The backend PLAN, "Pin outcomes", gives the adapter to this unit. |
 | ECDSA P-256 derive, re-encode, sign, key generation | `crypto/backend` | the etheorem family binds verification only |
 | secp256k1 derive, point check, sign over a message or a digest, verify, key generation | `crypto/backend` | the etheorem verifier accepts a high S, and §4.6 requires a low S (backend PLAN, "Pin outcomes") |
+| secp256k1 key recovery | `LeanHazmatSecp256k1` | §4.6: the etheorem package serves key recovery, and the backend binds none |
 | Ed25519, X25519, RSA, ChaCha20-Poly1305, X.509, random bytes, the other generators | `crypto/backend` | no other source binds them |
 
 The facade also re-exports the types of the backend: `CryptoError`,
@@ -52,6 +53,10 @@ must fit the stated type. The suite demonstrates one such swap (PLAN,
 `keccak256` keeps the etheorem type `ByteArray → ByteArray`, with no
 `Except`. The etheorem shim has no failure arm for a digest. A wrapper
 that invents one adds an error arm that no input reaches.
+
+`secp256k1Recover` keeps the etheorem type too, and its empty answer
+is its failure arm. libsecp256k1 recovers from a high S as well. A
+caller with a low-S rule checks S before it trusts the key.
 
 ## Owned contracts
 
