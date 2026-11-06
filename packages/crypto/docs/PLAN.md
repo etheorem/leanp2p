@@ -18,26 +18,6 @@ tests pass, also with `LEAN_NUM_THREADS=1`. The import lint is green.
 | 0 | none | this documentation pair (ARCHITECTURE §2) | written, and consistent with the root docs and the two leaf pairs |
 | 1 | W3.1, W3.2 | the route table `Crypto.lean`, the P-256 route `Crypto/P256.lean`, the `Rng` seam `Crypto/Rng.lean`, rule 4 of the import lint, and the two suites below | the milestones below pass, and the root W3.3 row holds |
 
-## The mock
-
-W3.1 (etheorem/leanp2p#4) has not merged. Unit 1 builds against
-`Crypto/Mock/Pure.lean`, a mock of the frozen pure surface (RULES.md,
-"Working ahead of the tree"). The mock declares the names the
-cross-check calls: `Sha256.digestB`, `Sha512.digestB`,
-`Sha1.digestB`, `Hmac.sha256`, `Hkdf.extractSha256`, and
-`Hkdf.expandSha256`. Each is an `opaque` with a value, and the mock
-states no axiom. The RFC entries of direction one check the mock
-against the expected bytes as well.
-
-When W3.1 merges, the integration takes three steps, within the
-12-hour window of RULES.md:
-
-1. `Tests/CryptoCross.lean` imports `CryptoPure` in place of
-   `Crypto.Mock.Pure`, and it drops `open Crypto.Mock`.
-2. The integration deletes `Crypto/Mock/Pure.lean` and its row in the
-   module table of the ARCHITECTURE.
-3. The suites pass against the real package.
-
 ## Consumers
 
 W5.1 (`libp2p/identity`) derives, signs, and verifies through the

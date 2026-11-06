@@ -3,7 +3,7 @@ import Tests.Backend
 import Bytes
 import Backend
 import Crypto
-import Crypto.Mock.Pure
+import CryptoPure
 
 /-!
 # The W3.3 cross-check
@@ -26,12 +26,6 @@ the P-256 differential against the backend verifier.
   must give the same bytes.
 * **The P-256 route.** The etheorem route against `Backend.p256Verify`,
   case by case.
-
-**The mock.** W3.1 (`crypto/pure`) has not merged, so the pure names
-resolve to `Crypto.Mock.CryptoPure` through `open Crypto.Mock`
-(RULES.md, "Working ahead of the tree"). At integration this module
-imports `CryptoPure` in place of `Crypto.Mock.Pure` and drops the
-`open`. No call below changes.
 -/
 
 set_option autoImplicit false
@@ -39,9 +33,6 @@ set_option autoImplicit false
 namespace Tests
 
 open Bytes
--- The pure names (`CryptoPure.Sha256.digestB`, …) resolve through this
--- namespace while the mock stands in for W3.1.
-open Crypto.Mock
 
 /-- The answer of a production call, or the run fails. A production
 fault on a valid input fails the check, and the message names it. -/
