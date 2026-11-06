@@ -22,7 +22,7 @@ set_option autoImplicit false
 
 namespace Tests
 
-open Conc Streams Streams.Mock.Multiformats Libp2p.Identity Libp2p.Core
+open Conc Streams Multiformats Libp2p.Identity Libp2p.Core
 
 /-- The bytes of a string. -/
 private def b (s : String) : ByteArray := s.toUTF8

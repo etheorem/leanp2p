@@ -44,9 +44,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Core
 
--- `Streams.Mock.Multiformats.Multiaddr` is the address type of
--- `Connection` until `net/streams` takes the real multiformats.
-open Streams.Mock.Multiformats Libp2p.Identity
+open Multiformats Libp2p.Identity
 
 /-- The connection gater: allow or deny a connection at three
 checkpoints. `true` allows. -/
