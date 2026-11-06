@@ -331,9 +331,12 @@ integration. Unit 1a runs in full.
   it.
 - From the codec group, `codec/multiformats` for `Multiaddr`: the
   peerstore holds addresses, and the dial path takes the `/p2p`
-  component off an address. `base/bytes` and the other codecs arrive
-  through `negotiate` and `identity`, and the host names none of them
-  directly.
+  component off an address. The dial path names one `base/bytes`
+  function, `Bytes.ofNatList`, to give a `/p2p` component value the
+  `ByteArray` form that `PeerId.ofBytes?` reads. The name arrives
+  through the transitive `net/streams` import, and the host imports no
+  `base/bytes` module. The other codecs arrive through `negotiate` and
+  `identity`, and the host names none of them.
 - From base, `base/conc` for `Async`, `OnceRef`, `TaskSet`,
   `withinDeadline`, and `Clock` (§4.1).
 - No crypto by name. Key material reaches the host only through the
