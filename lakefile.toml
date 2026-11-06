@@ -157,6 +157,7 @@ globs = ["Libp2p.Core.*"]
 name = "Libp2pSecurity"
 srcDir = "packages/libp2p/security"
 roots = ["Libp2p.Security"]
+globs = ["Libp2p.Security.*"]
 
 [[lean_lib]]
 name = "Libp2pMux"
@@ -202,3 +203,10 @@ root = "Tests.Main"
 [[lean_exe]]
 name = "yamux-interop"
 root = "Tests.Interop.Yamux"
+
+# The Lean side of the Noise interop check against go-libp2p's Noise
+# transport; run it through `scripts/noise-interop.sh`. Like
+# `yamux-interop`, it is not part of `lake test`.
+[[lean_exe]]
+name = "noise-interop"
+root = "Tests.Interop.Noise"

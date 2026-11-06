@@ -13,7 +13,7 @@ pass, the suite passes under `+RTS -N1`, and the import lint is green.
 | Unit | Root deps | Deliverable | Done when |
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
-| 1a | W3.3, W5.2 | the handshake core and the payload: `State`/`Event`/`Action`/`step` (§3.3), the framing codec, `NoiseHandshakePayload` with its `ProtoMessage` instance, and `Noise.Error` | the core replays the transcript milestones below with no connection in the loop |
+| 1a | W3.3, W5.2 | the handshake core and the payload: `State`/`Event`/`Action`/`step` (§3.3) over the `u16be` frame of `Streams.Framing` (ARCHITECTURE, "The core shape"), `NoiseHandshakePayload` with its `ProtoMessage` instance, and `Noise.Error` | the core replays the transcript milestones below with no connection in the loop |
 | 1b | 1a, W4.2 | the transport and the two `SecurityProtocol` values: framed AEAD reads and writes over `SecureConn`, `Noise.securityProtocol`, the fixed-key test value, and the `Except.mapError` into `Core.Error` | the root W5.3 row holds, and the milestones below pass |
 
 The split lets the pure side close on transcripts alone. The core needs
@@ -47,7 +47,7 @@ Unit 0 is done.
   the decode runs (§5.2, PRINCIPLES 2.4).
 - The static-key check: a payload whose signature was made over a
   different static key, or whose signature fails to verify, is an
-  authentication error. The completion carries the `PeerId` the
+  authentication error. `Noise.verify` answers the `PeerId` the
   payload's identity key derives; the host (W5.6) supplies the expected
   id, and the upgrader compares it (the negotiate pair's refinement).
 
@@ -88,3 +88,10 @@ its wrong-AD and wrong-nonce rejections. All of these arrive through
 W0.3, with `VECTORS.lock`, `scripts/extract-vectors.py`, and
 `Tests/vectors/` (§6). The go interop matrix over `tcp + /noise +
 yamux`, dial and listen, is the W5.9 gate and no gate of this package.
+
+`scripts/noise-interop.sh` runs this package alone against go-libp2p
+v0.50.0's Noise transport, over loopback TCP with no negotiation, in
+both directions: each side proves its peer id, 200000 bytes go each
+way as four frames, and the close is orderly. It sits outside `lake
+test`, as the yamux interop check does, since Go tooling stays in the
+harness.
