@@ -20,7 +20,10 @@ The split lets the pure side close on transcripts alone. The core needs
 W3.3 for the facade and W5.2 for the `SecureConn` inputs; W4.2 gates
 only the framed IO path and the seam values, which unit 1b carries.
 
-Unit 0 is done.
+Units 0, 1a, and 1b are done: the suite is `Tests/Noise.lean`, and the
+interop check of the vector stance runs through
+`scripts/noise-interop.sh`. The package docs record the mock of W5.2
+and the integration that drops it ("The mock" in the ARCHITECTURE).
 
 ## Consumers
 
