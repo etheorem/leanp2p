@@ -123,7 +123,7 @@ def Enr.run (r : Runner) : IO Unit := do
 
     -- The mapping: the peer id go-libp2p derives, one address, and back.
     r.check s!"{file}: the peer id is go-libp2p's"
-      ((rec.peerId.toOption.map Mock.Keys.PeerId.toBase58) == some examplePeerId)
+      ((rec.peerId.toOption.map PeerId.toString) == some examplePeerId)
     match rec.multiaddrs with
     | .error e => r.check s!"{file}: the multiaddrs ({repr e})" false
     | .ok addrs =>

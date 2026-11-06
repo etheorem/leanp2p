@@ -1,6 +1,7 @@
 import Varint
 import Libp2p.Identity.Enr
-import Libp2p.Identity.Mock.Keys
+import Libp2p.Identity.Keys
+import Libp2p.Identity.PeerId
 import Multiformats
 
 /-!
@@ -40,15 +41,18 @@ set_option autoImplicit false
 
 namespace Libp2p.Identity.Enr
 
-open Bytes Rlp Mock.Keys Multiformats
+open Bytes Rlp Multiformats
 
 /-! ## The peer id -/
 
-/-- The libp2p peer id of the key that signed the record. -/
-def peerId (r : Enr) : Except Error PeerId :=
-  match PubKey.ofData? .secp256k1 (ofNatList r.publicKey) with
-  | some k => .ok (PeerId.ofPubKey k)
-  | none => .error .publicKey
+/-- The libp2p peer id of the key that signed the record. The strict
+check of `PubKey.ofData?` takes the 33-byte compressed point. The
+marshaled key is 37 bytes, under the 42-byte threshold, so the peer id
+inlines and its derivation calls no hash. Either step failing is
+`publicKey`. -/
+def peerId (r : Enr) : Except Error PeerId := do
+  let k ← (PubKey.ofData? .secp256k1 (ofNatList r.publicKey)).mapError fun _ => .publicKey
+  (PeerId.ofPubKey k).mapError fun _ => .publicKey
 
 /-! ## The addresses -/
 
