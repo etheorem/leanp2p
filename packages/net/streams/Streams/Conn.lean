@@ -1,6 +1,6 @@
 import Conc
 import Streams.Constants
-import Streams.Mock.Multiaddr
+import Multiformats.Multiaddr
 
 /-!
 # Connections, listeners, and the `Transport` seam
@@ -34,15 +34,14 @@ rule, so a caller never holds a connection that is half closed.
 transport value behind the fields, so the seam shows no `IO.Ref`
 (§3.1).
 
-`Multiaddr` comes from the mock of `codec/multiformats`
-(`Streams.Mock.Multiaddr`) until W2.3 merges.
+`Multiaddr` comes from `codec/multiformats`.
 -/
 
 set_option autoImplicit false
 
 namespace Streams
 
-open Conc Streams.Mock.Multiformats
+open Conc Multiformats
 
 /-- One byte stream in both directions between two peers. -/
 structure Connection where

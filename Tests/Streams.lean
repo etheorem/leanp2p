@@ -1,8 +1,5 @@
 import Tests.Support
 import Streams
-import Streams.Mock.Bytes
-import Streams.Mock.Varint
-import Streams.Mock.Multiaddr
 
 /-!
 # Streams suite (units W4.1 and W4.2)
@@ -22,19 +19,13 @@ No answer depends on the order in which the scheduler runs the tasks.
 The suite follows the rules of `Tests.Concurrency`: a check on a parked
 task arranges the events so that one answer is possible in every order,
 and the deadlines run on the test clock.
-
-The mocks of `base/bytes`, `codec/varint`, and `codec/multiformats`
-have their own checks here: the varint mock against the spec examples
-in `Tests/vectors/varint-examples.json`, and the multiaddr mock on the
-four forms that it parses. The package deletes these checks with the
-mocks.
 -/
 
 set_option autoImplicit false
 
 namespace Tests
 
-open Conc Streams Streams.Framing Streams.Mock Streams.Mock.Bytes Streams.Mock.Multiformats
+open Conc Streams Streams.Framing Bytes Multiformats
 
 /-- The bytes of a string. -/
 private def b (s : String) : ByteArray := s.toUTF8
@@ -49,17 +40,6 @@ private def ma (s : String) : Async Multiaddr := do
   | .ok a => return a
   | .error _ => throw <| IO.userError s!"test address {s} does not parse"
 
-/-- The bytes of a hex string, on the `List Nat` model. The name
-differs from `Tests.unhex`, the `ByteArray` reader of `Tests/Support`,
-which lands with W3.2. -/
-private def unhexList (s : String) : List Nat :=
-  let digit (c : Char) : Nat :=
-    if c.isDigit then c.toNat - '0'.toNat else c.toLower.toNat - 'a'.toNat + 10
-  let rec go : List Char → List Nat
-    | hi :: lo :: rest => (digit hi * 16 + digit lo) :: go rest
-    | _ => []
-  go s.toList
-
 /-- A connected pair over a new sim net: the dialer's end and the
 listener's end. The listener closes before the answer, and the pair
 stays open. -/
@@ -70,59 +50,6 @@ private def pair (split : Bool := false) : Async (Connection × Connection) := d
   let some server ← l.accept | throw <| IO.userError "accept failed"
   l.close
   return (client, server)
-
-/-! ## The mocks -/
-
-/-- The mocks run real code: the varint against the spec, the multiaddr
-on its four forms, and the byte model. -/
-private def mockChecks (r : Runner) : IO Unit := do
-  -- The varint mock reproduces every example of the spec, on the model
-  -- and on `ByteArray`.
-  let file := "varint-examples.json"
-  let j ← loadJson file
-  for ex in ← jArr file j "examples" do
-    let n ← jNat file ex "n"
-    let wire := unhexList (← jStr file ex "uvarintHex")
-    r.check s!"mock varint: {n} encodes as the spec says" (Varint.encodeNat n == wire)
-    r.check s!"mock varint: the spec bytes of {n} decode on the model"
-      (match Varint.decode? wire with | .ok (v, []) => v.val == n | _ => false)
-    r.check s!"mock varint: the spec bytes of {n} decode on ByteArray"
-      (match Varint.decodeB? (ofNatList wire) with
-        | .ok (v, k) => v.val == n && k == wire.length
-        | _ => false)
-  -- The two rules of the spec.
-  for rule in ← jArr file j "rules" do
-    if let some hex ← jStr? file rule "counterExampleHex" then
-      r.check s!"mock varint: the non-minimal {hex} is malformed"
-        (failsWith .malformed (Varint.decode? (unhexList hex)))
-  let ninth := List.replicate 9 0x80 ++ [0x01]
-  r.check "mock varint: a ninth continuation byte is malformed"
-    (failsWith .malformed (Varint.decode? ninth))
-  r.check "mock varint: a ninth continuation byte is malformed on ByteArray"
-    (failsWith .malformed (Varint.decodeB? (ofNatList ninth)))
-  r.check "mock varint: an input cut inside a varint is truncated"
-    (failsWith .truncated (Varint.decode? [0x80, 0x80]))
-
-  -- The multiaddr mock: each form reads back as its own text.
-  for text in ["/ip4/127.0.0.1/tcp/4001", "/ip6/::1/tcp/9000", "/memory/42",
-      "/ip4/10.0.0.1", "/ip6/2001:db8::7/tcp/0"] do
-    match Multiaddr.parse? text with
-    | .ok m => r.check s!"mock multiaddr: {text} reads back as itself" (m.describe == text)
-    | .error _ => r.check s!"mock multiaddr: {text} parses" false
-  -- And it refuses the text that it does not cover, with the error of
-  -- the real parser.
-  for (text, e) in [("/udp/53", Error.unknownProtocol), ("/ip4/300.0.0.1", .badValue),
-      ("/tcp/65536", .badValue), ("/memory/18446744073709551616", .badValue),
-      ("/ip4", .badAddress), ("ip4/1.2.3.4", .badAddress), ("", .badAddress)] do
-    r.check s!"mock multiaddr: {text.quote} is {repr e}" (failsWith e (Multiaddr.parse? text))
-  -- A list that breaks the size of its protocol is no address.
-  r.check "mock multiaddr: a 3-byte ip4 value is no address"
-    (Multiaddr.ofComponents? [⟨.«ip4», [1, 2, 3]⟩]).isNone
-  r.check "mock multiaddr: an empty list is no address" (Multiaddr.ofComponents? []).isNone
-
-  -- The byte model: one byte per value, mod 256.
-  r.check "mock bytes: the model view reads back the bytes"
-    (toNatList (ofNatList [0, 1, 255, 256, 511]) == [0, 1, 255, 0, 255])
 
 /-! ## The sim -/
 
@@ -1196,7 +1123,6 @@ private def tcpMappingChecks (r : Runner) : IO Unit := do
 
 def Streams.run (r : Runner) : IO Unit := do
   r.section "streams" "(packages/net/streams/docs/PLAN.md, test milestones, units 1 and 2)"
-  mockChecks r
   let all : Async Unit := do
     simChecks r
     closeChecks r
