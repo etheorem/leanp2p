@@ -7,7 +7,7 @@ import Streams.Error
 import Streams.Framing
 import Streams.Stream
 import Libp2p.Protocols
-import Libp2p.Protocols.Mock.Identity
+import Libp2p.Protocols.Identity
 import Libp2p.Protocols.Mock.Core
 import Libp2p.Protocols.Mock.Host
 
@@ -17,10 +17,10 @@ import Libp2p.Protocols.Mock.Host
 Mirrors `vendor/specs/ping/ping.md` (32-byte echo, protocol id
 `/ipfs/ping/1.0.0`) and the captured go-libp2p Identify protobuf
 (`identify-go.json`). The suite replays the vector and drives the
-pure `Identify.validate` and `Ping.checkEcho` checks. The mock key
-and host stand-ins run their executable bodies here, and the address
-checks run the real Multiformats decoder, so every validate outcome
-appears in a check.
+pure `Identify.validate` and `Ping.checkEcho` checks. The real key
+fixtures and the host stand-in run here, and the address checks run the
+real Multiformats decoder, so every validate outcome appears in a
+check.
 
 The exchange cases cover the identify client against the responder
 handler, the push handler against the in-memory peerstore double, the
@@ -35,7 +35,17 @@ set_option autoImplicit false
 namespace Tests.Protocols
 
 open Libp2p.Protocols
-open Libp2p.Protocols.Mock.Identity
+open Libp2p.Identity
+
+/-- A real Ed25519 public key for the suite. A 32-byte key needs no
+native call, and the key round trips through the wire form. -/
+private def testKey (tag : UInt8) : PubKey :=
+  PubKey.ofEd25519 ⟨ByteArray.mk (Array.replicate 32 tag), by simp [ByteArray.size]⟩
+
+/-- A validated inline peer id, one per suite peer. -/
+private def testPeer (tag : UInt8) : PeerId :=
+  PeerId.inline (ByteArray.mk #[tag]) (by
+    simp [ByteArray.size, Libp2p.Identity.maxInlineKeyBytes])
 
 /-- The model decode over the byte list. -/
 private def decodeModel (bs : List Nat) : Except Pb.Error (Identify × List Nat) :=
@@ -122,7 +132,7 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
   do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
-    let key : PubKey := ⟨.ed25519, [1, 2]⟩
+    let key := testKey 1
     let pid : PeerId := peerIdOfPubKey key
     let addr := [4, 127, 0, 0, 1, 6, 138, 43]
     let agent := "leanp2p"
@@ -135,7 +145,7 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     r.check "identify e2e responder round trip accepted"
       (match res with
        | .ok (some (m, got)) =>
-           got == pid && m.agentVersion == some agent && m.protocols == protocols
+           decide (got = pid) && m.agentVersion == some agent && m.protocols == protocols
        | _ => false)
     tc.close
 
@@ -143,7 +153,7 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
   do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
-    let key : PubKey := ⟨.ed25519, [3, 4]⟩
+    let key := testKey 3
     let pid : PeerId := peerIdOfPubKey key
     let agent := "leanp2p"
     let ts ← Conc.TaskSet.new
@@ -164,7 +174,7 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
     let store ← Mock.Host.inMemory
-    let key : PubKey := ⟨.ed25519, [1, 2]⟩
+    let key := testKey 1
     let pid : PeerId := peerIdOfPubKey key
     let addr := [4, 127, 0, 0, 1, 6, 138, 43]
     let msg := Identify.respond key [addr] [] none "" none
@@ -187,7 +197,7 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
     let store ← Mock.Host.inMemory
-    let key : PubKey := ⟨.ed25519, [1, 2]⟩
+    let key := testKey 1
     let pid : PeerId := peerIdOfPubKey key
     let addr := [4, 127, 0, 0, 1, 6, 138, 43]
     let msg := Identify.respond key [addr] [] none "" none
@@ -215,7 +225,7 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
     let store ← Mock.Host.inMemory
-    let key : PubKey := ⟨.ed25519, [7, 8]⟩
+    let key := testKey 7
     let pid : PeerId := peerIdOfPubKey key
     let addr := [4, 127, 0, 0, 1, 6, 138, 43]
     let ts ← Conc.TaskSet.new
@@ -426,6 +436,7 @@ def run (r : Runner) : IO Unit := do
   let wantProtocols ← jStrs "identify-go.json" j "protocols"
   let wantAgent ← jStr "identify-go.json" j "agentVersion"
   let jsonVersion ← jStr "identify-go.json" j "protocolVersion"
+  let wantPeerId ← jStr "identify-go.json" j "peerId"
 
   match Bytes.ofHex? respHex with
   | none =>
@@ -473,6 +484,14 @@ def run (r : Runner) : IO Unit := do
                   -- the ed25519 key type, field 2 holds the 32 key bytes
                   r.check "identify vector publicKey equals JSON publicKeyHex"
                     (m.publicKey == some ([8, 1, 18, 32] ++ Bytes.toNatList pkBytes))
+                  -- the derivation runs the real identity package: parse the
+                  -- serialized key, derive its peer id, compare the text form
+                  match unmarshalPubKey? ([8, 1, 18, 32] ++ Bytes.toNatList pkBytes) with
+                  | some k =>
+                      r.check "identify vector peer id matches the JSON peerId"
+                        ((peerIdOfPubKey k).toString == wantPeerId)
+                  | none =>
+                      r.check "identify vector peer id matches the JSON peerId" false
               r.check "identify vector protocols equal JSON protocols in order"
                 (m.protocols == wantProtocols)
               r.check "identify vector agentVersion equals JSON agentVersion"
@@ -490,10 +509,8 @@ def run (r : Runner) : IO Unit := do
               -- /ipfs/1.0.0; the suite asserts the wire value
               r.check "identify vector protocolVersion wire delta recorded"
                 (m.protocolVersion == some "" && jsonVersion == "/ipfs/1.0.0")
-              r.skip "identify vector peer id derivation skipped"
-                "the peer id derivation is an opaque mock; identity #11 replaces it"
 
-  -- validate: rejection and acceptance, through the mock key and the
+  -- validate: rejection and acceptance, over a real key and the
   -- real address decoder
   r.check "identify over-cap payload rejected before decode"
     (failsWith Identify.Error.overCap
@@ -506,26 +523,26 @@ def run (r : Runner) : IO Unit := do
   let badKeyMsg := { emptyIdentify with publicKey := some [] }
   r.check "identify undecodable publicKey rejected"
     (failsWith Identify.Error.badKey (Identify.validate (msgPayload badKeyMsg) none))
-  let otherId : PeerId := ⟨[], "other"⟩
-  let mismatchMsg := { emptyIdentify with publicKey := some [1, 2] }
+  let otherId : PeerId := testPeer 9
+  let mismatchMsg := { emptyIdentify with publicKey := some (marshalPubKey (testKey 1)) }
   r.check "identify key mismatch rejected"
     (failsWith Identify.Error.keyMismatch
       (Identify.validate (msgPayload mismatchMsg) (some otherId)))
   -- `[4]` is an ip4 tag with no address bytes: the real decoder
   -- rejects it. The empty list is a valid empty address, so it cannot
   -- stand in for a bad address.
-  let badListen := { emptyIdentify with publicKey := some [1, 2], listenAddrs := [[4]] }
+  let badListen := { emptyIdentify with publicKey := some (marshalPubKey (testKey 1)), listenAddrs := [[4]] }
   r.check "identify invalid listen address rejected"
     (failsWith Identify.Error.badAddress (Identify.validate (msgPayload badListen) none))
-  let badObs := { emptyIdentify with publicKey := some [1, 2], observedAddr := some [4] }
+  let badObs := { emptyIdentify with publicKey := some (marshalPubKey (testKey 1)), observedAddr := some [4] }
   r.check "identify invalid observed address rejected"
     (failsWith Identify.Error.badAddress (Identify.validate (msgPayload badObs) none))
   -- a continuation byte with no terminator: truncated framing
   r.check "identify malformed protobuf rejected"
     (failsWith (Identify.Error.badMessage (.framing .truncated))
       (Identify.validate [0x80] none))
-  let good := { emptyIdentify with publicKey := some [1, 2] }
-  let pid : PeerId := peerIdOfPubKey ⟨.ed25519, [1, 2]⟩
+  let good := { emptyIdentify with publicKey := some (marshalPubKey (testKey 1)) }
+  let pid : PeerId := peerIdOfPubKey (testKey 1)
   r.check "identify accepted with matching derivation"
     (succeedsWith (good, pid) (Identify.validate (msgPayload good) (some pid)))
   r.check "identify accepted with no expected id"

@@ -1,6 +1,6 @@
 import Std
 import Conc
-import Libp2p.Protocols.Mock.Identity
+import Libp2p.Identity
 
 /-!
 # Host peerstore mock
@@ -17,7 +17,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Protocols.Mock.Host
 
-open Libp2p.Protocols.Mock.Identity
+open Libp2p.Identity
 
 /-- The peerstore seam the push handler updates: addresses by peer,
 deduplicated at add. -/
@@ -36,12 +36,12 @@ opaque inMemory : IO Peerstore := do
   let table ← Conc.OnceRef.new ([] : List (PeerId × List (List Nat)))
   let addAddrs : PeerId → List (List Nat) → IO Unit := fun p addrs =>
     table.update fun cur =>
-      let old := (cur.find? (fun e => e.1 == p)).map (·.2) |>.getD []
+      let old := (cur.find? (fun e => decide (e.1 = p))).map (·.2) |>.getD []
       let merged := (old ++ addrs).eraseDups
-      (p, merged) :: cur.filter (fun e => !(e.1 == p))
+      (p, merged) :: cur.filter (fun e => !(decide (e.1 = p)))
   let addrsOf : PeerId → IO (List (List Nat)) := fun p => do
     let cur ← table.get
-    return (cur.find? (fun e => e.1 == p)).map (·.2) |>.getD []
+    return (cur.find? (fun e => decide (e.1 = p))).map (·.2) |>.getD []
   return { addAddrs, addrsOf }
 
 end Libp2p.Protocols.Mock.Host
