@@ -540,13 +540,13 @@ def exchangeChecks (r : Runner) : Async Unit := do
 
 /-! ## The writer's compressed branch -/
 
-/-- The kinds of the data chunks of one written payload, in order: the
-chunk headers after the length prefix and the stream identifier. -/
+/-- The kinds of the data chunks of one written payload, in order. The
+walk starts after the length prefix and the stream identifier. -/
 def chunkKinds (payloadSize : Nat) (wire : ByteArray) : List SnappyFrame.Kind := Id.run do
   let mut pos := (encodeLengthB payloadSize).size + streamIdB.size
   let mut kinds := []
-  -- Every chunk is at least its 4-byte header, so `wire.size` rounds
-  -- bound the walk.
+  -- Every chunk carries at least its 4-byte header, so the loop runs
+  -- at most `wire.size` times.
   for _ in [0:wire.size] do
     let some (.ok (k, len)) := SnappyFrame.decodeHeaderB? wire pos | break
     kinds := kinds ++ [k]
