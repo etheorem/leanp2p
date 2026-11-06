@@ -16,7 +16,6 @@ for the routes and the cross-check.
 | `Crypto.lean` | the route table: one `export` or `abbrev` line per primitive, and the imports of the sources |
 | `Crypto/P256.lean` | the route for ECDSA P-256 verification: the adapter from the SPKI key and the DER signature to the raw `(hash, r, s, qx, qy)` interface of `LeanHazmatP256` |
 | `Crypto/Rng.lean` | the `Rng` seam, its production value over `randomBytes`, and the seeded test value |
-| `Crypto/Mock/Pure.lean` | the mock of the `crypto/pure` surface while W3.1 is open (RULES.md, "Working ahead of the tree"). Only the cross-check suite imports it. |
 
 The route table stays a list of one-line routes, so a reader sees every
 production choice on one screen. The P-256 adapter is code with its own
@@ -114,20 +113,12 @@ that invents one adds an error arm that no input reaches.
   the comparison at the IO edge. `Tests/CryptoCross.lean` imports the
   facade and the pure package. It is the one module that imports both
   implementations.
-- **The mock computes.** The cross-check compares two implementations
-  on real inputs. An `opaque` with no value gives a default, so every
-  check fails. The mock gives each `opaque` of the frozen surface a
-  value, which Lean compiles, and which the kernel cannot unfold. The
-  mock states no axiom. At the W3.1 merge, the suite imports
-  `CryptoPure` in its place, and the integration deletes the module
-  (PLAN, "The mock").
 
 ## What the facade must not depend on
 
 - No group to its left: no net and no libp2p (§2). Rule 2 of the lint
   keeps that word out of every `.lean` file of the group.
-- From `base`, `base/conc` for the `OnceRef` of the seeded `Rng`, and
-  `base/bytes` for the model conversions of the mock.
+- From `base`, `base/conc` only, for the `OnceRef` of the seeded `Rng`.
 - No codec. A route moves bytes. The framing of a key or a digest
   belongs to the caller.
 - No `crypto/pure` in the library. The pure copies enter through the

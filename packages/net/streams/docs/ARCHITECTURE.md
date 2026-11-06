@@ -16,15 +16,13 @@ discipline and the no-reader-strand contract (§4.7), the framing caps
 | `Streams/Constants.lean` | the constants this package owns, the 30 s deadline of §5.4 among them; one home per fact (§3.8) |
 | `Streams/Error.lean` | `Streams.Error`, the error inductive of the package (§3.5): why a `Stream` operation did not complete |
 | `Streams/Conn.lean` | `Connection`, `Listener`, and the `Transport` seam; `readExactly`; `withinUnauthDeadline`, the §5.4 deadline over a connection |
+| `Streams/Reader.lean` | `readLoop`, the reader task of a session (§3.3): a credit before each read, a post for each chunk and for the end; every muxer and secure-transport shell runs it, so the task has one home |
 | `Streams/BufReader.lean` | `BufReader`, exact-length reads with a buffer over one connection, with the theorems of its offset arithmetic |
 | `Streams/Framing.lean` | `Framing`, length-prefix reads: the `Prefix` shapes, the `Frame` codec with its `LawfulCodec` proof, the `ByteArray` path, and the IO read; the caps of §5.1 apply before allocation |
 | `Streams/Stream.lean` | `Stream`, the application view over a muxer loop, with `prependBytes`; `Completions`, the tag table, as a pure state with its theorems; `LoopPort`, what a muxer shell gives one stream |
 | `Streams/Tcp.lean` | the TCP transport, the production `Transport` value, over the libuv sockets that `Std.Async.TCP` exports (§9, delta 7); the mapping between a multiaddr and a socket address |
 | `Streams/Sim.lean` | the in-memory sim, the test `Transport` value, with the dial/listen/echo harness and the byte-splitting hostile mode |
 | `shim/` | a nested Lake package, as `crypto/backend` is: `StreamsShim.abort`, which ends every pending request of a TCP socket, and `StreamsShim.econnreset`, the platform's `ECONNRESET` (see "Decisions") |
-| `Streams/Mock/Bytes.lean` | the mock of `base/bytes` until W1.2 merges (see "The mocks") |
-| `Streams/Mock/Varint.lean` | the mock of `codec/varint` until W2.1 merges, with two mock axioms |
-| `Streams/Mock/Multiaddr.lean` | the mock of the multiaddr surface of `codec/multiformats` until W2.3 merges |
 
 All declarations live in the `Streams` namespace. The root module
 re-exports the public submodules, including `Sim.lean` (§10, row 9), so
@@ -49,6 +47,14 @@ The names are §7 row 8's. The types follow §3.1.
   reads until exactly `n` bytes arrive, and returns `none` on EOF. It
   also answers the bytes that it read past `n`, so no byte strands
   inside the call.
+- `readLoop` is the one reader task of a session (§3.3). It takes a
+  credit from the loop before each read, posts each chunk, and posts
+  the end of the connection last. The loop hands the credits back after
+  its step, so the reader holds at most as many reads as it holds
+  credits, and the rest of the peer's bytes stay in the connection,
+  where TCP slows the peer (§5.1). A read fault reaches the owner's
+  `onFault`, then ends the reads as the end of the connection does. Each
+  shell supplies its own posts, since each has its own `Event` type.
 - `Listener` holds `addr`, `accept`, `close`, and `join`. `accept`
   returns `none` when the listener closes, so a parked accept wakes
   and ends. `join` is the completion of §3.1.
@@ -293,9 +299,10 @@ in `Tests/Streams.lean` pins the IO parts.
   (`headerB?LeCap`, `headerB?OverCap`). `read` allocates its
   payload from the length that `headerB?` passed, so
   `headerB?LeCap` bounds the allocation by the cap.
-- `take?`, the payload step: a take of the bytes in front of any rest
-  returns them whole (`take?Append`), a successful take splits the
-  input (`ofTake?`), and a short input is `truncated` (`take?Short`).
+- The payload step is `take?` of `base/bytes`, with its theorems there:
+  a take of the bytes in front of any rest returns them whole
+  (`take?Append`), a successful take splits the input (`ofTake?`), and
+  a short input is `truncated` (`take?Short`).
 - `BufReader`: a new reader holds its seed, `drop` consumes what it
   names and no more, two drops act as one, and `peek` copies at most
   what it names.
@@ -304,38 +311,6 @@ in `Tests/Streams.lean` pins the IO parts.
 - `Tcp`: a port survives the trip through its two bytes
   (`be16Bytes16`), and the 16 bytes of an IPv6 value survive the trip
   through their 8 segments (`segments?FlatMapBytes16`).
-
-## The mocks
-
-W1.2, W2.1, and W2.3 are still open, so the package builds against
-mocks of their frozen surfaces (RULES.md, "Working ahead of the tree").
-Each mock lives in `Streams/Mock/` under the `Streams.Mock` namespace,
-and imports nothing from the real package.
-
-- A function of a mock is `opaque`, with a body. The compiler runs the
-  body, so the suite runs real bytes. The kernel cannot unfold an
-  `opaque` constant, so no proof can depend on the body.
-- A type, a class, or a structure is a copy of the frozen shape. An
-  `opaque` type has no constructors, and a pattern match on
-  `Multiaddr.components` needs them.
-- §4.2 freezes "the generic round-trip harness" and no names. So the
-  harness of the bytes mock, `checkRoundTrips` and `checkModelPins`,
-  and the field names of `LawfulCodec` follow the open W1.2 pull
-  request, etheorem/leanp2p#30. The suite calls them in the same way
-  before and after the swap.
-- The varint mock states two axioms, `decodeEncodeSuffix` and
-  `encodeDecode`. Each one is a theorem of W2.1, with the same name and
-  statement (etheorem/leanp2p#34). They are the only axioms of the
-  package beyond the three standard axioms of Lean.
-- The multiaddr mock knows four protocols: `ip4`, `ip6`, `tcp`, and
-  `memory`. The sim and the TCP transport use these four alone.
-
-When a unit merges, the package deletes its mock and changes each
-`open` of the mock namespace to the real one. The suite checks the
-varint mock against the spec examples
-(`Tests/vectors/varint-examples.json`) and the multiaddr mock on its
-four forms, so a mock that drifts from the real surface fails before
-the swap.
 
 ## Checked against the implementations
 
@@ -360,8 +335,7 @@ the swap.
   prefix of `Framing`, and `base`: `Async`, `Chan`, `select`,
   `TaskSet`, `OnceRef`, `withinDeadline`, and the `Clock` from
   `base/conc`, and the byte model and `DecodeError` from `base/bytes`.
-  It uses nothing from `crypto`. Until W1.2, W2.1, and W2.3 merge, the
-  mocks of "The mocks" replace those three packages.
+  It uses nothing from `crypto`.
 - One C shim, `shim/`, built by its own `lakefile.lean` (PRINCIPLES
   4.2). It compiles against the toolchain's `lean.h`, and it links
   against the `libuv.a` that the toolchain links into every

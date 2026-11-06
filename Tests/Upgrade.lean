@@ -7,7 +7,7 @@ import Streams.BufReader
 import Streams.Stream
 import Streams.Constants
 import Streams.Sim
-import Streams.Mock.Multiaddr
+import Multiformats.Multiaddr
 
 /-!
 # The upgrade suite (unit 1b)
@@ -42,8 +42,8 @@ private structure Side where
   write : Conc.Pipe
 
 /-- A multiaddr from its text form. -/
-private def simAddr (text : String) : Async Streams.Mock.Multiformats.Multiaddr := do
-  match Streams.Mock.Multiformats.Multiaddr.parse? text with
+private def simAddr (text : String) : Async Multiformats.Multiaddr := do
+  match Multiformats.Multiaddr.parse? text with
   | .ok a => return a
   | .error _ => throw <| IO.userError s!"test address {text} does not parse"
 

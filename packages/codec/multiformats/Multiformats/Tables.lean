@@ -387,7 +387,7 @@ inductive HashCode where
   | «bittorrent-pieces-root»
   | «bcrypt-pbkdf»
   | «ed2k»
-  deriving DecidableEq, Repr, Hashable
+  deriving DecidableEq, Repr, Hashable, Ord
 
 /-- The numeric code is registry data. -/
 def HashCode.toCode : HashCode → Nat
@@ -2922,7 +2922,7 @@ inductive ContentCodec where
   | «es521-msig»
   | «rs256-msig»
   | «scion»
-  deriving DecidableEq, Repr, Hashable
+  deriving DecidableEq, Repr, Hashable, Ord
 
 /-- The numeric code is registry data. -/
 def ContentCodec.toCode : ContentCodec → Nat
@@ -5604,7 +5604,7 @@ inductive Protocol where
   | «p2p-circuit»
   | «memory»
   | «ech»
-  deriving DecidableEq, Repr, Hashable
+  deriving DecidableEq, Repr, Hashable, Ord
 
 /-- The numeric code is registry data. -/
 def Protocol.toCode : Protocol → Nat
@@ -5966,7 +5966,7 @@ inductive Base where
   | «base64urlpad»
   | «proquint»
   | «base256emoji»
-  deriving DecidableEq, Repr, Hashable
+  deriving DecidableEq, Repr, Hashable, Ord
 
 /-- The numeric code is registry data. -/
 def Base.toCode : Base → Nat

@@ -65,7 +65,7 @@ private def enumSource (name : String) (rows : List (String × Nat))
     (withNames : Bool) : String := Id.run do
   let mut out := s!"/-- Canonical members of the pinned {name} registry. -/\ninductive {name} where\n"
   for (label, _) in rows do out := out ++ s!"  | {ident label}\n"
-  out := out ++ "  deriving DecidableEq, Repr, Hashable\n\n"
+  out := out ++ "  deriving DecidableEq, Repr, Hashable, Ord\n\n"
   out := out ++ s!"/-- The numeric code is registry data. -/\ndef {name}.toCode : {name} → Nat\n"
   for (label, code) in rows do out := out ++ s!"  | .{ident label} => {code}\n"
   out := out ++ s!"\n/-- Unknown codes have no constructor. -/\ndef {name}.ofCode? (code : Nat) : Option {name} :=\n  "

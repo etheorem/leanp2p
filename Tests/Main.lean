@@ -16,6 +16,8 @@ import Tests.BackendSoak
 import Tests.Hashes
 import Tests.Facade
 import Tests.CryptoCross
+import Tests.Yamux
+import Tests.Identity
 import Tests.Negotiate
 import Tests.Upgrade
 
@@ -49,6 +51,8 @@ def main : IO UInt32 := do
   Tests.Hashes.run r
   Tests.Facade.run r
   Tests.CryptoCross.run r
+  Tests.Yamux.run r
+  Tests.Identity.run r
   Tests.Negotiate.run r
   Tests.Upgrade.run r
   r.summary

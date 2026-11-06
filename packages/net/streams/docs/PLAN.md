@@ -18,9 +18,7 @@ under `+RTS -N1`, and the import lint is green.
 
 Unit 1 needs W2.1 for the `uvarint` prefix of `Framing`, and W2.3 for
 the `Multiaddr` of `Connection`, `Listener`, and `Transport`
-(ARCHITECTURE, "What the package must not depend on"). Until those
-units merge, the package builds against mocks of them (ARCHITECTURE,
-"The mocks").
+(ARCHITECTURE, "What the package must not depend on").
 
 Unit 0 is done.
 
@@ -58,11 +56,7 @@ Unit 0 is done.
   socket addresses and back. Every other shape maps to `none`,
   `handles` refuses it, and a `dial` or a `listen` of it throws.
 - The theorems of ARCHITECTURE, "Theorems", build with no `sorry`. Their
-  axioms are the three standard axioms of Lean and the two axioms of the
-  varint mock, no others.
-- The mocks: the varint mock reproduces the spec examples. The
-  multiaddr mock parses each of its four forms, and prints the same
-  text again.
+  axioms are the three standard axioms of Lean, no others.
 
 ## Test milestones (unit 2)
 

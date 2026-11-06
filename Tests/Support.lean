@@ -97,6 +97,32 @@ def succeedsWith {ε β : Type} [BEq β] (b : β) : Except ε β → Bool
   | .ok b' => b == b'
   | .error _ => false
 
+/-! ## Pin inputs
+
+The model pin of `base/bytes` (`Bytes.checkModelPins`) takes its inputs
+from the caller. Every codec suite draws them from these two, so the
+suites share one input space. -/
+
+/-- Every byte array of length at most `n`, shortest first. `n = 2`
+gives 65793 arrays. -/
+def allBytesUpTo : Nat → List ByteArray
+  | 0 => [ByteArray.empty]
+  | n + 1 =>
+    let shorter := allBytesUpTo n
+    let longest := shorter.filter (·.size == n)
+    shorter ++ longest.flatMap fun b => (List.range 256).map fun x => b.push (UInt8.ofNat x)
+
+/-- `count` pseudo-random byte arrays, each of length at most `maxLen`.
+The generator is seeded, so a failed input comes back from the seed. -/
+def genBytesList (count maxLen : Nat) (g : StdGen) : List ByteArray × StdGen :=
+  -- `Nat.fold` passes the generator from draw to draw.
+  Nat.fold count (fun _ _ (acc, g) =>
+    let (len, g) := randNat g 0 maxLen
+    let (bytes, g) := Nat.fold len (fun _ _ (bs, g) =>
+      let (x, g) := randNat g 0 255
+      (bs.push (UInt8.ofNat x), g)) (ByteArray.emptyWithCapacity len, g)
+    (bytes :: acc, g)) ([], g)
+
 /-! ## JSON vector loading
 
 Vector files live in `Tests/vectors` (override with `LEANP2P_VECTORS`); each
