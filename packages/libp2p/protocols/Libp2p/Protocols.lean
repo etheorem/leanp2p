@@ -10,7 +10,7 @@ import Libp2p.Protocols.Gossipsub.Node
 /-!
 # Libp2p.Protocols
 
-The protocols subpackage (ARCHITECTURE §4.9). This pull request carries
-the gossipsub modules. Identify, ping and req/resp arrive with their own
-units. The package docs live under `docs/` beside this file.
+The protocols subpackage (ARCHITECTURE §4.9). The gossipsub modules
+live here. Identify, ping and req/resp arrive with their own units.
+The package docs live under `docs/` beside this file.
 -/
