@@ -105,8 +105,8 @@ dir = "vendor/nim-libp2p"
 repo = "https://github.com/vacp2p/nim-libp2p"
 commit = "3dce083d1c9900d4d98878faaffe5c872b65ec48"
 branch = "master"
-paths = ["/libp2p/stream/chronosstream.nim", "/libp2p/stream/lpstream.nim", "/libp2p/muxers/yamux/yamux.nim", "/LICENSE*"]
-used-for = "chronosstream.nim and lpstream.nim: a TCP read error as EOF, and the remote reset as a kind of EOF (net/streams, the peer's reset); yamux.nim: the reset that clears the unread bytes (net/yamux)"
+paths = ["/libp2p/stream/chronosstream.nim", "/libp2p/stream/lpstream.nim", "/libp2p/muxers/yamux/yamux.nim", "/tests/libp2p/test_peer_id.nim", "/LICENSE*"]
+used-for = "chronosstream.nim and lpstream.nim: a TCP read error as EOF, and the remote reset as a kind of EOF (net/streams, the peer's reset); yamux.nim: the reset that clears the unread bytes (net/yamux); test_peer_id.nim: the peer id texts of peerid-text-nim.json (libp2p/identity)"
 
 [[vendor]]
 dir = "vendor/rust-yamux"
@@ -131,3 +131,11 @@ commit = "293d5d0c0c3f3dded4688b3ccd6a33939ac5102b"
 branch = "master"
 paths = ["/src/runtime/uv/tcp.h", "/src/runtime/uv/tcp.cpp", "/LICENSE"]
 used-for = "v4.34.0, the pinned toolchain: the libuv TCP binding of the runtime, the socket layout and the request references that the net/streams shim relies on"
+
+[[vendor]]
+dir = "vendor/protobuf-go"
+repo = "https://github.com/protocolbuffers/protobuf-go"
+commit = "96a179180f0ad6bba9b1e7b6e38d0affb0168e9a"
+branch = "master"
+paths = ["/internal/impl/decode.go", "/LICENSE"]
+used-for = "v1.36.11, the protobuf runtime of go-libp2p v0.50.0: the decoder keeps unknown fields (libp2p/identity, the Keys message)"

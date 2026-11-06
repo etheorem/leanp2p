@@ -35,7 +35,10 @@ follow the spike.
 
 - `ofNatList : List Nat → ByteArray` builds one byte per model value,
   taken mod 256. `toNatList : ByteArray → List Nat` is its inverse:
-  `ofNatList (toNatList b) = b` holds for every `b`.
+  `ofNatList (toNatList b) = b` holds for every `b`. Its length is the
+  array's size (`lengthToNatList`), and each entry is below 256
+  (`ltOfMemToNatList`): the two facts a codec over the model needs to
+  bound a payload it carries.
 - `ofString : String → ByteArray` and `toString? : ByteArray → Option
   String` convert over UTF-8. `toString?` returns `none` only for
   bytes with no UTF-8 reading, and the docstring states that single
