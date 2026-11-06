@@ -36,7 +36,7 @@ inductive Error where
   | timeout (detail : String)
   /-- The session or the connection ended under the operation. -/
   | closed (detail : String)
-  deriving DecidableEq, Repr
+  deriving DecidableEq, Repr, Hashable
 
 namespace Error
 
