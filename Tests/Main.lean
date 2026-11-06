@@ -13,6 +13,9 @@ import Tests.HazmatPins
 import Tests.BackendX509
 import Tests.BackendStrict
 import Tests.BackendSoak
+import Tests.Keys
+import Tests.KeySignatures
+import Tests.PeerIds
 import Tests.Hashes
 import Tests.Facade
 import Tests.CryptoCross
@@ -46,6 +49,9 @@ def main : IO UInt32 := do
   Tests.BackendX509.run r
   Tests.BackendStrict.run r
   Tests.BackendSoak.run r
+  Tests.Keys.run r
+  Tests.KeySignatures.run r
+  Tests.PeerIds.run r
   Tests.Hashes.run r
   Tests.Facade.run r
   Tests.CryptoCross.run r

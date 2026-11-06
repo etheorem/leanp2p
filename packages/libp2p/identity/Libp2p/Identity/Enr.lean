@@ -3,7 +3,7 @@ import Crypto
 import Libp2p.Identity.Constants
 import Libp2p.Identity.Rlp
 import Libp2p.Identity.Rlp.Bytes
-import Libp2p.Identity.Mock.Multiformats
+import Multiformats.Multibase
 
 /-!
 # Ethereum Node Records
@@ -304,25 +304,31 @@ def sign (scalar : Crypto.Key32) (seq : Nat) (pairs : List Pair) : Except Error 
 
 /-! ## The text form -/
 
-open Mock.Multiformats in
-/-- The multibase prefix of `base64url`. The encoding of no bytes is
-the prefix alone, so the prefix character is never written twice. -/
-private def base64urlPrefix : String := Multibase.encode .base64url .empty
+open Multiformats in
+/-- Base64url accepts every byte array. Discharge the generic encoder's
+unreachable error arm, keeping `toText` total on verified records. -/
+private def encodeBase64url (bytes : ByteArray) : String :=
+  match h : Multibase.encode .base64url bytes with
+  | .ok text => text
+  | .error _ => by simp [Multibase.encode, Multibase.encode?, Bind.bind, Except.bind] at h
 
-open Mock.Multiformats in
+open Multiformats in
+/-- The registry supplies the prefix omitted from the ENR body. -/
+private def base64urlPrefix : String := String.singleton Multibase.Base.base64url.prefixChar
+
 /-- The text form: `enr:`, then the base64url body of the encoding. -/
 def toText (r : Enr) : String :=
   -- `String.drop` gives a `String.Slice`; `toString` copies it out.
-  textPrefix ++ ((Multibase.encode .base64url r.encode).drop base64urlPrefix.length).toString
+  textPrefix ++ ((encodeBase64url r.encode).drop base64urlPrefix.length).toString
 
-open Mock.Multiformats in
+open Multiformats in
 /-- Read a record from its text form, then decode and verify it. -/
 def ofText? (s : String) : Except Error Enr := do
   unless s.startsWith textPrefix do throw .text
   let body := (s.drop textPrefix.length).toString
   match Multibase.decode? (base64urlPrefix ++ body) with
   | .ok (.base64url, b) => decode? b
-  | .error _ => throw .text
+  | .ok _ | .error _ => throw .text
 
 end Enr
 

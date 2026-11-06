@@ -1,6 +1,7 @@
 import Tests.Support
 import Tests.Backend
 import Libp2p.Identity
+import Multiformats
 
 /-!
 # ENR suite (unit W6.1)
@@ -29,7 +30,11 @@ namespace Tests
 open Bytes
 open Lean (Json)
 open Libp2p.Identity
-open Libp2p.Identity.Mock.Multiformats (Multiaddr)
+open _root_.Multiformats (Multiaddr)
+
+example (record : Libp2p.Identity.Enr) : Except Enr.Error PeerId := record.peerId
+example (record : Libp2p.Identity.Enr) : Except Enr.Error (List _root_.Multiformats.Multiaddr) :=
+  record.multiaddrs
 
 /-- The go-libp2p peer id of the EIP-778 key. -/
 private def examplePeerId : String := "16Uiu2HAmSH2XVgZqYHWucap5kuPzLnt2TsNQkoppVxB5eJGvaXwm"
@@ -51,10 +56,10 @@ private def refuses (e : Enr.Error) (wire : ByteArray) : Bool :=
 
 /-- A binary multiaddr from its bytes. -/
 private def maddr (bytes : List Nat) : Option Multiaddr :=
-  (Mock.Multiformats.Multiaddr.ofByteArray? (ofNatList bytes)).toOption
+  (Multiaddr.ofByteArray? (ofNatList bytes)).toOption
 
 private def bytesOfAddrs (ms : List Multiaddr) : List (List Nat) :=
-  ms.map fun m => toNatList (Mock.Multiformats.Multiaddr.toByteArray m)
+  ms.map fun m => toNatList m.toByteArray
 
 def Enr.run (r : Runner) : IO Unit := do
   r.section "enr" "ethereum/EIPs EIPS/eip-778.md"
@@ -123,7 +128,11 @@ def Enr.run (r : Runner) : IO Unit := do
 
     -- The mapping: the peer id go-libp2p derives, one address, and back.
     r.check s!"{file}: the peer id is go-libp2p's"
-      ((rec.peerId.toOption.map Mock.Keys.PeerId.toBase58) == some examplePeerId)
+      ((rec.peerId.toOption.map fun (peer : PeerId) =>
+        _root_.Multiformats.Base58.encode peer.toBytes) == some examplePeerId)
+    r.check s!"{file}: the peer id inlines the complete secp256k1 protobuf"
+      (rec.peerId.toOption.map PeerId.toBytes ==
+        some (ofNatList ([0, 37, 8, 2, 18, 33] ++ rec.publicKey)))
     match rec.multiaddrs with
     | .error e => r.check s!"{file}: the multiaddrs ({repr e})" false
     | .ok addrs =>
