@@ -42,6 +42,13 @@ private def receive {α : Type} (c : Chan α) : Async (Option α) := do
   let timer ← (Park.sleep patience none : BaseIO (Park (Option α)))
   select #[Park.recv c id, timer]
 
+/-- Wait for one matching value while preserving unrelated observations. -/
+private partial def receiveWhere {α : Type} (c : Chan α) (wanted : α → Bool) :
+    Async (Option α) := do
+  match ← receive c with
+  | some value => if wanted value then some value else receiveWhere c wanted
+  | none => none
+
 private def marker : Rpc.RPC := subOptRpc ⟨"node-suite-barrier"⟩ false
 
 /-- A clock with a signal for the absolute time of each armed deadline. -/
@@ -474,8 +481,8 @@ private def surfaceChecks (r : Tests.Runner) : Async Unit := do
   discard (seen.drain : BaseIO (List Seen))
   discard (f.node.unsubscribe topic : BaseIO Bool)
   r.check "node.surface.unsubscribe-barrier" (← barrier f)
-  let off ← receive seen
-  r.check "node.surface.negative-subscription-record" (off.any (fun s => s.rpc == subOptRpc topic false))
+  let off ← receiveWhere seen (fun s => s.rpc == subOptRpc topic false)
+  r.check "node.surface.negative-subscription-record" off.isSome
   discard <| stream.write (frame (Core.publishRpc (message [21])) ++ frame marker)
   r.check "node.surface.post-unsubscribe-barrier" ((← receive f.barriers).isSome)
   r.check "node.surface.unsubscribe-removes-callbacks" ((← (tags.tryRecv : BaseIO (Option Nat))).isNone)
