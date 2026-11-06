@@ -1,7 +1,7 @@
 import Varint
 import Libp2p.Identity.Enr
 import Libp2p.Identity.Mock.Keys
-import Libp2p.Identity.Mock.Multiformats
+import Multiformats
 
 /-!
 # From a node record to libp2p: the peer id and the addresses
@@ -40,7 +40,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Identity.Enr
 
-open Bytes Rlp Mock.Keys Mock.Multiformats
+open Bytes Rlp Mock.Keys Multiformats
 
 /-! ## The peer id -/
 

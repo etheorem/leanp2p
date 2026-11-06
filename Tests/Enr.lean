@@ -29,7 +29,7 @@ namespace Tests
 open Bytes
 open Lean (Json)
 open Libp2p.Identity
-open Libp2p.Identity.Mock.Multiformats (Multiaddr)
+open Multiformats (Multiaddr)
 
 /-- The go-libp2p peer id of the EIP-778 key. -/
 private def examplePeerId : String := "16Uiu2HAmSH2XVgZqYHWucap5kuPzLnt2TsNQkoppVxB5eJGvaXwm"
@@ -51,10 +51,10 @@ private def refuses (e : Enr.Error) (wire : ByteArray) : Bool :=
 
 /-- A binary multiaddr from its bytes. -/
 private def maddr (bytes : List Nat) : Option Multiaddr :=
-  (Mock.Multiformats.Multiaddr.ofByteArray? (ofNatList bytes)).toOption
+  (Multiaddr.ofByteArray? (ofNatList bytes)).toOption
 
 private def bytesOfAddrs (ms : List Multiaddr) : List (List Nat) :=
-  ms.map fun m => toNatList (Mock.Multiformats.Multiaddr.toByteArray m)
+  ms.map fun m => toNatList (Multiaddr.toByteArray m)
 
 def Enr.run (r : Runner) : IO Unit := do
   r.section "enr" "ethereum/EIPs EIPS/eip-778.md"
