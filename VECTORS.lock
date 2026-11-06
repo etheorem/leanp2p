@@ -97,16 +97,32 @@ commit = "86999c64954b3109d08aac4d6dc94afa6fbfa302"
 branch = "master"
 # A sparse entry: scripts/vendor-pull.sh fetches these paths only. The
 # leading `/` anchors each pattern at the repository root.
-paths = ["/session.go", "/LICENSE*"]
-used-for = "v5.1.0, the go-yamux that vendor/go-libp2p requires (go.mod, line 32): session.go, the read of a frame header that treats the peer's reset as EOF (net/streams, the peer's reset)"
+paths = ["/session.go", "/mux.go", "/const.go", "/stream.go", "/util.go", "/LICENSE*"]
+used-for = "v5.1.0, the go-yamux that vendor/go-libp2p requires (go.mod, line 32): session.go, the read of a frame header that treats the peer's reset as EOF (net/streams, the peer's reset); session.go, mux.go, const.go, stream.go, and util.go, the yamux behaviors net/yamux is checked against"
 
 [[vendor]]
 dir = "vendor/nim-libp2p"
 repo = "https://github.com/vacp2p/nim-libp2p"
 commit = "3dce083d1c9900d4d98878faaffe5c872b65ec48"
 branch = "master"
-paths = ["/libp2p/stream/chronosstream.nim", "/libp2p/stream/lpstream.nim", "/LICENSE*"]
-used-for = "chronosstream.nim and lpstream.nim: a TCP read error as EOF, and the remote reset as a kind of EOF (net/streams, the peer's reset)"
+paths = ["/libp2p/stream/chronosstream.nim", "/libp2p/stream/lpstream.nim", "/libp2p/muxers/yamux/yamux.nim", "/tests/libp2p/test_peer_id.nim", "/LICENSE*"]
+used-for = "chronosstream.nim and lpstream.nim: a TCP read error as EOF, and the remote reset as a kind of EOF (net/streams, the peer's reset); yamux.nim: the reset that clears the unread bytes (net/yamux); test_peer_id.nim: the peer id texts of peerid-text-nim.json (libp2p/identity)"
+
+[[vendor]]
+dir = "vendor/rust-yamux"
+repo = "https://github.com/libp2p/rust-yamux"
+commit = "6610cff7b3fe81aeb4fda9fa96d7ac4b3b2dbaf8"
+branch = "master"
+paths = ["/yamux/src/connection.rs", "/yamux/src/connection/stream.rs", "/yamux/src/frame/header.rs", "/yamux/src/lib.rs", "/LICENSE*"]
+used-for = "0.14.1: the yamux behaviors net/yamux is checked against"
+
+[[vendor]]
+dir = "vendor/js-libp2p"
+repo = "https://github.com/libp2p/js-libp2p"
+commit = "fab409544d968c90184f515c842755a0e819a372"
+branch = "main"
+paths = ["/packages/stream-multiplexer-yamux/src/stream.ts", "/LICENSE*"]
+used-for = "the yamux stream's data after the peer's FIN (net/yamux)"
 
 [[vendor]]
 dir = "vendor/lean4"
@@ -115,3 +131,11 @@ commit = "293d5d0c0c3f3dded4688b3ccd6a33939ac5102b"
 branch = "master"
 paths = ["/src/runtime/uv/tcp.h", "/src/runtime/uv/tcp.cpp", "/LICENSE"]
 used-for = "v4.34.0, the pinned toolchain: the libuv TCP binding of the runtime, the socket layout and the request references that the net/streams shim relies on"
+
+[[vendor]]
+dir = "vendor/protobuf-go"
+repo = "https://github.com/protocolbuffers/protobuf-go"
+commit = "96a179180f0ad6bba9b1e7b6e38d0affb0168e9a"
+branch = "master"
+paths = ["/internal/impl/decode.go", "/LICENSE"]
+used-for = "v1.36.11, the protobuf runtime of go-libp2p v0.50.0: the decoder keeps unknown fields (libp2p/identity, the Keys message)"

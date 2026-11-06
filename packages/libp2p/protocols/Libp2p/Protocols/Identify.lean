@@ -632,7 +632,7 @@ private theorem decodeFrame?EncodeLengthZero :
   have hd := Streams.Framing.decodeLength?EncodeLength .uvarint 0 [] (by simp)
   simp only [List.append_nil] at hd
   rw [hd]
-  simp [Streams.Framing.take?]
+  simp [Bytes.take?]
 
 /-- The zero-length rule on `clientCore`, the spike's rule. -/
 theorem clientCoreEmptyFrame (expected : Option Mock.Identity.PeerId) :

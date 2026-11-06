@@ -88,6 +88,18 @@ theorem toNatListEqToListMap (b : ByteArray) :
   unfold toNatList
   rw [toListEqDataToList]
 
+/-- The model view has one entry per byte. -/
+theorem lengthToNatList (d : ByteArray) : (toNatList d).length = d.size := by
+  unfold toNatList
+  rw [List.length_map, Array.length_toList]
+  rfl
+
+/-- Every entry of the model view is a byte. -/
+theorem ltOfMemToNatList {d : ByteArray} {x : Nat} (h : x ∈ toNatList d) : x < 256 := by
+  simp only [toNatList, List.mem_map] at h
+  obtain ⟨b, _, rfl⟩ := h
+  exact b.toNat_lt
+
 /-- A byte read from the model value that produced it. -/
 theorem toNatOfNat (n : Nat) : (UInt8.ofNat n).toNat = n % 256 := by
   simp

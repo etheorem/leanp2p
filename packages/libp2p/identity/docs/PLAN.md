@@ -18,7 +18,10 @@ import lint is green.
 | 1 | W2.2, W2.3, W3.3 | root W5.1: `KeyType`, `PubKey`/`PrivKey` with the `ProtoMessage` instances, the per-type marshalings, the strict unmarshal, and `PeerId` | the unit 1 milestones below pass, and the root W5.1 row holds |
 | 2 | W5.1, W3.2 | root W6.1: the RLP wrapper over the etheorem monorepo's RLP package behind the package's `Codec` surface, the ENR record with its `v4` signature over the keccak-256 digest, and the peer-id/multiaddr mapping | the unit 2 milestones below pass, and the root W6.1 row holds |
 
-Unit 0 is done.
+Units 0 and 1 are done. The unit 1 suite is `Tests/Identity.lean`, and
+the theorems live in `Libp2p/Identity/KeyType.lean` (the table),
+`Libp2p/Identity/Keys.lean` (the `Keys` round trip), and
+`Libp2p/Identity/PeerId.lean` (inlining at the threshold).
 
 ## Consumers
 

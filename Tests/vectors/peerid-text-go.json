@@ -1,0 +1,15 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/libp2p/go-libp2p",
+  "commit": "3c2c902122cb6fae3897f729a3dbb9d4665ae90d",
+  "path": "core/peer/peer_test.go",
+  "upstreamTest": "TestIDEncoding, exampleCid",
+  "extractedBy": "scripts/extract-vectors.py"
+ },
+ "accepted": [],
+ "rejected": [
+  {
+   "text": "bafkreifoybygix7fh3r3g5rqle3wcnhqldgdg4shzf4k3ulyw3gn7mabt4"
+  }
+ ]
+}

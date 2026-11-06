@@ -17,6 +17,8 @@ import Tests.Hashes
 import Tests.Facade
 import Tests.CryptoCross
 import Tests.Protocols
+import Tests.Yamux
+import Tests.Identity
 
 /-!
 # Test entry point
@@ -49,4 +51,6 @@ def main : IO UInt32 := do
   Tests.Facade.run r
   Tests.CryptoCross.run r
   Tests.Protocols.run r
+  Tests.Yamux.run r
+  Tests.Identity.run r
   r.summary
