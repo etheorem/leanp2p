@@ -46,8 +46,8 @@ private def receive {α : Type} (c : Chan α) : Async (Option α) := do
 private partial def receiveWhere {α : Type} (c : Chan α) (wanted : α → Bool) :
     Async (Option α) := do
   match ← receive c with
-  | some value => if wanted value then some value else receiveWhere c wanted
-  | none => none
+  | some value => if wanted value then pure (some value) else receiveWhere c wanted
+  | none => pure none
 
 private def marker : Rpc.RPC := subOptRpc ⟨"node-suite-barrier"⟩ false
 
