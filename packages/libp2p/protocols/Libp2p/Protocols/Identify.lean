@@ -575,9 +575,9 @@ def respondHandler (key : Mock.Identity.PubKey) (addrs : List (List Nat))
 `clientCoreFrame` pins the frame that `clientCore` validates.
 `clientCoreOverCap` pins the cap check before the body.
 `clientCoreEmptyFrame` pins the zero-length rule. Each consumes a law of
-`Streams.Framing`, which inherits the axiom
-`Streams.Mock.Varint.decodeEncodeSuffix`. None takes a result of this
-package's mocks as a premise. -/
+`Streams.Framing`, and the laws rest on no mock axiom: the base
+replaced the streams mocks with the real encoders. None takes a result
+of this package's mocks as a premise. -/
 
 /-- The frame step reads a whole frame back from its encoding, with
 any rest after it. -/
