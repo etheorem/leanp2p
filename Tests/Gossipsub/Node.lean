@@ -42,7 +42,10 @@ private def receive {α : Type} (c : Chan α) : Async (Option α) := do
   let timer ← (Park.sleep patience none : BaseIO (Park (Option α)))
   select #[Park.recv c id, timer]
 
-/-- Wait for one matching value while preserving unrelated observations. -/
+/-- Wait for one matching value, and drop the values it reads before
+it. The loop is `partial` because termination depends on the channel
+contents, as with the IO read loops; the deadline of `receive` bounds
+every wait. -/
 private partial def receiveWhere {α : Type} (c : Chan α) (wanted : α → Bool) :
     Async (Option α) := do
   match ← receive c with
