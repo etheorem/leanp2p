@@ -77,7 +77,7 @@ def maxRecordSize : Nat := 300
 def signatureSize : Nat := 64
 
 /-- The `secp256k1` value: a compressed point. -/
-def publicKeySize : Nat := 33
+def publicKeySize : Nat := secp256k1PubBytes
 
 /-- `seq` is a 64-bit unsigned integer. -/
 def seqBytes : Nat := 8

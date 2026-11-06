@@ -314,9 +314,9 @@ private def base64urlText (b : ByteArray) : String :=
   | .ok text => text
   | .error _ => by simp [Multibase.encode, Multibase.encode?, Bind.bind, Except.bind] at h
 
-/-- The multibase prefix of `base64url`. The encoding of no bytes is
-the prefix alone, so the prefix character is never written twice. -/
-private def base64urlPrefix : String := base64urlText .empty
+/-- The registry supplies the `base64url` prefix omitted from the ENR body. -/
+private def base64urlPrefix : String :=
+  String.singleton Multiformats.Multibase.Base.base64url.prefixChar
 
 /-- The text form: `enr:`, then the base64url body of the encoding. -/
 def toText (r : Enr) : String :=
