@@ -1,6 +1,6 @@
 import Conc
 import Streams
-import Libp2p.Security.Mock.Identity
+import Libp2p.Identity
 
 /-!
 # Mock: the surface of `libp2p/core` that Noise uses
@@ -11,8 +11,8 @@ ahead of the tree"). The types are copies of the core ARCHITECTURE,
 "Public surface": `ProtocolId`, `Role`, `Core.Error` with its four arms,
 and the security seam, `SecureConn` and `SecurityProtocol`, with the
 handshake signature of root §4.9. The mock imports nothing from the
-real package, and it states no axiom. `PeerId` comes from the identity
-mock beside it.
+real package, and it states no axiom. `PeerId` comes from the merged
+`libp2p/identity`.
 
 At the integration, the package imports `Libp2p.Core`, drops
 `open Libp2p.Security.Mock`, and the module goes.
@@ -22,7 +22,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Security.Mock.Core
 
-open Conc Streams Libp2p.Security.Mock.Identity
+open Conc Streams Libp2p.Identity
 
 /-- A protocol id: the exact text that multistream-select carries
 (§3.4). -/

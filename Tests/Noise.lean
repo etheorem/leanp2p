@@ -54,9 +54,7 @@ set_option autoImplicit false
 
 namespace Tests
 
--- The keys and the peer id come from the identity mock of the package
--- until W5.1 merges (RULES.md, "Working ahead of the tree").
-open Bytes Libp2p.Security.Mock.Identity Libp2p.Security
+open Bytes Libp2p.Identity Libp2p.Security
 
 /-- 32 bytes from hex. -/
 private def key32 (where_ hex : String) : IO Noise.Bytes32 := do

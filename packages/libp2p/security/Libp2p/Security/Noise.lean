@@ -1,6 +1,6 @@
 import Crypto
 import Streams
-import Libp2p.Security.Mock.Identity
+import Libp2p.Identity
 import Libp2p.Security.Mock.Core
 import Libp2p.Security.Constants
 import Libp2p.Security.Handshake
@@ -56,10 +56,10 @@ set_option autoImplicit false
 
 namespace Libp2p.Security.Noise
 
--- The keys, the peer id, and the seam types come from the mocks of
--- W5.1 and W5.2 (RULES.md, "Working ahead of the tree"). At the
--- integration, `Mock.Core` reads `Libp2p.Core` again.
-open Libp2p.Security.Mock.Identity
+-- The seam types come from the mock of W5.2 (RULES.md, "Working ahead
+-- of the tree"). At the integration, `Mock.Core` reads `Libp2p.Core`
+-- again.
+open Libp2p.Identity
 open Conc (Async)
 open Streams (Connection BufReader)
 

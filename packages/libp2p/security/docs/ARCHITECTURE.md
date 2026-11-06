@@ -19,8 +19,7 @@ and no work is planned for it.
 | `Libp2p/Security/Payload.lean` | the `NoiseHandshakePayload` protobuf, its `ProtoMessage` instance (§3.2), the signature input, and the 8 KiB gate |
 | `Libp2p/Security/Transport.lean` | the framed AEAD reads and writes over the two cipher states of `split`, wrapped as the `SecureConn` surface |
 | `Libp2p/Security/Noise.lean` | `Noise.securityProtocol`, the fixed-key test value, and the `Except.mapError` into `Core.Error` (§3.5) |
-| `Libp2p/Security/Mock/Core.lean` | the mock of the `libp2p/core` surface this package uses, until W5.2 merges ("The mocks" below) |
-| `Libp2p/Security/Mock/Identity.lean` | the mock of the `libp2p/identity` surface this package uses, until W5.1 merges ("The mocks" below) |
+| `Libp2p/Security/Mock/Core.lean` | the mock of the `libp2p/core` surface this package uses, until W5.2 merges ("The mock" below) |
 
 All declarations live in the `Libp2p.Security` namespace, and the root
 module re-exports the public submodules. §3.1 names the production
@@ -280,28 +279,18 @@ the spike's own recorded rule.
   (r5) defines none. Each transport cipher state runs its counter
   toward 2^64 − 1 nonces and never reaches them in a session's life.
 
-## The mocks
+## The mock
 
-W5.1 (`libp2p/identity`) and W5.2 (`libp2p/core`) have not merged, so
-the package builds against mocks of their frozen surfaces (RULES.md,
-"Working ahead of the tree"). Both live under
-`Libp2p.Security.Mock`, import nothing from the real packages, and
-state no axiom.
+W5.2 (`libp2p/core`) has not merged, so the package builds against a
+mock of its frozen surface (RULES.md, "Working ahead of the tree").
+`Mock/Core.lean` copies the types: `ProtocolId`, `Role`, `Core.Error`
+with its four arms, `SecureConn`, and `SecurityProtocol` (the core
+pair, public surface). It lives under `Libp2p.Security.Mock`, imports
+nothing from the real package, and states no axiom. The keys and the
+peer id come from the merged `libp2p/identity`.
 
-- `Mock/Core.lean` copies the types: `ProtocolId`, `Role`,
-  `Core.Error` with its four arms, `SecureConn`, and
-  `SecurityProtocol` (the core pair, public surface).
-- `Mock/Identity.lean` declares the key and peer-id surface:
-  `KeyType`, `PubKey`, `PrivKey`, `PeerId`, and a copy of
-  `Identity.Error` (the identity pair, public surface). The operations
-  are `opaque` with values, because the suites sign and verify real
-  payloads and check the peer ids that go-libp2p printed. The values
-  cover Ed25519 alone, the key type of every suite here; every other
-  key type fails with `keyData`. The kernel sees no definition, so no
-  proof unfolds one.
-
-At the integration, the modules import `Libp2p.Core` and
-`Libp2p.Identity`, the opens drop `Mock`, and both mock modules go.
+At the integration, the modules import `Libp2p.Core`, the opens drop
+`Mock`, and the mock module goes.
 
 ## What the package must not depend on
 
@@ -309,8 +298,8 @@ At the integration, the modules import `Libp2p.Core` and
   security). The `SecureConn` inputs and the error target come from
   `core`; the payload's key checks and the `PeerId` derivation come
   from `identity`. No import of `libp2p/negotiate`, `libp2p/mux`,
-  `libp2p/host`, or `libp2p/protocols`. Until W5.1 and W5.2 merge, both
-  surfaces come from the mocks of this package ("The mocks" below).
+  `libp2p/host`, or `libp2p/protocols`. Until W5.2 merges, the core
+  surface comes from the mock of this package ("The mock" above).
 - Crypto reaches the package through the `Crypto` facade only (§3.6):
   SHA-256, HKDF, X25519, and ChaCha20-Poly1305. No `crypto/backend` and
   no `crypto/pure` import. The signature checks go through the sign
