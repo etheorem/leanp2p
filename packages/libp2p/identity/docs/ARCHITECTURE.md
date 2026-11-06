@@ -15,7 +15,8 @@ imports it for `PeerId`, and nothing in it knows a connection (§2,
 |---|---|
 | `Libp2p/Identity.lean` | the root module; one import line per public submodule |
 | `Libp2p/Identity/Constants.lean` | the 42-byte inlining threshold, the per-type `Data` lengths, and the DER minima; one home per fact (PRINCIPLES 1.5) |
-| `Libp2p/Identity/KeyType.lean` | the closed set (§3.4): four constructors, `toCode`/`ofCode?`, and the `ofCode?_toCode` theorem |
+| `Libp2p/Identity/KeyType.lean` | the closed set (§3.4): four constructors, `toCode`/`ofCode?`, and the `ofCodeToCode` theorem |
+| `Libp2p/Identity/Error.lean` | `Identity.Error`, the one error inductive of the package (§3.5) |
 | `Libp2p/Identity/Marshal.lean` | the per-type `Data` forms; produces the bytes the backend loads |
 | `Libp2p/Identity/Keys.lean` | `PubKey` and `PrivKey`, the `ProtoMessage` instances over the field table, and the sign/verify/derive dispatch |
 | `Libp2p/Identity/Unmarshal.lean` | the strict unmarshal: decode, then the per-type `Data` check, before anything derives from the key |
@@ -34,7 +35,7 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
 
 - `KeyType` is the closed set of §3.4: `rsa` (0), `ed25519` (1),
   `secp256k1` (2), `ecdsa` (3), with `toCode`, `ofCode?`, and the
-  `ofCode?_toCode` theorem that `decide` closes. The standard classes
+  `ofCodeToCode` theorem that `decide` closes. The standard classes
   derive (§3.2).
 - `PubKey` and `PrivKey` carry a key type and `Data` bytes. The strict
   unmarshal builds them, so a constructed key already fits its type
@@ -62,14 +63,19 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   The Ed25519 private form is the seed‖public envelope the peer-ids
   spec vector itself carries.
 - `PeerId` is a validated multihash (§3.7): the peer-ids shape over
-  the marshaled public key. A marshaled key of at most 42 bytes
+  the marshaled public key. The shape rule has one home,
+  `Multiformats.Multiaddr.validPeerHash`, which the `p2p` component
+  reads too. A marshaled key of at most 42 bytes
   inlines as an identity multihash, so every Ed25519 id is a
   `12D3KooW...` id; a larger key hashes with sha2-256. The text forms
   are the legacy base58btc multihash (`Qm...`) and the CIDv1
   `libp2p-key` multibase form (`bafz...`); parsing accepts both, and
   base36 is accepted beside base32. The standard classes derive,
   except `ToString`, which prints the recorded form (§3.2; the
-  decision below).
+  decision below). The spec defines the peer id as the multihash
+  ("extract the multihash from the CID. This is the peer ID"), so code
+  that asks whether two values name the same peer compares `a.hash ==
+  b.hash`. The derived `==` also compares the recorded form.
 - The ENR surface (PLAN W6.1): `Rlp` encodes and decodes through the
   imported library, behind a `Codec` instance and its law. `Enr`
   holds the record as a sequence number and typed pairs; the known
