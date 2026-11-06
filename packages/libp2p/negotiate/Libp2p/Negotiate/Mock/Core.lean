@@ -2,7 +2,7 @@ import Std
 import Conc
 import Streams.Conn
 import Streams.Stream
-import Libp2p.Negotiate.Mock.Identity
+import Libp2p.Identity
 
 /-!
 # Core mocks for units 1a and 1b
@@ -19,8 +19,8 @@ joins the derived classes per root §3.2, so `State`, `Event`, and
 
 `SecurityProtocol` and `Muxer` mention the streams `Connection`, and
 `SecureConn` mentions the identity `PeerId`, so this module imports
-`Streams.Conn`, `Streams.Stream`, and the identity mock. The identity
-mock stays until W5.1 lands.
+`Streams.Conn`, `Streams.Stream`, and `Libp2p.Identity`. The identity
+package landed as W5.1, so the field types name the real one.
 -/
 
 set_option autoImplicit false
@@ -56,8 +56,8 @@ ARCHITECTURE, "Public surface"). The `leftover` is every byte the
 handshake read past its end; it seeds the reader of the next stage. -/
 structure SecureConn where
   conn : Streams.Connection
-  localPeer : Mock.Identity.PeerId
-  remotePeer : Mock.Identity.PeerId
+  localPeer : Libp2p.Identity.PeerId
+  remotePeer : Libp2p.Identity.PeerId
   leftover : ByteArray
   close : BaseIO Unit
 

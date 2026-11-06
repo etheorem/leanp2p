@@ -1,5 +1,6 @@
 import Tests.Support
 import Libp2p.Negotiate
+import Libp2p.Identity
 import Conc
 import Bytes
 import Streams.Conn
@@ -88,11 +89,17 @@ private def markerI : ByteArray := Bytes.ofNatList [1, 1, 1, 1]
 /-- The responder's marker of the test handshake. -/
 private def markerR : ByteArray := Bytes.ofNatList [2, 2, 2, 2]
 
+/-- A validated inline peer id, one per suite peer. An identity
+multihash needs no native crypto, so the suite stays portable. -/
+private def peerOf (n : Nat) : Libp2p.Identity.PeerId :=
+  Libp2p.Identity.PeerId.inline (ByteArray.mk #[n.toUInt8]) (by
+    simp [ByteArray.size, Libp2p.Identity.maxInlineKeyBytes])
+
 /-- The fixed peer id of the dialing side. -/
-private def dialerId : Mock.Identity.PeerId := ⟨"12D3KooWTestDialer"⟩
+private def dialerId : Libp2p.Identity.PeerId := peerOf 1
 
 /-- The fixed peer id of the listening side. -/
-private def listenerId : Mock.Identity.PeerId := ⟨"12D3KooWTestListener"⟩
+private def listenerId : Libp2p.Identity.PeerId := peerOf 2
 
 /-- The fixed-key plaintext test security value. It replaces the Noise
 milestone (#16, unmerged). The handshake writes its marker, reads the
@@ -187,7 +194,7 @@ private def recordWrites (conn : Streams.Connection) (ref : Conc.OnceRef (List B
 
 /-- The answer of one upgrade run. -/
 private abbrev UpAnswer :=
-  Option (Except Mock.Core.Error (Mock.Core.MuxSession × Mock.Identity.PeerId))
+  Option (Except Mock.Core.Error (Mock.Core.MuxSession × Libp2p.Identity.PeerId))
 
 /-! ## The pipeline checks -/
 
@@ -390,7 +397,7 @@ any muxer byte moves, and the teardown close ends the responder's
 parked negotiation with `closed`. -/
 private def checkIdentityMismatch (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
-  let wrongId : Mock.Identity.PeerId := ⟨"12D3KooWWrongPeer"⟩
+  let wrongId : Libp2p.Identity.PeerId := peerOf 3
   let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
   let dRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let lRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
