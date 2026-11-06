@@ -6,7 +6,7 @@ import Libp2p.Mux.Test.State
 import Libp2p.Mux.Test.Session
 import Conc
 import Streams
-import Streams.Mock.Multiaddr
+import Multiformats
 
 /-!
 # Mux suite (unit W5.4)
@@ -1645,7 +1645,7 @@ open Libp2p.Mux.Test.State
 open Libp2p.Mux.Test.Wire
 open Conc
 open Streams
-open Streams.Mock.Multiformats
+open Multiformats
 open Streams.Sim
 
 private def pid : ProtocolId := ⟨"/leanp2p/test-mux/1.0.0"⟩
@@ -2834,7 +2834,7 @@ open Libp2p.Mux.Mock.Core
 open Libp2p.Mux.Test.Wire
 open Conc
 open Streams
-open Streams.Mock.Multiformats
+open Multiformats
 open Streams.Sim
 
 private structure Ends where
