@@ -19,17 +19,15 @@ here, since the rule never reads it.
 Unit 1b runs hosts over the sim transport, with the real
 `Noise.securityProtocol` and `Mux.yamux` values (PRINCIPLES 1.4). Every
 host derives its peer id through `libp2p/identity`, and the upgrade runs
-through `libp2p/negotiate`, so the legs wait for W5.1, W5.3, W5.4, and
-W5.5 to merge. Until then the suite names each leg as a skip.
-
-The peer ids here are values of the identity mock, built directly.
+through `libp2p/negotiate`, so the legs wait for W5.3, W5.4, and W5.5
+to merge. Until then the suite names each leg as a skip.
 -/
 
 set_option autoImplicit false
 
 namespace Tests
 
-open Conc Multiformats Libp2p.Host.Mock.Identity Libp2p.Host.Mock.Core Libp2p.Host
+open Conc Multiformats Libp2p.Identity Libp2p.Host.Mock.Core Libp2p.Host
 
 /-! ## Helpers -/
 
@@ -39,11 +37,12 @@ private def ma (s : String) : IO Multiaddr := do
   | .ok a => return a
   | .error _ => throw <| IO.userError s!"test address {s} does not parse"
 
-/-- The smaller and the larger of two test peers. Their binary forms
-are `[0x00, 0x01, 1]` and `[0x00, 0x01, 2]`, the identity multihashes
-of the one-byte keys `1` and `2`, so `small` orders first. -/
-private def small : PeerId := ⟨[0, 1, 1], "small"⟩
-private def large : PeerId := ⟨[0, 1, 2], "large"⟩
+/-- The smaller and the larger of two test peers: the inlined ids of
+the one-byte keys `1` and `2`. Their binary forms are `[0x00, 0x01, 1]`
+and `[0x00, 0x01, 2]`, so `small` orders first. The size bound
+`1 ≤ 42` holds by evaluation. -/
+private def small : PeerId := PeerId.inline (ByteArray.mk #[1]) (by decide)
+private def large : PeerId := PeerId.inline (ByteArray.mk #[2]) (by decide)
 
 /-- A live table entry. -/
 private def entry (id : Nat) (role : Role) (bornMs : Nat) : Entry Nat :=
@@ -299,6 +298,6 @@ def Host.run (r : Runner) : IO Unit := do
   (peerstoreChecks r).run
   errorChecks r
   for leg in swarmLegs do
-    r.skip s!"host: {leg}" "needs W5.1, W5.3, W5.4, and W5.5 merged"
+    r.skip s!"host: {leg}" "needs W5.3, W5.4, and W5.5 merged"
 
 end Tests

@@ -1,4 +1,4 @@
-import Libp2p.Host.Mock.Identity
+import Libp2p.Identity
 import Libp2p.Host.Mock.Core
 import Libp2p.Host.Constants
 import Libp2p.Host.Registry
@@ -46,7 +46,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Host
 
-open Libp2p.Host.Mock.Identity Libp2p.Host.Mock.Core
+open Libp2p.Identity Libp2p.Host.Mock.Core
 
 /-- The order of two peer ids by their binary form, byte by byte
 (module doc, "The order on peer ids"). -/

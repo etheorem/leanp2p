@@ -1,5 +1,5 @@
 import Multiformats
-import Libp2p.Host.Mock.Identity
+import Libp2p.Identity
 import Libp2p.Host.Mock.Core
 
 /-!
@@ -20,9 +20,9 @@ set_option autoImplicit false
 
 namespace Libp2p.Host
 
--- The mocks of the unmerged packages (RULES.md, "Working ahead of the
+-- The mock of the unmerged core (RULES.md, "Working ahead of the
 -- tree"); `Core.Error` resolves through `Libp2p.Host.Mock`.
-open Multiformats Libp2p.Host.Mock Libp2p.Host.Mock.Identity
+open Multiformats Libp2p.Host.Mock Libp2p.Identity
 
 /-- The policy checkpoint that refused a connection (§3.4: a closed
 set). The gater answers at the first three (`Core.ConnectionGater`),

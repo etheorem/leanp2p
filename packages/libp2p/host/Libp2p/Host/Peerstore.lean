@@ -1,6 +1,6 @@
 import Std.Data.HashMap
 import Multiformats
-import Libp2p.Host.Mock.Identity
+import Libp2p.Identity
 
 /-!
 # The peerstore
@@ -22,7 +22,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Host
 
-open Multiformats Libp2p.Host.Mock.Identity
+open Multiformats Libp2p.Identity
 
 /-- The addresses of each peer, in the order they first arrived. A
 synonym with no invariant of its own (§3.7). -/
