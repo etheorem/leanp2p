@@ -105,8 +105,8 @@ dir = "vendor/nim-libp2p"
 repo = "https://github.com/vacp2p/nim-libp2p"
 commit = "3dce083d1c9900d4d98878faaffe5c872b65ec48"
 branch = "master"
-paths = ["/libp2p/stream/chronosstream.nim", "/libp2p/stream/lpstream.nim", "/libp2p/muxers/yamux/yamux.nim", "/tests/libp2p/test_peer_id.nim", "/LICENSE*"]
-used-for = "chronosstream.nim and lpstream.nim: a TCP read error as EOF, and the remote reset as a kind of EOF (net/streams, the peer's reset); yamux.nim: the reset that clears the unread bytes (net/yamux); test_peer_id.nim: the peer id texts of peerid-text-nim.json (libp2p/identity)"
+paths = ["/libp2p/stream/chronosstream.nim", "/libp2p/stream/lpstream.nim", "/libp2p/muxers/yamux/yamux.nim", "/libp2p/protocols/secure/noise.nim", "/tests/libp2p/test_peer_id.nim", "/LICENSE*"]
+used-for = "chronosstream.nim and lpstream.nim: a TCP read error as EOF, and the remote reset as a kind of EOF (net/streams, the peer's reset); yamux.nim: the reset that clears the unread bytes (net/yamux); noise.nim: the static key set before message 0, the dropped payload of message 0, the payload decode, the reads on demand, and the joined frames of one write (libp2p/security); test_peer_id.nim: the peer id texts of peerid-text-nim.json (libp2p/identity)"
 
 [[vendor]]
 dir = "vendor/rust-yamux"
@@ -121,8 +121,16 @@ dir = "vendor/js-libp2p"
 repo = "https://github.com/libp2p/js-libp2p"
 commit = "fab409544d968c90184f515c842755a0e819a372"
 branch = "main"
-paths = ["/packages/stream-multiplexer-yamux/src/stream.ts", "/LICENSE*"]
-used-for = "the yamux stream's data after the peer's FIN (net/yamux)"
+paths = ["/packages/stream-multiplexer-yamux/src/stream.ts", "/packages/connection-encrypter-noise/src/performHandshake.ts", "/packages/connection-encrypter-noise/src/utils.ts", "/LICENSE*"]
+used-for = "stream.ts: the yamux stream's data after the peer's FIN (net/yamux); performHandshake.ts and utils.ts: the payload check below the Noise state, its order before message 3, the dropped payload of message 0, and the payload decode (libp2p/security)"
+
+[[vendor]]
+dir = "vendor/rust-libp2p"
+repo = "https://github.com/libp2p/rust-libp2p"
+commit = "c449090f49b5ae2338e8f0727be98e0a739ba135"
+branch = "master"
+paths = ["/transports/noise/src/io.rs", "/transports/noise/src/io/handshake.rs", "/transports/noise/src/io/framed.rs", "/LICENSE*"]
+used-for = "io.rs: the one decrypted frame held ahead of the reader; io/handshake.rs: the read buffer that the handshake hands to the transport, and the refused payload of message 0; io/framed.rs: the payload decode with no limit below the frame (libp2p/security)"
 
 [[vendor]]
 dir = "vendor/lean4"
