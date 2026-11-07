@@ -479,9 +479,6 @@ def negotiate (role : Libp2p.Core.Role) (reader : Streams.BufReader)
         sendWrites conn first
         negotiateLoop reader conn s (Bytes.toNatList seed)
 
-/-- The pipeline: negotiate the security protocol, run the handshake,
-check the identity, negotiate the muxer, open the session. Each lookup
-is total; a miss after a selection is `protocol`. -/
 /-- An upgraded session and its secure connection completion. -/
 structure Upgraded where
   session : Libp2p.Core.MuxSession
