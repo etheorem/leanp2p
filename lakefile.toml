@@ -181,6 +181,7 @@ globs = ["Libp2p.Host.*"]
 name = "Libp2pProtocols"
 srcDir = "packages/libp2p/protocols"
 roots = ["Libp2p.Protocols"]
+globs = ["Libp2p.Protocols.*"]
 
 [[lean_lib]]
 name = "Cli"

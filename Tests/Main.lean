@@ -25,6 +25,7 @@ import Tests.BackendSoak
 import Tests.Hashes
 import Tests.Facade
 import Tests.CryptoCross
+import Tests.Protocols
 import Tests.Yamux
 import Tests.Identity
 import Tests.Core
@@ -72,6 +73,7 @@ def main : IO UInt32 := do
   Tests.Hashes.run r
   Tests.Facade.run r
   Tests.CryptoCross.run r
+  Tests.Protocols.run r
   Tests.Yamux.run r
   Tests.Identity.run r
   Tests.Core.run r
