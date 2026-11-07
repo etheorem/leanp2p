@@ -1,5 +1,5 @@
 import Crypto
-import Libp2p.Security.Mock.Core
+import Libp2p.Core
 
 /-!
 # The Noise constants
@@ -18,7 +18,7 @@ set_option autoImplicit false
 namespace Libp2p.Security.Noise
 
 /-- The id that multistream-select negotiates for Noise. -/
-def protocolId : Mock.Core.ProtocolId := ⟨"/noise"⟩
+def protocolId : Libp2p.Core.ProtocolId := ⟨"/noise"⟩
 
 /-- The Noise protocol name, the one cipher suite of the spec ("Noise
 Protocol Name"). It is exactly 32 bytes long, so the symmetric state

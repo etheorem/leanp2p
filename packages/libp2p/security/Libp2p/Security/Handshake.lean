@@ -3,7 +3,7 @@ import Bytes
 import Proto
 import Streams.Framing
 import Libp2p.Identity
-import Libp2p.Security.Mock.Core
+import Libp2p.Core
 import Libp2p.Security.Constants
 
 /-!
@@ -85,7 +85,7 @@ namespace Libp2p.Security.Noise
 
 -- `Role` comes from the mock of W5.2 (RULES.md, "Working ahead of the
 -- tree").
-open Bytes Libp2p.Security.Mock.Core
+open Bytes Libp2p.Core
 
 /-! ## Data types
 
