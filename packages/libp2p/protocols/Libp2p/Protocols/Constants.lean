@@ -1,3 +1,4 @@
+import Libp2p.Core
 import Libp2p.Protocols.Mock.Core
 
 /-!
@@ -26,14 +27,27 @@ set_option autoImplicit false
 
 namespace Libp2p.Protocols.Constants
 
+/-- The gossipsub v1.1 protocol id, `/meshsub/1.1.0`. -/
+def meshsubId : Libp2p.Core.ProtocolId := ⟨"/meshsub/1.1.0"⟩
+
+/-- The gossipsub v1.0 protocol id, `/meshsub/1.0.0`. A v1.1 router
+speaks v1.0 to a peer that offers only this id. -/
+def meshsubV10Id : Libp2p.Core.ProtocolId := ⟨"/meshsub/1.0.0"⟩
+
+/-- The floodsub protocol id, `/floodsub/1.0.0`. -/
+def floodsubId : Libp2p.Core.ProtocolId := ⟨"/floodsub/1.0.0"⟩
+
+/-- The gossipsub RPC cap: 1 MiB, the go-libp2p-pubsub default. -/
+def rpcCap : Nat := 1048576
+
 /-- The identify protocol id, `/ipfs/id/1.0.0`. -/
-def identifyId : Mock.Core.ProtocolId := ⟨"/ipfs/id/1.0.0"⟩
+def identifyId : Libp2p.Core.ProtocolId := ⟨"/ipfs/id/1.0.0"⟩
 
 /-- The identify push protocol id, `/ipfs/id/push/1.0.0`. -/
-def identifyPushId : Mock.Core.ProtocolId := ⟨"/ipfs/id/push/1.0.0"⟩
+def identifyPushId : Libp2p.Core.ProtocolId := ⟨"/ipfs/id/push/1.0.0"⟩
 
 /-- The ping protocol id, `/ipfs/ping/1.0.0`. -/
-def pingId : Mock.Core.ProtocolId := ⟨"/ipfs/ping/1.0.0"⟩
+def pingId : Libp2p.Core.ProtocolId := ⟨"/ipfs/ping/1.0.0"⟩
 
 /-- The identify message cap, inherited from the spike: 65536 bytes. -/
 def identifyCap : Nat := 65536
@@ -44,7 +58,6 @@ def pingSize : Nat := 32
 /-- The protocol version the responder writes, the spike's constant. -/
 def identifyProtocolVersion : String := "/ipfs/1.0.0"
 
-open Libp2p.Protocols.Mock.Core
 
 /-! ## Req/resp: the protocol id -/
 
@@ -60,7 +73,10 @@ def sszSnappy : String := "ssz_snappy"
 `name` to English letters, digits, and `_`, and `version` is an
 ordinal. The client project names its methods, so the names stay out of
 this package. -/
-def reqRespId (name : String) (version : Nat) : ProtocolId :=
+-- The req/resp package still names the core types through its own mock
+-- module (issue #46 landed with it). It moves to `Libp2p.Core` with that
+-- package's swap, not with this one.
+def reqRespId (name : String) (version : Nat) : Libp2p.Protocols.Mock.Core.ProtocolId :=
   ⟨reqRespPrefix ++ "/" ++ name ++ "/" ++ toString version ++ "/" ++ sszSnappy⟩
 
 /-! ## Req/resp: the size caps -/

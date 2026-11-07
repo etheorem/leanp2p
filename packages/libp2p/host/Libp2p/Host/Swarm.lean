@@ -2,8 +2,8 @@ import Std.Data.HashMap
 import Conc
 import Streams
 import Libp2p.Identity
-import Libp2p.Host.Mock.Core
-import Libp2p.Host.Mock.Negotiate
+import Libp2p.Core
+import Libp2p.Negotiate
 import Libp2p.Host.Error
 import Libp2p.Host.Registry
 import Libp2p.Host.Dedup
@@ -69,10 +69,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Host
 
--- The mocks of the unmerged packages (RULES.md, "Working ahead of the
--- tree"); `Negotiate.Error` resolves through `Libp2p.Host.Mock`.
-open Conc Streams Multiformats Libp2p.Host.Mock Libp2p.Identity
-  Libp2p.Host.Mock.Core Libp2p.Host.Mock.Negotiate
+open Conc Streams Multiformats Libp2p.Identity Libp2p.Core Libp2p.Negotiate
 
 /-- A failure of a task that no caller awaits: an inbound upgrade, a
 session that ended badly, an inbound stream. -/
@@ -260,7 +257,7 @@ private def upgradeConn (h : Host) (role : Role) (conn : Connection) (expected :
     conn.closeQuietly
   let unregister : BaseIO Unit := h.pending.update (·.map (·.erase key))
   let r ← try
-      (upgradeWith h.config.clock role conn .empty expected (h.admit role scope conn)
+      (upgradeAdmit h.config.clock role conn .empty expected (h.admit role scope conn)
         h.config.security h.config.muxers).run
     catch e =>
       unregister
@@ -295,8 +292,8 @@ private def serveStream (h : Host) (ctx : StreamContext) (scope : ConnectionScop
     share.release
     -- The peer ended the stream before it chose a protocol: an orderly
     -- end, not a failure.
-    unless e matches .closed do
-      h.report (some peer) none (.stream e.toCore)
+    unless e matches .closed _ do
+      h.report (some peer) none (.stream e)
   | .ok (id, s) =>
     match (← (h.handlers.get : BaseIO Handlers)).find? id with
     | none =>
@@ -508,7 +505,7 @@ owns the stream. -/
 def newStream (h : Host) (peer : PeerId) (protocols : List ProtocolId) :
     Async (Except Error (ProtocolId × Stream)) := do
   let some first := protocols.head?
-    | return .error (.stream (Negotiate.Error.noProtocols.toCore))
+    | return .error (.stream (.protocol "multistream: no protocol to propose"))
   if !(← (h.connected peer : BaseIO Bool)) then
     if let .error e ← h.dialPeer peer then return .error e
   let some e := SessionTable.live? (← (h.sessions.get : BaseIO (SessionTable Served))) peer
@@ -524,7 +521,7 @@ def newStream (h : Host) (peer : PeerId) (protocols : List ProtocolId) :
     | .error err =>
       s.reset
       share.release
-      return .error (.stream err.toCore)
+      return .error (.stream err)
     | .ok (id, s) =>
       -- The share returns when the stream is gone: at a reset, or once
       -- our close and the peer's end have both happened.

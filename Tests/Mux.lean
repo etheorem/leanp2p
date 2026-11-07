@@ -1,6 +1,6 @@
 import Tests.Support
 import Libp2p.Mux
-import Libp2p.Mux.Mock.Core
+import Libp2p.Core
 import Libp2p.Mux.Test.Wire
 import Libp2p.Mux.Test.State
 import Libp2p.Mux.Test.Session
@@ -412,7 +412,7 @@ end Tests.Mux.Wire
 namespace Tests.Mux.Seam
 
 open Libp2p.Mux
-open Libp2p.Mux.Mock.Core
+open Libp2p.Core
 
 /-- The detail carried by one seam error. -/
 private def detail : Error → String
@@ -446,7 +446,7 @@ example : Muxer := {
       openStream := fun _ => throw (Error.closed "unused")
       accept := pure none
       close := pure ()
-      join := pure (.ok ())
+      join := pure ()
     }
 }
 
@@ -468,7 +468,7 @@ end Tests.Mux.Seam
 
 namespace Tests.Mux.State
 
-open Libp2p.Mux.Mock.Core
+open Libp2p.Core
 open Libp2p.Mux.Test.Wire
 open Libp2p.Mux.Test.State
 
@@ -1639,7 +1639,7 @@ end Tests.Mux.State
 
 namespace Tests.Mux.Session
 
-open Libp2p.Mux.Mock.Core
+open Libp2p.Core
 open Libp2p.Mux.Test.Session
 open Libp2p.Mux.Test.State
 open Libp2p.Mux.Test.Wire
@@ -2830,7 +2830,7 @@ end Tests.Mux.Session
 namespace Tests.Mux.Public
 
 open Libp2p.Mux
-open Libp2p.Mux.Mock.Core
+open Libp2p.Core
 open Libp2p.Mux.Test.Wire
 open Conc
 open Streams
@@ -3044,8 +3044,8 @@ private def runConcurrentOpens (r : Runner) : Async Unit := do
   let pair ← ends 49
   let initiator ← openSession .initiator pair.dialer
   let responder ← openSession .responder pair.peer
-  let initiatorOpen : Chan (Except Mock.Core.Error Stream) ← Chan.new 1
-  let responderOpen : Chan (Except Mock.Core.Error Stream) ← Chan.new 1
+  let initiatorOpen : Chan (Except Libp2p.Core.Error Stream) ← Chan.new 1
+  let responderOpen : Chan (Except Libp2p.Core.Error Stream) ← Chan.new 1
   let workers ← TaskSet.new
   workers.spawn do
     let result ← (initiator.openStream testId).run
@@ -3156,7 +3156,7 @@ private def runMalformed (r : Runner) : Async Unit := do
     r.check "a second public join returns the same protocol error" false
   | .ok sess =>
     let observed : Except IO.Error
-        (Except Mock.Core.Error Unit × Except Mock.Core.Error Unit) ←
+        (Except Libp2p.Core.Error Unit × Except Libp2p.Core.Error Unit) ←
       try
         pair.peer.write ⟨#[0, 0, 0, 0, 1, 0, 0, 0, 0]⟩
         pure (.ok (← sess.join, ← sess.join))

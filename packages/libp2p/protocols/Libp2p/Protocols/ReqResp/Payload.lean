@@ -2,6 +2,7 @@ import Varint
 import Snappy
 import Libp2p.Protocols.ReqResp.Crc32c
 import Libp2p.Protocols.ReqResp.SnappyFrame
+import Libp2p.Protocols.Mock.Core
 
 /-!
 # Req/resp: the payload layer

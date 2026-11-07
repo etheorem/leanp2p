@@ -6,8 +6,9 @@ import Streams.Framing
 import Streams.Stream
 import Multiformats.Multiaddr.Binary
 import Libp2p.Protocols.Identity
-import Libp2p.Protocols.Mock.Host
+import Libp2p.Host
 import Libp2p.Protocols.Constants
+import Libp2p.Protocols.StreamError
 
 /-!
 # Identify
@@ -40,7 +41,6 @@ set_option autoImplicit false
 
 namespace Libp2p.Protocols
 
-open Mock
 
 /-- One identify response. The field numbers are the ones of the
 go-libp2p v0.50.0 identify protobuf. -/
@@ -58,10 +58,10 @@ namespace Identify
 
 
 /-- The identify protocol id. -/
-def protocolId : Mock.Core.ProtocolId := Constants.identifyId
+def protocolId : Libp2p.Core.ProtocolId := Constants.identifyId
 
 /-- The identify push protocol id. -/
-def pushId : Mock.Core.ProtocolId := Constants.identifyPushId
+def pushId : Libp2p.Core.ProtocolId := Constants.identifyPushId
 
 /-- The wire view: one entry per present singular field and per
 element of a repeated field, in the ascending order 1, 2, 3, 4, 5, 6,
@@ -486,8 +486,8 @@ def client (s : Streams.Stream) (clock : Conc.Clock) (timeoutMs : Nat)
 
 /-- The one map from this protocol's error into the coarse core error.
 `pushHandler` and `writeRecord` call it at the seam. -/
-def mapIdentifyError : Error → Mock.Core.Error
-  | .stream e => Mock.Core.mapStreamError e
+def mapIdentifyError : Error → Libp2p.Core.Error
+  | .stream e => mapStreamError e
   | .timeout => .timeout "identify: the deadline expired"
   | .emptyFrame => .protocol "identify: a zero-length frame"
   | e => .protocol (toString (repr e))
@@ -496,7 +496,7 @@ def mapIdentifyError : Error → Mock.Core.Error
 An empty read leaves the peerstore unchanged. This is a delta from go,
 whose `consumeMessage` runs on the empty message and clears the peer's
 protocols. -/
-def push (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
+def push (store : Libp2p.Host.Host) (expected : Libp2p.Identity.PeerId)
     (clock : Conc.Clock) (timeoutMs : Nat) (s : Streams.Stream) :
     Conc.Async (Except Error Unit) := do
   match ← Conc.withinDeadline clock timeoutMs (resetQuietly s) (readFrame s) with
@@ -508,15 +508,15 @@ def push (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
       match validate payload (some expected) with
       | .error e => return .error e
       | .ok (m, pid) =>
-          store.addAddrs pid m.listenAddrs
+          store.addAddrs pid (m.listenAddrs.filterMap (fun a => (Multiformats.Multiaddr.ofBytes? a).toOption))
           return .ok ()
 
 /-- The push handler value. -/
-def pushHandler (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
-    (clock : Conc.Clock) (timeoutMs : Nat) : Mock.Core.StreamHandler :=
+def pushHandler (store : Libp2p.Host.Host)
+    (clock : Conc.Clock) (timeoutMs : Nat) : Libp2p.Core.StreamHandler :=
   { id := pushId,
-    handle := fun _ctx s => ExceptT.mk ((Except.mapError mapIdentifyError) <$>
-      push store expected clock timeoutMs s) }
+    handle := fun ctx s => ExceptT.mk ((Except.mapError mapIdentifyError) <$>
+      push store ctx.remotePeer clock timeoutMs s) }
 
 /-- Write one length-delimited message and half-close. The
 responder and the push sender share this body: both announce the same
@@ -524,7 +524,7 @@ record, and only the protocol id of the stream differs. -/
 private def writeRecord (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat)) (s : Streams.Stream) :
-    Conc.Async (Except Mock.Core.Error Unit) := do
+    Conc.Async (Except Libp2p.Core.Error Unit) := do
   match respond? key addrs protocols observed agent spr with
   | .error e => return .error (mapIdentifyError e)
   | .ok msg =>
@@ -533,7 +533,7 @@ private def writeRecord (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
       | none => return .error (.protocol "the identify record exceeds the cap")
       | some frame =>
           match ← s.write frame with
-          | .error e => return .error (Mock.Core.mapStreamError e)
+          | .error e => return .error (mapStreamError e)
           | .ok () =>
               discard s.close
               return .ok ()
@@ -543,7 +543,7 @@ half-close. -/
 def respondTo (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat) := none) (s : Streams.Stream) :
-    Conc.Async (Except Mock.Core.Error Unit) :=
+    Conc.Async (Except Libp2p.Core.Error Unit) :=
   writeRecord key addrs protocols observed agent spr s
 
 /-- The push sender: announce this peer's record on the stream that the
@@ -559,15 +559,15 @@ starts no timer. -/
 def pushTo (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat) := none) (s : Streams.Stream) :
-    Conc.Async (Except Mock.Core.Error Unit) :=
+    Conc.Async (Except Libp2p.Core.Error Unit) :=
   writeRecord key addrs protocols observed agent spr s
 
 /-- The responder handler value. -/
 def respondHandler (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
-    (spr : Option (List Nat) := none) : Mock.Core.StreamHandler :=
+    (spr : Option (List Nat) := none) : Libp2p.Core.StreamHandler :=
   { id := protocolId,
-    handle := fun _ctx s => respondTo key addrs protocols observed agent spr s }
+    handle := fun _ s => respondTo key addrs protocols observed agent spr s }
 
 /-! ## The client-core theorems
 

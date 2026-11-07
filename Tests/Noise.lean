@@ -379,7 +379,7 @@ section Sim
 
 open Conc (Async OnceRef)
 open Streams (Connection)
-open Libp2p.Security.Mock.Core (SecureConn SecurityProtocol)
+open Libp2p.Core (SecureConn SecurityProtocol)
 
 /-- An address, or a failed run. -/
 private def ma (s : String) : Async Multiformats.Multiaddr := do
@@ -424,9 +424,9 @@ private def mapWrites {σ : Type} (c : Connection) (init : σ)
 /-- Run both handshakes: the responder as a task, the initiator here.
 The await joins the task (§4.1, rule 2). -/
 private def both (pI pR : SecurityProtocol) (c s : Connection) (leftR : ByteArray := .empty) :
-    Async (Except Mock.Core.Error SecureConn × Except Mock.Core.Error SecureConn) := do
+    Async (Except Libp2p.Core.Error SecureConn × Except Libp2p.Core.Error SecureConn) := do
   let t ← (Conc.Wrap.spawn (pR.handshake .responder s leftR).run :
-    BaseIO (Task (Except IO.Error (Except Mock.Core.Error SecureConn))))
+    BaseIO (Task (Except IO.Error (Except Libp2p.Core.Error SecureConn))))
   let ri ← (pI.handshake .initiator c .empty).run
   match ← Conc.Wrap.await t with
   | .ok rr => return (ri, rr)
@@ -442,7 +442,7 @@ private def readN (sc : SecureConn) (n : Nat) : Async ByteArray := do
   return acc
 
 /-- The secure connection of a result, or a failed run. -/
-private def secured (where_ : String) : Except Mock.Core.Error SecureConn → Async SecureConn
+private def secured (where_ : String) : Except Libp2p.Core.Error SecureConn → Async SecureConn
   | .ok sc => return sc
   | .error e => throw <| IO.userError s!"{where_}: {e}"
 
@@ -576,7 +576,7 @@ private def simLeftover (r : Runner) : Async Unit := do
       -- The negotiation's stand-in: it reads message 0 and hands it on.
       let some m0 ← s.read | throw <| IO.userError s!"{name}: no message 0"
       (pR.handshake .responder s m0).run) :
-    BaseIO (Task (Except IO.Error (Except Mock.Core.Error SecureConn))))
+    BaseIO (Task (Except IO.Error (Except Libp2p.Core.Error SecureConn))))
   let ci ← secured name (← (pI.handshake .initiator c' .empty).run)
   ci.write "early".toUTF8
   let cr ← match ← Conc.Wrap.await t with
@@ -590,14 +590,14 @@ private def simLeftover (r : Runner) : Async Unit := do
 
 /-- Start one handshake as a task. The caller awaits it, which joins it
 (§4.1, rule 2). -/
-private def spawnHandshake (p : SecurityProtocol) (role : Mock.Core.Role) (c : Connection)
+private def spawnHandshake (p : SecurityProtocol) (role : Libp2p.Core.Role) (c : Connection)
     (left : ByteArray := .empty) :
-    BaseIO (Task (Except IO.Error (Except Mock.Core.Error SecureConn))) :=
+    BaseIO (Task (Except IO.Error (Except Libp2p.Core.Error SecureConn))) :=
   Conc.Wrap.spawn (p.handshake role c left).run
 
 /-- The answer of a handshake task, or a failed run. -/
-private def awaitHandshake (t : Task (Except IO.Error (Except Mock.Core.Error SecureConn))) :
-    Async (Except Mock.Core.Error SecureConn) := do
+private def awaitHandshake (t : Task (Except IO.Error (Except Libp2p.Core.Error SecureConn))) :
+    Async (Except Libp2p.Core.Error SecureConn) := do
   match ← Conc.Wrap.await t with
   | .ok rr => return rr
   | .error e => throw e

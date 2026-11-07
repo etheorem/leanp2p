@@ -2,7 +2,8 @@ import Bytes
 import Conc
 import Streams.Error
 import Streams.Stream
-import Libp2p.Protocols.Mock.Core
+import Libp2p.Core
+import Libp2p.Protocols.StreamError
 import Libp2p.Protocols.Constants
 
 /-!
@@ -27,7 +28,7 @@ set_option autoImplicit false
 namespace Libp2p.Protocols.Ping
 
 /-- The ping protocol id. -/
-def protocolId : Mock.Core.ProtocolId := Constants.pingId
+def protocolId : Libp2p.Core.ProtocolId := Constants.pingId
 
 /-- The ping payload size of the spec. -/
 def payloadSize : Nat := Constants.pingSize
@@ -138,14 +139,14 @@ def handleCore (s : Streams.Stream) : Conc.Async (Except Error Unit) :=
 
 /-- One map from this protocol's error into the coarse core error,
 used once, at the seam value. -/
-def mapPingError : Error → Mock.Core.Error
-  | .stream e => Mock.Core.mapStreamError e
+def mapPingError : Error → Libp2p.Core.Error
+  | .stream e => mapStreamError e
   | e => .protocol (toString (repr e))
 
 /-- The ping handler value. -/
-def pingHandler : Mock.Core.StreamHandler :=
+def pingHandler : Libp2p.Core.StreamHandler :=
   { id := protocolId,
-    handle := fun _ctx s => ExceptT.mk ((Except.mapError mapPingError) <$> handleCore s) }
+    handle := fun _ s => ExceptT.mk ((Except.mapError mapPingError) <$> handleCore s) }
 
 /-- Accumulate echo chunks until one whole payload is present. The
 initiator reads one 32-byte payload, so an accumulator above that size

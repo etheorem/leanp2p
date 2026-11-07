@@ -40,13 +40,13 @@ private def writesOf (actions : List Action) : List (List Nat) :=
     | .select .. => none
 
 /-- The selects of an action list, in order. -/
-private def selectsOf (actions : List Action) : List (Mock.Core.ProtocolId × List Nat) :=
+private def selectsOf (actions : List Action) : List (Libp2p.Core.ProtocolId × List Nat) :=
   actions.filterMap fun
     | .select p r => some (p, r)
     | .write _ => none
 
 /-- The responder's initial state. -/
-private def responderState (supported : List Mock.Core.ProtocolId) : State :=
+private def responderState (supported : List Libp2p.Core.ProtocolId) : State :=
   { role := .responder, supported := supported, proposals := [], buffer := [], phase := .headerPending }
 
 /-- The initiator's initial state. -/
@@ -136,7 +136,7 @@ def run (r : Runner) : IO Unit := do
   let protos ← Tests.jStrs "mss-ls.json" reply "protocols"
   let bodyHex ← Tests.jStr "mss-ls.json" reply "bodyHex"
   let bodyBytes ← hexOf bodyHex
-  let ids : List Mock.Core.ProtocolId := protos.map fun s => ⟨s⟩
+  let ids : List Libp2p.Core.ProtocolId := protos.map fun s => ⟨s⟩
   r.check "mss ls body encode" (lsBody ids == bodyBytes)
   r.check "mss ls reply encode"
     (encodeLs ids == Varint.encode (boundedVarint bodyBytes.length) ++ bodyBytes)
@@ -158,8 +158,8 @@ def run (r : Runner) : IO Unit := do
   let (i2rN, r2iN) ← traceHexes "mss-go-trace.json" naTrace
   let lazyTrace ← Tests.jArr "mss-go-trace.json" goj "lazyTrace"
   let (i2rL, r2iL) ← traceHexes "mss-go-trace.json" lazyTrace
-  let kadId : Mock.Core.ProtocolId := ⟨"/ipfs/kad/1.0.0"⟩
-  let nopeId : Mock.Core.ProtocolId := ⟨"/nope/9.9.9"⟩
+  let kadId : Libp2p.Core.ProtocolId := ⟨"/ipfs/kad/1.0.0"⟩
+  let nopeId : Libp2p.Core.ProtocolId := ⟨"/nope/9.9.9"⟩
 
   match replay (responderState [kadId]) (← i2rF.mapM hexOf) with
   | .error _ => r.check "mss go full trace" false
@@ -206,7 +206,7 @@ def run (r : Runner) : IO Unit := do
       r.check "mss step responder unknown id writes na and stays negotiating"
         (s'.phase = .negotiating ∧ actions == [.write (encodeMsg (Reply.toMsg .na))])
 
-  let sup : List Mock.Core.ProtocolId := [⟨"/ipfs/kad/1.0.0"⟩, ⟨"/ipfs/id/1.0.0"⟩]
+  let sup : List Libp2p.Core.ProtocolId := [⟨"/ipfs/kad/1.0.0"⟩, ⟨"/ipfs/id/1.0.0"⟩]
   let sSup : State := { role := .responder, supported := sup, proposals := [], buffer := [], phase := .negotiating }
   match step sSup (.bytes (encodeText "ls")) with
   | .error _ => r.check "mss step responder ls writes ls reply and stays negotiating" false

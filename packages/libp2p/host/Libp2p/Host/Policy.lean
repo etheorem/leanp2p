@@ -1,4 +1,4 @@
-import Libp2p.Host.Mock.Core
+import Libp2p.Core
 
 /-!
 # The policy values
@@ -17,7 +17,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Host.Policy
 
-open Libp2p.Host.Mock.Core
+open Libp2p.Core
 
 /-- The default gater: it allows every dial, every inbound connection,
 and every proved peer. -/
