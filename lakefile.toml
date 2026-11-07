@@ -175,6 +175,7 @@ globs = ["Libp2p.Negotiate.*"]
 name = "Libp2pHost"
 srcDir = "packages/libp2p/host"
 roots = ["Libp2p.Host"]
+globs = ["Libp2p.Host.*"]
 
 [[lean_lib]]
 name = "Libp2pProtocols"

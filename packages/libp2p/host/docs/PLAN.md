@@ -24,7 +24,15 @@ so unit 1a lands while the upgrader finishes. W5.2 sits outside the
 root row and reaches this unit through the root chain, which finishes
 it before W5.5.
 
-Unit 0 is done.
+Units 0 and 1a are done, and unit 1b's code builds against the mocks
+of W5.2 and W5.5 (the package ARCHITECTURE, "The mocks"), with the
+merged `libp2p/identity`. The suite is `Tests/Host.lean`; the dedup
+rule also carries theorems in `Libp2p/Host/Dedup.lean`. A host
+upgrades through `libp2p/negotiate`, so the unit 1b milestones run at
+the integration, and the suite names each one as a skip until then. Unit 1b needs two
+calls from `libp2p/negotiate` beside `upgrade`: the post-handshake
+checkpoint (`upgradeWith`) and the stream negotiation
+(`negotiateStream`). The negotiate pair records both.
 
 ## Consumers
 
