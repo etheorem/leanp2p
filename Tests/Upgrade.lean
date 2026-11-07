@@ -203,6 +203,33 @@ private abbrev UpAnswer :=
 
 /-! ## The pipeline checks -/
 
+/-- A refused authenticated peer must not reach the muxer. -/
+private def checkAdmission (r : Runner) : Async Unit := do
+  let (dial, listen) ← newPair
+  let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
+  let seen : Conc.OnceRef (Option Libp2p.Identity.PeerId) ← Conc.OnceRef.new none
+  let opened : Conc.OnceRef Bool ← Conc.OnceRef.new false
+  let left : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
+  let selected : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
+  let result : Conc.OnceRef (Option Bool) ← Conc.OnceRef.new none
+  let tasks ← Conc.TaskSet.new
+  tasks.spawn do
+    let answer ← (upgradeAdmit Conc.Clock.system .responder (← sideConn listen) ByteArray.empty none
+      (fun peer => do seen.set (some peer); pure (some ()))
+      [secValue false (← Conc.OnceRef.new none)] [muxValue muxId opened left selected]).run
+    result.set (some (match answer with | .ok (.refused ()) => true | _ => false))
+  tasks.spawn do
+    discard <| (upgrade .initiator (← sideConn dial) ByteArray.empty (some listenerId)
+      [secValue false (← Conc.OnceRef.new none)]
+      [muxValue muxId (← Conc.OnceRef.new false) (← Conc.OnceRef.new none)
+        (← Conc.OnceRef.new none)]).run
+  tasks.joinAll
+  r.check "upgrade admission refuses before mux" ((← result.get) == some true &&
+    (← seen.get) == some dialerId && !(← opened.get))
+  (← sideConn dial).close
+  (← sideConn listen).close
+
+
 /-- The full pipeline, both directions, plus the wire-selected muxer
 assertion. The test security value carries no advertisement
 field, so the wire exchange alone selects the muxer. -/
@@ -842,6 +869,7 @@ def run (r : Runner) : IO Unit := do
     "packages/libp2p/negotiate/docs/ARCHITECTURE.md"
   let all : Conc.Async Unit := do
     checkFullPipeline r
+    checkAdmission r
     checkNegotiationLeftover r
     checkHandshakeLeftover r
     checkMuxOpenLeftover r
