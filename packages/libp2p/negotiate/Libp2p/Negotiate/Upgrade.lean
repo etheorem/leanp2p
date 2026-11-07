@@ -482,10 +482,22 @@ def negotiate (role : Libp2p.Core.Role) (reader : Streams.BufReader)
 /-- The pipeline: negotiate the security protocol, run the handshake,
 check the identity, negotiate the muxer, open the session. Each lookup
 is total; a miss after a selection is `protocol`. -/
-private def upgradeCore (role : Libp2p.Core.Role) (conn : Streams.Connection)
+/-- An upgraded session and its secure connection completion. -/
+structure Upgraded where
+  session : Libp2p.Core.MuxSession
+  remotePeer : Libp2p.Identity.PeerId
+  join : ExceptT Libp2p.Core.Error Conc.Async Unit
+
+/-- The result of the post-handshake admission checkpoint. -/
+inductive UpgradeResult (ρ : Type) where
+  | upgraded (value : Upgraded)
+  | refused (reason : ρ)
+
+private def upgradeCore {ρ : Type} (role : Libp2p.Core.Role) (conn : Streams.Connection)
     (leftover : ByteArray) (expected : Option Libp2p.Identity.PeerId)
+    (admit : Libp2p.Identity.PeerId → BaseIO (Option ρ))
     (secs : List Libp2p.Core.SecurityProtocol) (muxers : List Libp2p.Core.Muxer) :
-    Conc.Async (Except Libp2p.Core.Error (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId)) := do
+    Conc.Async (Except Libp2p.Core.Error (UpgradeResult ρ)) := do
   let reader := Streams.BufReader.new conn
   match ← negotiate role reader conn leftover (secs.map (·.id)) with
   | .error e => return .error e
@@ -499,6 +511,9 @@ private def upgradeCore (role : Libp2p.Core.Role) (conn : Streams.Connection)
         match checkIdentity expected sc.remotePeer with
         | .error e => return .error e
         | .ok () =>
+          if let some reason ← (admit sc.remotePeer : BaseIO (Option ρ)) then
+            sc.toConnection.closeQuietly
+            return .ok (.refused reason)
           let muxReader := Streams.BufReader.new sc.toConnection
           match ← negotiate role muxReader sc.toConnection ByteArray.empty (muxers.map (·.id)) with
           | .error e => return .error e
@@ -508,7 +523,7 @@ private def upgradeCore (role : Libp2p.Core.Role) (conn : Streams.Connection)
             | some mux =>
               match ← mux.«open» role sc.toConnection stage2.leftover with
               | .error e => return .error e
-              | .ok session => return .ok (session, sc.remotePeer)
+              | .ok session => return .ok (.upgraded { session, remotePeer := sc.remotePeer, join := sc.join })
 
 /-- Whether the deadline boundary already closed the connection.
 `withinDeadline` returns an error value only on expiry, after the hook
@@ -519,25 +534,25 @@ private def boundaryClosed {α : Type} : Except Conc.Error α → Bool
 
 /-- Close a session that finished after the timer won. No caller
 receives that session. -/
-private def releaseLate (r : Except Libp2p.Core.Error
-    (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId)) : BaseIO Unit :=
+private def releaseLate {ρ : Type} (r : Except Libp2p.Core.Error (UpgradeResult ρ)) : BaseIO Unit :=
   match r with
-  | .ok pair => discard pair.1.close.toBaseIO
-  | .error _ => pure ()
+  | .ok (.upgraded value) => discard value.session.close.toBaseIO
+  | _ => pure ()
 
 /-- The upgrade under one `Conc.withinDeadline`. The expiry closes
 the connection once at the boundary (root §3.5), and the race's
 `deadlineExpired` maps to the `timeout` arm through `settleUpgrade`.
 The clock is a seam, so the deadline test can advance it. -/
 
-def upgradeWith (clock : Conc.Clock) (role : Libp2p.Core.Role)
+def upgradeAdmit {ρ : Type} (clock : Conc.Clock) (role : Libp2p.Core.Role)
     (conn : Streams.Connection) (leftover : ByteArray)
     (expected : Option Libp2p.Identity.PeerId)
+    (admit : Libp2p.Identity.PeerId → BaseIO (Option ρ))
     (secs : List Libp2p.Core.SecurityProtocol) (muxers : List Libp2p.Core.Muxer) :
-    ExceptT Libp2p.Core.Error Conc.Async (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId) := do
+    ExceptT Libp2p.Core.Error Conc.Async (UpgradeResult ρ) := do
   let answer ← Conc.withinDeadline clock Streams.unauthDeadlineMs
     (Streams.Connection.closeQuietly conn)
-    (upgradeCore role conn leftover expected secs muxers)
+    (upgradeCore role conn leftover expected admit secs muxers)
     releaseLate
   match settleUpgrade answer with
   | .ok pair => return pair
@@ -548,6 +563,16 @@ def upgradeWith (clock : Conc.Clock) (role : Libp2p.Core.Role)
       else do
         Streams.Connection.closeQuietly conn
         throw e
+
+/-- Upgrade with a clock and admit every authenticated peer. -/
+def upgradeWith (clock : Conc.Clock) (role : Libp2p.Core.Role)
+    (conn : Streams.Connection) (leftover : ByteArray)
+    (expected : Option Libp2p.Identity.PeerId)
+    (secs : List Libp2p.Core.SecurityProtocol) (muxers : List Libp2p.Core.Muxer) :
+    ExceptT Libp2p.Core.Error Conc.Async (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId) := do
+  match ← upgradeAdmit clock role conn leftover expected (fun _ => pure (none : Option Empty)) secs muxers with
+  | .upgraded value => return (value.session, value.remotePeer)
+  | .refused reason => nomatch reason
 
 /-- The frozen entry of the package docs. The clock is fixed to the
 system clock here and stays a seam in `upgradeWith` for the deadline
