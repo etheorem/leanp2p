@@ -36,6 +36,10 @@ testDriver = "tests"
 # links its own static OpenSSL 3 `libcrypto.a` into every executable,
 # and the shim archive resolves against that copy.
 [[require]]
+name = "InteropHostname"
+path = "packages/cli/hostname"
+
+[[require]]
 name = "Backend"
 path = "packages/crypto/backend"
 
@@ -186,7 +190,8 @@ globs = ["Libp2p.Protocols.*"]
 [[lean_lib]]
 name = "Cli"
 srcDir = "packages/cli"
-roots = ["Cli"]
+roots = ["Cli", "GossipsubInterop", "GossipsubSession"]
+globs = ["GossipsubInterop.*", "GossipsubSession.*"]
 
 # The test tree: one suite module per upstream file, with the shared
 # runner in `Tests/Support.lean`. The `tests` executable is the
@@ -214,3 +219,8 @@ root = "Tests.Interop.Yamux"
 [[lean_exe]]
 name = "noise-interop"
 root = "Tests.Interop.Noise"
+
+[[lean_exe]]
+name = "gossipsub-interop"
+srcDir = "packages/cli"
+root = "Main"

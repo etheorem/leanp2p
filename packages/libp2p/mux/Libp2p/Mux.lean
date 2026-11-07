@@ -1,5 +1,6 @@
 import Libp2p.Mux.Constants
 import Libp2p.Mux.Test
+import Libp2p.Mux.Yamux
 
 /-!
 # Libp2p.Mux
