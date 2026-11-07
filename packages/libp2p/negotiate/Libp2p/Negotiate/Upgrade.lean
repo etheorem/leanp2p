@@ -1,6 +1,6 @@
 import Libp2p.Negotiate.Step
 import Libp2p.Negotiate.Message
-import Libp2p.Negotiate.Mock.Core
+import Libp2p.Core
 import Libp2p.Identity
 import Streams.Conn
 import Streams.BufReader
@@ -33,8 +33,8 @@ wait, so the loop keeps the package's `repeat` form, the form of
 
 The three stages thread the leftover bytes by contract 5 of the
 package docs: the negotiation leftover seeds the handshake, the
-`SecureConn` leftover seeds the muxer negotiation, and the muxer
-negotiation leftover reaches `Muxer.open`.
+secure connection delivers the handshake leftover through its reader,
+and the muxer negotiation leftover reaches `Muxer.open`.
 -/
 
 set_option autoImplicit false
@@ -58,7 +58,7 @@ open Bytes (DecodeError)
   complete frame. The caller calls `drive` again with `leftover`; it
   must not read. -/
 inductive DriveResult where
-  | selected (p : Mock.Core.ProtocolId) (consumed leftover : List Nat)
+  | selected (p : Libp2p.Core.ProtocolId) (consumed leftover : List Nat)
       (writes : List (List Nat))
   | waiting (s : State) (consumed leftover : List Nat) (writes : List (List Nat))
   | running (s : State) (consumed leftover : List Nat) (writes : List (List Nat))
@@ -87,7 +87,7 @@ def writesOf (actions : List Action) : List (List Nat) :=
     | .select .. => none
 
 /-- The protocol an action list selects, if it selects one. -/
-def selectOf : List Action → Option Mock.Core.ProtocolId
+def selectOf : List Action → Option Libp2p.Core.ProtocolId
   | [] => none
   | .write _ :: rest => selectOf rest
   | .select p _ :: _ => some p
@@ -125,7 +125,7 @@ The write holds the header and the first proposal back-to-back, the
 lazy dialer's wire shape (contract 4 of the package docs). The state
 carries the whole ordered list, so the core's `na` retry walks it.
 An empty ordered list is a protocol error before any byte moves. -/
-def initiatorStart (ids : List Mock.Core.ProtocolId) :
+def initiatorStart (ids : List Libp2p.Core.ProtocolId) :
     Except Error (State × List (List Nat)) :=
   match ids with
   | [] => .error .negotiationFailed
@@ -140,7 +140,7 @@ def initiatorStart (ids : List Mock.Core.ProtocolId) :
 at once. The spec lets either side send first, and the responder that waits
 for the dialer's header stalls a dialer that also waits. The state starts in
 `negotiating` because the header is already on the wire. -/
-def responderStart (ids : List Mock.Core.ProtocolId) :
+def responderStart (ids : List Libp2p.Core.ProtocolId) :
     Except Error (State × List (List Nat)) :=
   if ids.any (fun q => !fitsText q.toString) then .error .negotiationFailed
   else if maxMsg < (lsBody ids).length then .error .negotiationFailed
@@ -159,7 +159,7 @@ def renderDecodeError : Bytes.DecodeError → String
 
 /-- Contract 8's one mapping point: every negotiation error becomes
 the `protocol` arm, with the detail rendered. -/
-def mapNegotiateError : Error → Mock.Core.Error
+def mapNegotiateError : Error → Libp2p.Core.Error
   | .decode e => .protocol ("multistream decode: " ++ renderDecodeError e)
   | .negotiationFailed => .protocol "multistream negotiation failed"
 
@@ -168,7 +168,7 @@ peer. The dial path compares the derived id against the expectation
 and answers `authentication` on a difference, before any muxer byte
 moves (negotiate ARCHITECTURE, "Decisions"). -/
 def checkIdentity (expected : Option Libp2p.Identity.PeerId)
-    (remote : Libp2p.Identity.PeerId) : Except Mock.Core.Error Unit :=
+    (remote : Libp2p.Identity.PeerId) : Except Libp2p.Core.Error Unit :=
   match expected with
   | none => .ok ()
   | some e =>
@@ -179,7 +179,7 @@ def checkIdentity (expected : Option Libp2p.Identity.PeerId)
 `.error .deadlineExpired`; the `.closed` arm is required by the match
 and is unreachable from `withinDeadline`. -/
 def settleUpgrade {α : Type} :
-    Except Conc.Error (Except Mock.Core.Error α) → Except Mock.Core.Error α
+    Except Conc.Error (Except Libp2p.Core.Error α) → Except Libp2p.Core.Error α
   | .ok (.ok a) => .ok a
   | .ok (.error e) => .error e
   | .error .deadlineExpired => .error (.timeout "upgrade deadline expired")
@@ -189,7 +189,7 @@ def settleUpgrade {α : Type} :
 the stage over-read. `ByteArray` carries no `Repr` in Lean 4.34, so
 the structure derives none; the suite compares the fields it needs. -/
 structure StageResult where
-  proto : Mock.Core.ProtocolId
+  proto : Libp2p.Core.ProtocolId
   leftover : ByteArray
 
 /-! ## The driver theorems -/
@@ -244,7 +244,7 @@ theorem driveConservation {fuel : Nat} {s : State} {input : List Nat} {r : Drive
 /-- The selected arm: the bytes in equal the frames consumed plus
 the leftover handed to the next stage (contract 5). -/
 theorem driveSelectedConservation {fuel : Nat} {s : State} {input : List Nat}
-    {p : Mock.Core.ProtocolId} {consumed leftover : List Nat}
+    {p : Libp2p.Core.ProtocolId} {consumed leftover : List Nat}
     {writes : List (List Nat)}
     (h : drive fuel s input = .ok (.selected p consumed leftover writes)) :
     input = consumed ++ leftover := by
@@ -335,7 +335,7 @@ theorem handoverCompose {ε α β : Type}
 the first drive's leftover, the bytes fed in equal the bytes both
 drives consumed plus the final leftover. -/
 theorem driveTwostage {fuel₁ fuel₂ : Nat} {s₁ s₂ : State}
-    {input₁ input₂ : List Nat} {p₁ p₂ : Mock.Core.ProtocolId}
+    {input₁ input₂ : List Nat} {p₁ p₂ : Libp2p.Core.ProtocolId}
     {c₁ c₂ l₁ l₂ : List Nat} {w₁ w₂ : List (List Nat)}
     (h₁ : drive fuel₁ s₁ input₁ = .ok (.selected p₁ c₁ l₁ w₁))
     (h₂ : drive fuel₂ s₂ (l₁ ++ input₂) = .ok (.selected p₂ c₂ l₂ w₂)) :
@@ -347,7 +347,7 @@ theorem driveTwostage {fuel₁ fuel₂ : Nat} {s₁ s₂ : State}
 
 /-- The shell's manual first write equals the core's propose step for
 a singleton list. The theorem does not cover a longer list. -/
-theorem initiatorStartPropose {p : Mock.Core.ProtocolId}
+theorem initiatorStartPropose {p : Libp2p.Core.ProtocolId}
     (hfits : fitsText p.toString = true) :
     initiatorStart [p] =
       (step { role := .initiator, supported := [], proposals := [], buffer := [],
@@ -391,7 +391,7 @@ theorem checkIdentityNone {r : Libp2p.Identity.PeerId} :
 /-- The deadline wiring of contract 6: the race's expiry is the
 `timeout` arm, and the seam errors pass through untouched. The
 `.closed` arm is required by the match over `Conc.Error`. -/
-theorem settleUpgradeSpec {α : Type} {e : Mock.Core.Error} {a : α} :
+theorem settleUpgradeSpec {α : Type} {e : Libp2p.Core.Error} {a : α} :
     settleUpgrade (α := α) (.error .deadlineExpired) =
       .error (.timeout "upgrade deadline expired") ∧
     settleUpgrade (α := α) (.error .closed) =
@@ -406,7 +406,7 @@ theorem settleUpgradeSpec {α : Type} {e : Mock.Core.Error} {a : α} :
 `closed` arm. `Connection.write` throws `IO.Error`, which is outside
 this shell's `Core.Error` channel. -/
 private def writeFrame (conn : Streams.Connection) (b : ByteArray) :
-    ExceptT Mock.Core.Error Conc.Async Unit := do
+    ExceptT Libp2p.Core.Error Conc.Async Unit := do
   let ok ← (try
     conn.write b
     pure true
@@ -416,7 +416,7 @@ private def writeFrame (conn : Streams.Connection) (b : ByteArray) :
 /-- Write each frame payload through the connection, in order. A
 failed write is the `closed` arm: the connection is gone. -/
 private def sendWrites (conn : Streams.Connection) (ws : List (List Nat)) :
-    ExceptT Mock.Core.Error Conc.Async Unit := do
+    ExceptT Libp2p.Core.Error Conc.Async Unit := do
   for w in ws do
     writeFrame conn (Bytes.ofNatList w)
 
@@ -429,7 +429,7 @@ long as the peer stays silent, so no measure bounds the loop (root
 marker, like `Conc.TaskSet.joinAll`. -/
 private def negotiateLoop (reader : Streams.BufReader)
     (conn : Streams.Connection) (s : State) (input : List Nat) :
-    ExceptT Mock.Core.Error Conc.Async StageResult := do
+    ExceptT Libp2p.Core.Error Conc.Async StageResult := do
   let mut s := s
   let mut input := input
   let mut reader := reader
@@ -461,10 +461,10 @@ initiator writes the coalesced header plus first proposal, and the
 responder writes its header. The seed is the leftover of the previous
 stage. The end of the stream mid-negotiation is `Core.Error.closed`; a
 `Negotiate.Error` maps once through `mapNegotiateError`. -/
-def negotiate (role : Mock.Core.Role) (reader : Streams.BufReader)
+def negotiate (role : Libp2p.Core.Role) (reader : Streams.BufReader)
     (conn : Streams.Connection) (seed : ByteArray)
-    (ids : List Mock.Core.ProtocolId) :
-    ExceptT Mock.Core.Error Conc.Async StageResult := do
+    (ids : List Libp2p.Core.ProtocolId) :
+    ExceptT Libp2p.Core.Error Conc.Async StageResult := do
   match role with
   | .initiator =>
     match initiatorStart ids with
@@ -482,10 +482,10 @@ def negotiate (role : Mock.Core.Role) (reader : Streams.BufReader)
 /-- The pipeline: negotiate the security protocol, run the handshake,
 check the identity, negotiate the muxer, open the session. Each lookup
 is total; a miss after a selection is `protocol`. -/
-private def upgradeCore (role : Mock.Core.Role) (conn : Streams.Connection)
+private def upgradeCore (role : Libp2p.Core.Role) (conn : Streams.Connection)
     (leftover : ByteArray) (expected : Option Libp2p.Identity.PeerId)
-    (secs : List Mock.Core.SecurityProtocol) (muxers : List Mock.Core.Muxer) :
-    Conc.Async (Except Mock.Core.Error (Mock.Core.MuxSession × Libp2p.Identity.PeerId)) := do
+    (secs : List Libp2p.Core.SecurityProtocol) (muxers : List Libp2p.Core.Muxer) :
+    Conc.Async (Except Libp2p.Core.Error (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId)) := do
   let reader := Streams.BufReader.new conn
   match ← negotiate role reader conn leftover (secs.map (·.id)) with
   | .error e => return .error e
@@ -499,14 +499,14 @@ private def upgradeCore (role : Mock.Core.Role) (conn : Streams.Connection)
         match checkIdentity expected sc.remotePeer with
         | .error e => return .error e
         | .ok () =>
-          let muxReader := Streams.BufReader.new sc.conn
-          match ← negotiate role muxReader sc.conn ByteArray.empty (muxers.map (·.id)) with
+          let muxReader := Streams.BufReader.new sc.toConnection
+          match ← negotiate role muxReader sc.toConnection ByteArray.empty (muxers.map (·.id)) with
           | .error e => return .error e
           | .ok stage2 =>
             match muxers.find? (fun m => decide (m.id = stage2.proto)) with
             | none => return .error (.protocol "selected muxer is not configured")
             | some mux =>
-              match ← mux.«open» role sc.conn stage2.leftover with
+              match ← mux.«open» role sc.toConnection stage2.leftover with
               | .error e => return .error e
               | .ok session => return .ok (session, sc.remotePeer)
 
@@ -519,10 +519,10 @@ private def boundaryClosed {α : Type} : Except Conc.Error α → Bool
 
 /-- Close a session that finished after the timer won. No caller
 receives that session. -/
-private def releaseLate (r : Except Mock.Core.Error
-    (Mock.Core.MuxSession × Libp2p.Identity.PeerId)) : BaseIO Unit :=
+private def releaseLate (r : Except Libp2p.Core.Error
+    (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId)) : BaseIO Unit :=
   match r with
-  | .ok pair => pair.1.close
+  | .ok pair => discard pair.1.close.toBaseIO
   | .error _ => pure ()
 
 /-- The upgrade under one `Conc.withinDeadline`. The expiry closes
@@ -530,11 +530,11 @@ the connection once at the boundary (root §3.5), and the race's
 `deadlineExpired` maps to the `timeout` arm through `settleUpgrade`.
 The clock is a seam, so the deadline test can advance it. -/
 
-def upgradeWith (clock : Conc.Clock) (role : Mock.Core.Role)
+def upgradeWith (clock : Conc.Clock) (role : Libp2p.Core.Role)
     (conn : Streams.Connection) (leftover : ByteArray)
     (expected : Option Libp2p.Identity.PeerId)
-    (secs : List Mock.Core.SecurityProtocol) (muxers : List Mock.Core.Muxer) :
-    ExceptT Mock.Core.Error Conc.Async (Mock.Core.MuxSession × Libp2p.Identity.PeerId) := do
+    (secs : List Libp2p.Core.SecurityProtocol) (muxers : List Libp2p.Core.Muxer) :
+    ExceptT Libp2p.Core.Error Conc.Async (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId) := do
   let answer ← Conc.withinDeadline clock Streams.unauthDeadlineMs
     (Streams.Connection.closeQuietly conn)
     (upgradeCore role conn leftover expected secs muxers)
@@ -552,10 +552,10 @@ def upgradeWith (clock : Conc.Clock) (role : Mock.Core.Role)
 /-- The frozen entry of the package docs. The clock is fixed to the
 system clock here and stays a seam in `upgradeWith` for the deadline
 test. -/
-def upgrade (role : Mock.Core.Role) (conn : Streams.Connection)
+def upgrade (role : Libp2p.Core.Role) (conn : Streams.Connection)
     (leftover : ByteArray) (expected : Option Libp2p.Identity.PeerId)
-    (secs : List Mock.Core.SecurityProtocol) (muxers : List Mock.Core.Muxer) :
-    ExceptT Mock.Core.Error Conc.Async (Mock.Core.MuxSession × Libp2p.Identity.PeerId) :=
+    (secs : List Libp2p.Core.SecurityProtocol) (muxers : List Libp2p.Core.Muxer) :
+    ExceptT Libp2p.Core.Error Conc.Async (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId) :=
   upgradeWith Conc.Clock.system role conn leftover expected secs muxers
 
 end Libp2p.Negotiate

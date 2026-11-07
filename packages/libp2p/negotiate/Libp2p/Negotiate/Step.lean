@@ -1,5 +1,5 @@
 import Libp2p.Negotiate.Message
-import Libp2p.Negotiate.Mock.Core
+import Libp2p.Core
 import Bytes
 
 /-!
@@ -37,9 +37,9 @@ inductive Phase where
 ordered list. `proposals` is the initiator's remaining list, in order.
 `buffer` holds the bytes no frame has consumed yet. -/
 structure State where
-  role : Mock.Core.Role
-  supported : List Mock.Core.ProtocolId
-  proposals : List Mock.Core.ProtocolId
+  role : Libp2p.Core.Role
+  supported : List Libp2p.Core.ProtocolId
+  proposals : List Libp2p.Core.ProtocolId
   buffer : List Nat
   phase : Phase
   deriving Repr, DecidableEq
@@ -48,14 +48,14 @@ structure State where
 is the local dialer's input. -/
 inductive Event where
   | bytes (bs : List Nat)
-  | propose (p : Mock.Core.ProtocolId)
+  | propose (p : Libp2p.Core.ProtocolId)
   deriving Repr, DecidableEq
 
 /-- One output of the core. A write carries framed bytes. A select
 ends the negotiation with the chosen id and the leftover bytes. -/
 inductive Action where
   | write (bs : List Nat)
-  | select (proto : Mock.Core.ProtocolId) (leftover : List Nat)
+  | select (proto : Libp2p.Core.ProtocolId) (leftover : List Nat)
   deriving Repr, DecidableEq
 
 /-- The replies the responder sends, the closed set of §3.4. -/
@@ -108,11 +108,11 @@ inductive Error where
 
 /-- The pure negotiation core of the spike: the first of `ours` that
 `theirs` also supports. -/
-def choose (ours theirs : List Mock.Core.ProtocolId) : Option Mock.Core.ProtocolId :=
+def choose (ours theirs : List Libp2p.Core.ProtocolId) : Option Libp2p.Core.ProtocolId :=
   List.find? theirs.contains ours
 
 /-- A chosen id is in our list and supported by theirs. -/
-theorem chooseSpec {ours theirs : List Mock.Core.ProtocolId} {p : Mock.Core.ProtocolId}
+theorem chooseSpec {ours theirs : List Libp2p.Core.ProtocolId} {p : Libp2p.Core.ProtocolId}
     (h : choose ours theirs = some p) : p ∈ ours ∧ theirs.contains p = true := by
   unfold choose at h
   exact ⟨List.mem_of_find?_eq_some h, List.find?_some h⟩
@@ -124,11 +124,11 @@ theorems about the chosen id reason over this classification. -/
 private inductive Answer where
   | echo
   | listIds
-  | pick (p : Mock.Core.ProtocolId)
+  | pick (p : Libp2p.Core.ProtocolId)
   | refuse
   | advance
-  | retry (q : Mock.Core.ProtocolId) (ps : List Mock.Core.ProtocolId)
-  | accept (p : Mock.Core.ProtocolId)
+  | retry (q : Libp2p.Core.ProtocolId) (ps : List Libp2p.Core.ProtocolId)
+  | accept (p : Libp2p.Core.ProtocolId)
   | fail
 
 /-- Classify a decoded text for a state. -/
@@ -140,7 +140,7 @@ private def classify (s : State) (text : String) : Answer :=
       | some .ls => .listIds
       | _ =>
         if text = protocolId.toString then .advance
-        else if (⟨text⟩ : Mock.Core.ProtocolId) ∈ s.supported then .pick ⟨text⟩
+        else if (⟨text⟩ : Libp2p.Core.ProtocolId) ∈ s.supported then .pick ⟨text⟩
         else .refuse
   | .initiator, .negotiating => if text = protocolId.toString then .advance else .fail
   | .initiator, .awaitingAnswer =>
@@ -175,7 +175,7 @@ records the id and writes the coalesced header plus the first proposal frame.
 Any other proposal event leaves the state unchanged: `initiatorStart` seeds
 the ordered list before the first frame moves, and the `na` retry walks that
 list from `classify`. -/
-private def propose (s : State) (p : Mock.Core.ProtocolId) : Except Error (State × List Action) :=
+private def propose (s : State) (p : Libp2p.Core.ProtocolId) : Except Error (State × List Action) :=
   if s.role = .initiator then
     if s.phase = .headerPending then
       if s.proposals = [] then
@@ -201,7 +201,7 @@ def step (s : State) : Event → Except Error (State × List Action)
 
 /-- A step that selects came from the pick or accept answer. -/
 private theorem actSelect {s : State} {rest : List Nat} {v : Answer} {s' : State}
-    {acts : List Action} {p : Mock.Core.ProtocolId} {r : List Nat}
+    {acts : List Action} {p : Libp2p.Core.ProtocolId} {r : List Nat}
     (h : act s rest v = .ok (s', acts)) (hm : Action.select p r ∈ acts) :
     v = .pick p ∨ v = .accept p := by
   cases v <;> simp only [act] at h
@@ -211,35 +211,35 @@ private theorem actSelect {s : State} {rest : List Nat} {v : Answer} {s' : State
          <;> (try simp_all))
 
 /-- A pick comes from the responder's supported list. -/
-private theorem classifyPick {s : State} {t : String} {p : Mock.Core.ProtocolId}
+private theorem classifyPick {s : State} {t : String} {p : Libp2p.Core.ProtocolId}
     (h : classify s t = .pick p) : p ∈ s.supported := by
   unfold classify at h
   repeat' split at h
   all_goals simp_all
 
 /-- An accept comes from the head of the initiator's proposals. -/
-private theorem classifyAcceptInitiator {s : State} {t : String} {p : Mock.Core.ProtocolId}
+private theorem classifyAcceptInitiator {s : State} {t : String} {p : Libp2p.Core.ProtocolId}
     (h : classify s t = .accept p) : p ∈ s.proposals := by
   unfold classify at h
   repeat' split at h
   all_goals simp_all
 
 /-- An accept carries the accepted text. -/
-private theorem classifyAcceptText {s : State} {t : String} {p : Mock.Core.ProtocolId}
+private theorem classifyAcceptText {s : State} {t : String} {p : Libp2p.Core.ProtocolId}
     (h : classify s t = .accept p) : p.toString = t := by
   unfold classify at h
   repeat' split at h
   all_goals simp_all
 
 /-- A responder never accepts. -/
-private theorem classifyAcceptResponder {s : State} {t : String} {p : Mock.Core.ProtocolId}
+private theorem classifyAcceptResponder {s : State} {t : String} {p : Libp2p.Core.ProtocolId}
     (hr : s.role = .responder) (h : classify s t = .accept p) : False := by
   unfold classify at h
   repeat' split at h
   all_goals simp_all
 
 /-- An initiator never picks. -/
-private theorem classifyPickInitiator {s : State} {t : String} {p : Mock.Core.ProtocolId}
+private theorem classifyPickInitiator {s : State} {t : String} {p : Libp2p.Core.ProtocolId}
     (hr : s.role = .initiator) (h : classify s t = .pick p) : False := by
   unfold classify at h
   repeat' split at h
@@ -277,7 +277,7 @@ private theorem classifyListIds {s : State} {t : String}
 /-- An unknown id in the negotiation draws the refuse answer. -/
 private theorem classifyRefuse {s : State} {t : String}
     (hrole : s.role = .responder) (hphase : s.phase = .negotiating)
-    (hnot : (⟨t⟩ : Mock.Core.ProtocolId) ∉ s.supported)
+    (hnot : (⟨t⟩ : Libp2p.Core.ProtocolId) ∉ s.supported)
     (hheader : t ≠ protocolId.toString) (hreply : Reply.ofText? t = none) :
     classify s t = .refuse := by
   unfold classify
@@ -286,8 +286,8 @@ private theorem classifyRefuse {s : State} {t : String}
   rw [ite_eq_right hheader, ite_eq_right hnot]
 
 /-- A retry pops one proposal: the new list is the tail of the old. -/
-private theorem classifyRetryTail {s : State} {t : String} {q : Mock.Core.ProtocolId}
-    {ps : List Mock.Core.ProtocolId} (h : classify s t = .retry q ps) :
+private theorem classifyRetryTail {s : State} {t : String} {q : Libp2p.Core.ProtocolId}
+    {ps : List Libp2p.Core.ProtocolId} (h : classify s t = .retry q ps) :
     s.proposals.tail = ps := by
   unfold classify at h
   repeat' split at h
@@ -341,8 +341,8 @@ private theorem actRefuse {s : State} {rest : List Nat} {s' : State} {actions : 
   simp
 
 /-- The retry answer replaces the proposals with the remaining list. -/
-private theorem actRetryWrites {s : State} {rest : List Nat} {q : Mock.Core.ProtocolId}
-    {ps : List Mock.Core.ProtocolId} {s' : State} {actions : List Action}
+private theorem actRetryWrites {s : State} {rest : List Nat} {q : Libp2p.Core.ProtocolId}
+    {ps : List Libp2p.Core.ProtocolId} {s' : State} {actions : List Action}
     (h : act s rest (.retry q ps) = .ok (s', actions)) : s'.proposals = ps := by
   unfold act at h
   simp only [Except.ok.injEq, Prod.mk.injEq] at h
@@ -353,7 +353,7 @@ private theorem actRetryWrites {s : State} {rest : List Nat} {q : Mock.Core.Prot
 
 /-- A responder selects only from its supported list (contract 2). -/
 theorem stepSelectResponderMem {s : State} {bs : List Nat} {s' : State}
-    {actions : List Action} {p : Mock.Core.ProtocolId} {rest : List Nat}
+    {actions : List Action} {p : Libp2p.Core.ProtocolId} {rest : List Nat}
     (hrole : s.role = .responder)
     (hstep : step s (.bytes bs) = .ok (s', actions))
     (hmem : Action.select p rest ∈ actions) : p ∈ s.supported := by
@@ -369,7 +369,7 @@ theorem stepSelectResponderMem {s : State} {bs : List Nat} {s' : State}
 
 /-- An initiator selects only from its own proposal list. -/
 theorem stepSelectInitiatorMem {s : State} {bs : List Nat} {s' : State}
-    {actions : List Action} {p : Mock.Core.ProtocolId} {rest : List Nat}
+    {actions : List Action} {p : Libp2p.Core.ProtocolId} {rest : List Nat}
     (hrole : s.role = .initiator)
     (hstep : step s (.bytes bs) = .ok (s', actions))
     (hmem : Action.select p rest ∈ actions) : p ∈ s.proposals := by
@@ -387,7 +387,7 @@ theorem stepSelectInitiatorMem {s : State} {bs : List Nat} {s' : State}
 head: the new list is the old tail, so it is strictly shorter
 (contract 2, the `na` retry). -/
 theorem stepInitiatorNaProgress {s : State} {bs : List Nat} {s' : State}
-    {actions : List Action} {p : Mock.Core.ProtocolId} {ps : List Mock.Core.ProtocolId}
+    {actions : List Action} {p : Libp2p.Core.ProtocolId} {ps : List Libp2p.Core.ProtocolId}
     {w : List Nat}
     (hrole : s.role = .initiator) (hprop : s.proposals = p :: ps)
     (hstep : step s (.bytes bs) = .ok (s', actions))
@@ -442,7 +442,7 @@ theorem stepResponderLsStays {s : State} {bs : List Nat} {s' : State}
 /-- An unknown id draws the `na` frame and stays in the negotiation
 (contract 2). -/
 theorem stepResponderUnknownStays {s : State} {bs : List Nat} {s' : State}
-    {actions : List Action} {m : Msg} {rest : List Nat} {id : Mock.Core.ProtocolId}
+    {actions : List Action} {m : Msg} {rest : List Nat} {id : Libp2p.Core.ProtocolId}
     (hrole : s.role = .responder) (hphase : s.phase = .negotiating)
     (hdec : decodeMsg? (s.buffer ++ bs) = .ok (m, rest))
     (htext : m.text = id.toString) (hnot : id ∉ s.supported)
@@ -450,7 +450,7 @@ theorem stepResponderUnknownStays {s : State} {bs : List Nat} {s' : State}
     (hreply : Reply.ofMsg? m = none)
     (hstep : step s (.bytes bs) = .ok (s', actions)) :
     actions = [.write (encodeMsg (Reply.toMsg .na))] ∧ s'.phase = .negotiating ∧ s'.buffer = rest := by
-  have hnot' : (⟨m.text⟩ : Mock.Core.ProtocolId) ∉ s.supported := by
+  have hnot' : (⟨m.text⟩ : Libp2p.Core.ProtocolId) ∉ s.supported := by
     intro hm
     apply hnot
     simpa [htext] using hm
@@ -469,7 +469,7 @@ theorem stepResponderUnknownStays {s : State} {bs : List Nat} {s' : State}
 /-- Conservation: the bytes the accepting initiator consumed, plus the
 leftover, equal the bytes fed in (contract 5). -/
 theorem stepSelectConservation {s : State} {bs : List Nat} {s' : State}
-    {p : Mock.Core.ProtocolId} {rest r : List Nat} {m : Msg}
+    {p : Libp2p.Core.ProtocolId} {rest r : List Nat} {m : Msg}
     (hrole : s.role = .initiator)
     (hdec : decodeMsg? (s.buffer ++ bs) = .ok (m, r))
     (hstep : step s (.bytes bs) = .ok (s', [Action.select p rest])) :
