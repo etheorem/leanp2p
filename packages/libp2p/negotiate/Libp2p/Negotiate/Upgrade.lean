@@ -534,13 +534,13 @@ private def upgradeCore {ρ : Type} (role : Libp2p.Core.Role) (conn : Streams.Co
                 discard sc.join.run
                 return .error e
               | .ok session =>
-                let join : ExceptT Libp2p.Core.Error Conc.Async Unit := do
+                let join : ExceptT Libp2p.Core.Error Conc.Async Unit := ExceptT.mk do
                   let muxResult ← session.join.run
                   let secureResult ← sc.join.run
-                  match muxResult, secureResult with
-                  | .error e, _ => throw e
-                  | _, .error e => throw e
-                  | .ok (), .ok () => pure ()
+                  return match muxResult, secureResult with
+                    | .error e, _ => .error e
+                    | _, .error e => .error e
+                    | .ok (), .ok () => .ok ()
                 return .ok (.upgraded { session, remotePeer := sc.remotePeer, join })
 
 /-- Whether the deadline boundary already closed the connection.

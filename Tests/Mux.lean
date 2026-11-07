@@ -446,7 +446,7 @@ example : Muxer := {
       openStream := fun _ => throw (Error.closed "unused")
       accept := pure none
       close := pure ()
-      join := pure (.ok ())
+      join := pure ()
     }
 }
 
