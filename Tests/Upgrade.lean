@@ -8,7 +8,7 @@ import Streams.BufReader
 import Streams.Stream
 import Streams.Constants
 import Streams.Sim
-import Streams.Mock.Multiaddr
+import Multiformats.Multiaddr
 
 /-!
 # The upgrade suite (unit 1b)
@@ -17,7 +17,8 @@ The test milestones of the negotiate package plan, unit 1b. The full
 pipeline runs both directions over an in-process pipe pair, and the
 byte-split runs use the in-memory sim transport of `Streams.Sim`. The
 fixed-key plaintext security value and the minimal muxer value replace
-the Noise and yamux milestones (#16, #17, unmerged). The deadline check
+the Noise and yamux milestones (#16 merged, #17 open; the matrix check
+names the live gate). The deadline check
 advances the test `Clock` of `base/conc`, so the suite waits on no wall
 clock.
 
@@ -43,8 +44,8 @@ private structure Side where
   write : Conc.Pipe
 
 /-- A multiaddr from its text form. -/
-private def simAddr (text : String) : Async Streams.Mock.Multiformats.Multiaddr := do
-  match Streams.Mock.Multiformats.Multiaddr.parse? text with
+private def simAddr (text : String) : Async Multiformats.Multiaddr := do
+  match Multiformats.Multiaddr.parse? text with
   | .ok a => return a
   | .error _ => throw <| IO.userError s!"test address {text} does not parse"
 
@@ -102,7 +103,8 @@ private def dialerId : Libp2p.Identity.PeerId := peerOf 1
 private def listenerId : Libp2p.Identity.PeerId := peerOf 2
 
 /-- The fixed-key plaintext test security value. It replaces the Noise
-milestone (#16, unmerged). The handshake writes its marker, reads the
+milestone (#16, merged; the real value joins when the core mock drops).
+The handshake writes its marker, reads the
 peer's marker from the seed first and then from the connection, and
 hands the unconsumed bytes to the next stage. `overread` adds one read
 whose chunk joins the leftover, so a check can force the hand-over.
@@ -720,7 +722,8 @@ private def readExactly (conn : Streams.Connection) (seed : ByteArray) (n : Nat)
 
 /-- The fixed-key test handshake, chunk-agnostic: it reads its marker
 with `readExactly`, so it accepts whatever chunks the transport chose.
-It replaces the Noise milestone (#16, unmerged) as `secValue` does, and
+It replaces the Noise milestone (#16, merged; the real value joins
+when the core mock drops) as `secValue` does, and
 it exists so the pipeline can run over the splitting sim. -/
 private def secValueExact (seedRef : Conc.OnceRef (Option ByteArray)) :
     Mock.Core.SecurityProtocol where
@@ -849,6 +852,6 @@ def run (r : Runner) : IO Unit := do
     checkSplitPipeline r
   Conc.Async.run all
   r.skip "upgrade noise yamux matrix over tcp"
-    "needs the Noise value and the yamux value, which are not merged on this base (the W5.9 live gate)"
+    "needs the core swap, which frees the merged Noise value, and the muxer value of #17 (the W5.9 live gate)"
 
 end Tests.Upgrade
