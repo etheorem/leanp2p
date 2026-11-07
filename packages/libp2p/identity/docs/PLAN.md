@@ -16,7 +16,7 @@ import lint is green.
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
 | 1 | W2.2, W2.3, W3.3 | root W5.1: `KeyType`, `PubKey`/`PrivKey` with the `ProtoMessage` instances, the per-type marshalings, the strict unmarshal, and `PeerId` | the unit 1 milestones below pass, and the root W5.1 row holds |
-| 2 | W5.1, W3.2 | root W6.1: the RLP wrapper over the etheorem monorepo's RLP package behind the package's `Codec` surface, the ENR record with its `v4` signature over the keccak-256 digest, and the peer-id/multiaddr mapping | the unit 2 milestones below pass, and the root W6.1 row holds |
+| 2 | W5.1, W3.2 | root W6.1: the package's own RLP behind its `Codec` surface (ARCHITECTURE, "The RLP is the package's own"), the ENR record with its `v4` signature over the keccak-256 digest, and the peer-id/multiaddr mapping | the unit 2 milestones below pass, and the root W6.1 row holds |
 
 Units 0 and 1 are done. The unit 1 suite is `Tests/Identity.lean`, and
 the theorems live in `Libp2p/Identity/KeyType.lean` (the table),
@@ -67,34 +67,42 @@ Milestones for unit 1:
 
 Milestones for unit 2:
 
-- The upstream track is the first step: the RLP package lives in the
-  etheorem monorepo (`etheorem/etheorem`, LGPL-3.0, toolchain
-  v4.34.1) and is not yet on its `main`. Unit 2 tracks its landing
-  or its per-package publication, adds the require block with a
-  pinned git rev, runs `lake update`, commits `lake-manifest.json`,
-  and checks that the pin builds under the v4.34 toolchain. The
-  recorded fallback is the package's own small RLP if the upstream
-  does not land in time or the skew does not close. When the suite
-  cites upstream proofs, each citation records whether the proof
-  closes in the kernel or through `native_decide` (CLAUDE.md,
-  "Proofs and tests").
-- RLP: the upstream vector suite runs through
-  the package's `Codec` surface, and that is the acceptance test. The
-  round-trip, injectivity, and canonicality proofs are upstream's;
-  the suite cites them and re-proves none. The wrapper's error
-  mapping rejects malformed input with the package's own error.
+- RLP: the package's own codec (ARCHITECTURE, "The RLP is the
+  package's own"). `LawfulCodec Rlp.Value` proves the round trip and
+  the canonical-form law in the kernel, with no `native_decide`. The
+  ethereum/tests `RLPTests` vectors are the acceptance test: every
+  valid case encodes to its bytes and decodes back on both the model
+  and the `ByteArray` path, and every invalid case is refused on
+  both. The package's own cases pin the error kind of each rule,
+  `truncated` or `malformed`. The harness of `base/bytes` pins the
+  `ByteArray` decoder to the model.
 - ENR: the EIP-778 record example, vendored with the text, signs and
   verifies. The digest is the keccak-256 of the RLP content, through
   the facade, and the signature verifies over the recovery path, so
-  the pairs read back. The recovery path is the tested strategy of
-  the two contract 5 allows, so an implementer who picks
-  S-normalization changes the milestone with it. A record with one
-  tampered pair fails the signature, and no pair is readable. The
-  record round-trips through encode and decode.
+  the pairs read back, and the node id matches the text's. The
+  high-S twin of the signature fails (ARCHITECTURE, contract 5). A
+  record with one tampered pair fails the signature, and no pair is
+  readable. Each decode rule has one rejection: the 300-byte cap,
+  trailing bytes, the list shape, a non-canonical `seq`, unsorted and
+  repeated keys, a missing or unknown scheme, a key that is not 33
+  bytes, and a signature that is not 64 bytes. The record
+  round-trips through encode and decode.
+- The signer: the example's private key, `seq`, and pairs re-sign to
+  the record's own bytes, since the backend signer and go-ethereum
+  both take the RFC 6979 nonce. A stale `id` or `secp256k1` pair is
+  replaced. The signer refuses a repeated key, the zero scalar, a
+  `seq` past 64 bits, and a record over 300 bytes.
+- The text form (ARCHITECTURE, contract 7): the record prints to the
+  example's text, and the text reads back to the record. A text
+  without the `enr:` prefix is refused, and so is each case of
+  `enr-text-sigp.json`.
 - The mappings: the `secp256k1` entry derives the peer id the record
-  belongs to, and the `ip`, `tcp`, and `udp` entries build the
-  `Multiaddr`. Mapping a record to an address and back returns the
-  same entries.
+  belongs to, and go-libp2p derives the same id from the same key.
+  The `ip`, `tcp`, and `udp` entries build the `Multiaddr`. Mapping
+  a record to an address and back returns the same entries. A
+  dual-stack record maps its IPv6 address with `tcp6`, or with `tcp`
+  when it has no `tcp6`. In the reverse map, an IPv6 port equal to
+  the `tcp` port stays in `tcp`, and a different one becomes `tcp6`.
 
 ## Vector stance
 
@@ -114,16 +122,33 @@ sources:
   owns them for its bindings; unit 1 uses the same fixed-message
   scheme through the facade.
 
-Nothing in `VECTORS.lock` pins ENR or RLP. Root §8 expects this: it
-calls the ENR codec new work. EIP-778 and the discv5 specification's
-ENR section govern the surface, and the spike branch vendors neither
-text under `vendor/specs`. Landing unit 2 starts by vendoring both
-texts and committing the EIP-778 record fixture with recorded
-provenance, the way the backend plan handles its generated
-certificates. The keccak-256 digest is vector-pinned by the
-`LeanHazmatKeccak` suite and the fixed cases of the empty
-string and `abc` (the backend pair's plan), and the record fixture
-pins the end-to-end path. The RLP family closes through the upstream
-vector suite of the etheorem RLP package, run through the package's
-`Codec` surface. The round-trip, injectivity, and canonicality proofs
-are upstream's, and the suite records that provenance (§6).
+Root §8 calls the ENR codec new work, so the spike captured nothing
+for it. Unit 2 pins three sources in `VECTORS.lock`, and
+`scripts/extract-vectors.py` extracts four files from them:
+
+- `enr-eip778.json`: the example record of EIP-778
+  (`vendor/eips/EIPS/eip-778.md`, "Test Vectors", CC0): its bytes,
+  the text form, the private key, the node id, and the RLP structure
+  the text lists.
+- `rlp-valid.json` and `rlp-invalid.json`: ethereum/tests
+  `RLPTests/rlptest.json` (28 cases) and `invalidRLPTest.json` (26
+  cases), MIT. The extractor writes each valid input as an item tree,
+  under the RLPTests conventions: a string is its UTF-8 bytes, an
+  integer or a `#`-prefixed big integer is its minimal big-endian
+  bytes.
+- `enr-text-sigp.json`: the two text forms that sigp/enr refuses, from
+  its test `test_read_enr_base64url_decoding_enforce_no_pad_no_extra_trailingbits`
+  (`vendor/sigp-enr/src/lib.rs`, MIT). Each case records sigp's error
+  and go-ethereum's answer (ARCHITECTURE, contract 7).
+
+The keccak-256 digest is vector-pinned by the `LeanHazmatKeccak`
+suite and the fixed cases of the empty string and `abc` (the backend
+pair's plan), and the record fixture pins the end-to-end path. The
+peer id of the example key has no captured vector; go-libp2p at the
+vendored commit derives it, and the suite states the string.
+
+Three more pins hold the sources that contracts 5 and 7 cite, with no
+extracted file: `vendor/go-ethereum`,
+`vendor/rustcrypto-elliptic-curves`, and `vendor/rustcrypto-signatures`.
+`vendor/sigp-enr` serves both contracts, and the text file comes from
+it.
