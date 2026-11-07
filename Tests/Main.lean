@@ -26,6 +26,7 @@ import Tests.Enr
 import Tests.Negotiate
 import Tests.Upgrade
 import Tests.Host
+import Tests.Protocols
 
 /-!
 # Test entry point
@@ -67,4 +68,5 @@ def main : IO UInt32 := do
   Tests.Negotiate.run r
   Tests.Upgrade.run r
   Tests.Host.run r
+  Tests.Protocols.run r
   r.summary

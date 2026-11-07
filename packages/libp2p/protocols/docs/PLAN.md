@@ -55,13 +55,17 @@ in the codec group wrapping upstream `google/snappy`.
   the connected peer, and a message over the cap.
 - A push through the push handler updates the peerstore through the
   host, and the entry reads back.
+- The push sender announces the local record and the receiver stores
+  it: `Identify.pushTo` writes one frame on the push stream, the push
+  handler on the other end validates it, and `addrsOf` reads the
+  addresses back.
 - The ping handler echoes 32 bytes and repeats until the stream closes.
   The concurrent-ping legs of the spike's 1000-stream stress stay as
   the load check.
 - The ping initiator rejects a wrong length: the spike's `Ping.ping`
   sends 32 bytes, awaits the echo, and fails on any other size. A
-  partial payload at EOF is a protocol error, a recorded delta from the
-  spike's responder, which closes silently (§5.2).
+  stream that ends before one whole payload arrives is a protocol error
+  (§5.2).
 - The suite passes under `+RTS -N1`.
 
 ## Test milestones (unit 2)
