@@ -558,4 +558,39 @@ def upgrade (role : Libp2p.Core.Role) (conn : Streams.Connection)
     ExceptT Libp2p.Core.Error Conc.Async (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId) :=
   upgradeWith Conc.Clock.system role conn leftover expected secs muxers
 
+/-- Negotiate a protocol on a muxed stream and retain any extra bytes. -/
+def negotiateStream (role : Libp2p.Core.Role) (stream : Streams.Stream)
+    (ids : List Libp2p.Core.ProtocolId) :
+    ExceptT Libp2p.Core.Error Conc.Async (Libp2p.Core.ProtocolId × Streams.Stream) := do
+  let (initial, writes) ← match role with
+    | .initiator => (initiatorStart ids).mapError mapNegotiateError
+    | .responder => (responderStart ids).mapError mapNegotiateError
+  let mut state := initial
+  let mut input : List Nat := []
+  for bytes in writes do
+    if let .error e ← stream.write (Bytes.ofNatList bytes) then
+      throw (.closed s!"stream negotiation write failed: {repr e}")
+  repeat
+    match drive 1 state input with
+    | .error e => throw (mapNegotiateError e)
+    | .ok result =>
+      let (next, rest, writes, selected) := match result with
+        | .selected p _ rest writes => (state, rest, writes, some p)
+        | .waiting s _ rest writes => (s, rest, writes, none)
+        | .running s _ rest writes => (s, rest, writes, none)
+      for bytes in writes do
+        if let .error e ← stream.write (Bytes.ofNatList bytes) then
+          throw (.closed s!"stream negotiation write failed: {repr e}")
+      if let some p := selected then
+        let s ← Streams.Stream.prependBytes stream (Bytes.ofNatList rest)
+        return (p, s)
+      state := next
+      input := rest
+      if result matches .waiting .. then
+        match ← stream.read with
+        | .error e => throw (.closed s!"stream negotiation read failed: {repr e}")
+        | .ok none => throw (.closed "stream ended during negotiation")
+        | .ok (some bytes) => input := input ++ Bytes.toNatList bytes
+  throw (.closed "stream negotiation ended without a selection")
+
 end Libp2p.Negotiate
