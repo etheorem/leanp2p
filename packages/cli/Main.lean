@@ -40,6 +40,7 @@ def run (args : List String) : IO UInt32 := do
     | .error e => return ← fail e
   let writer ← BaseIO.toIO RecordWriter.start
   let observer ← BaseIO.toIO (ReceiptObserver.new writer)
+  let delayTable ← BaseIO.toIO DelayTable.new
   let coreParams ← match toCoreParams params with
     | .ok value => pure value
     | .error e => return ← fail e
@@ -77,7 +78,7 @@ def run (args : List String) : IO UInt32 := do
         | .error e => pure (.error (reprStr e))
     subscribe := fun topic _ => running.node.subscribe ⟨topic⟩ (fun _ => pure ())
     publish := fun topic payload => running.node.publish ⟨topic⟩ payload
-    validationDelay := fun _ _ => pure () }
+    validationDelay := fun topic delay => delayTable.set topic delay }
   let resultCode ← try
     match ← (runScript driver Conc.Clock.system start actions).run with
     | .ok () => pure 0
