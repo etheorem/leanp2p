@@ -23,11 +23,18 @@ defaultTargets = [
   "Libp2pNegotiate",
   "Libp2pHost",
   "Libp2pProtocols",
-  "Cli",
+  "CliApp",
+  "demo",
+  "pingnode",
   "Tests",
 ]
 # `lake test` builds and runs the executable named here.
 testDriver = "tests"
+
+[[require]]
+name = "Cli"
+git = "https://github.com/leanprover/lean4-cli"
+rev = "e92c9f15fdfacc8536f31cfb3b7ad26c3c8cd204"
 # `crypto/backend` is a nested Lake package. Its `lakefile.lean` builds
 # the C shim, which the declarative form cannot express (CLAUDE.md,
 # "Configure, don't integrate"). It provides the `Backend` library. The
@@ -180,9 +187,20 @@ srcDir = "packages/libp2p/protocols"
 roots = ["Libp2p.Protocols"]
 
 [[lean_lib]]
-name = "Cli"
+name = "CliApp"
 srcDir = "packages/cli"
-roots = ["Cli"]
+roots = ["CliApp"]
+globs = ["CliApp.*"]
+
+[[lean_exe]]
+name = "demo"
+srcDir = "packages/cli"
+root = "Main"
+
+[[lean_exe]]
+name = "pingnode"
+srcDir = "packages/cli"
+root = "PingNode"
 
 # The test tree: one suite module per upstream file, with the shared
 # runner in `Tests/Support.lean`. The `tests` executable is the

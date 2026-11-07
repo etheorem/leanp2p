@@ -15,19 +15,28 @@ row 18).
 
 | Module | Holds, and why |
 |---|---|
+| `CliApp.lean` | nominal build root, with no exported library API |
 | `Main.lean` | the demo node, the `demo` executable; the §3.1 assembly as running code, the spike's `Main.lean` mapped here |
 | `PingNode.lean` | the ping node, the `pingnode` executable; the `serve` and `dial` modes and their argument parsing |
-| `Interop.lean` | the transport-interop harness, the `interop` executable; the config environment and the listener and dialer modes |
-| `Interop/Redis.lean` | the harness coordination client, private to the `interop` executable; the spike's `LeanP2P/Interop/Redis.lean` mapped here |
+| `CliApp/Demo.lean` | the demo's composition and workflow, exercised by `Tests/Cli.lean` |
+| `CliApp/PingNode.lean` | the ping node's parser, server and client workflows, and stdin lifecycle |
+| `CliApp/Mock/Stack.lean` | opaque interfaces for unmerged dependencies, with explicit failure bodies |
+| `Interop.lean` (planned W5.9) | the transport-interop harness, the `interop` executable; the config environment and the listener and dialer modes |
+| `Interop/Redis.lean` (planned W5.9) | the harness coordination client, private to the `interop` executable; the spike's `LeanP2P/Interop/Redis.lean` mapped here |
 
-The package is executables only, with no library root (see
-Decisions). The W0.1 scaffold gives every leaf a nominal `lean_lib`;
-the `cli` root stays empty, and the executables are the package.
+The package is executables only, with no exported library API (see
+Decisions). The W0.1 scaffold gives every leaf a nominal `lean_lib`.
+Its build root is `CliApp.lean`, which exports nothing. The executable
+launchers import their own application module. The parser dependency
+owns the module `Cli`, so retaining that scaffold name would collide
+with the dependency. The import lint recognizes both roots as CLI.
 Config parsing lives in each binary, because the three
 contracts differ. Argument parsing uses `leanprover/lean4-cli` as
 the first choice. The library is maintained under the leanprover
 organization, and CLAUDE.md's "Lean on Lean" principle prefers a
-maintained library before a hand-rolled one. The §2 rule bans
+maintained library before a hand-rolled one. The pin is
+`e92c9f15fdfacc8536f31cfb3b7ad26c3c8cd204` (`v4.34.0`), matching
+the toolchain. The §2 rule bans
 reusable code inside `cli/`; the parsing mechanism lives in the
 dependency, and each binary keeps its own parsing code. The
 hand-rolled parser is the recorded fallback if the pin does not fit
@@ -54,6 +63,10 @@ three CLI contracts.
   `pingnode dial <multiaddr>` dials an address whose `/p2p/<id>`
   suffix supplies the expected identity (the host pair's rule),
   pings once, and prints `PING OK rtt=<ms>ms`. A usage error exits 2.
+  The final parsed component must be `p2p`, so a Unix path containing
+  the text `/p2p/` cannot supply a peer identity. Ports contain only
+  ASCII decimal digits and fit a `UInt16`; port zero requests an
+  ephemeral listener. Extra arguments and unknown flags are errors.
 - **`interop`** (the spike's `Interop.lean`). Configuration arrives as
   environment variables, in the shape of the libp2p
   transport-interop test plan: `transport` (`tcp`), `muxer` (`yamux`
@@ -89,6 +102,12 @@ three CLI contracts.
 5. **Every exit closes and joins.** Each mode closes the host before it
    returns, so the shutdown order of §5.5 joins every task the binary
    owns.
+   The demo uses nested finalizers, so a failed second allocation
+   still closes the first host. Each client stream resets after its
+   exchange, including protocol errors and IO faults. Serve flushes
+   its readiness line before waiting for stdin EOF. Its blocking
+   stdin reader runs on a dedicated thread, and the async workflow
+   parks on the reader's completion.
 6. **The RESP2 reader is capped before allocation** (§5.1,
    PRINCIPLES 2.3). The Redis client reads server-supplied line and
    bulk lengths, each read is capped, and an over-long length is an
@@ -97,10 +116,10 @@ three CLI contracts.
 
 ## Decisions
 
-- **Executables only, with no library root.** §2 gives `cli/` no
-  public API, and the dependency chain of §2 puts it where nothing can
-  import it. A root module would exist for re-export, and the only
-  thing to re-export is `main`.
+- **Executables only, with a nominal build root.** §2 gives `cli/`
+  no public library API. `CliApp` lets Lake resolve the executable
+  modules and exports nothing. Protocol behavior stays in the
+  library packages below it.
 - **The go-side helpers stay scripts, test-only.** CLAUDE.md's
   dependencies rule keeps Go and Rust tooling test-only, confined to
   the harness, and never on a shipped or proof path. The scripts are
@@ -112,7 +131,8 @@ three CLI contracts.
   gate's only form, so docker appears only inside the scripts.
 - **The demo composition doubles as the composition documentation**
   (root §2: "shows, as running code, how to compose the stack"). A
-  reader who wants to compose the stack reads `Main.lean`.
+  reader who wants to compose the stack reads `CliApp/Demo.lean`;
+  `Main.lean` is its executable entry point.
 
 ## What the package must not depend on
 
@@ -127,3 +147,31 @@ three CLI contracts.
   is, with no Redis client package.
 - No build glue. The executables build through the declarative
   package metadata (PRINCIPLES 4.2).
+
+## Working ahead of dependencies
+
+The current hackathon base has no concrete identity, host, security,
+muxer-value or protocol implementation. The TCP unit is also open.
+`CliApp.Mock` holds the dependency interfaces. The opaque operation
+bodies fail explicitly; default commands cannot announce a bound
+address or successful ping. No mock axiom is assumed.
+
+`Tests.Cli` injects per-run host and protocol test values into each
+executable's `Runtime`. It checks orchestration, not protocol bytes or
+cryptography. Its records are local to a test; there is no mutable
+global test mode. The application modules share no workflow helper.
+
+The host docs freeze the required operations but leave their concrete
+signatures to W5.6. `Mock.Host` expresses the CLI-side view: creation
+from ordered configuration, listening with the actual bound address,
+peerstore insertion, dial and dial-by-peer, negotiated stream opening,
+handler registration, and an async close that joins owned work. The
+host owner must confirm or adapt this view when W5.6 lands. This does
+not add a real host implementation to the CLI.
+
+The ping and identify adapters expose only the results printed by
+these executables. At substitution, they call the actual protocol
+clients and map their errors into `Host.Error`. The demo echo client
+and handler must come from the protocol package's test support. They
+are explicit pending connections, not implemented protocol logic in
+this package.

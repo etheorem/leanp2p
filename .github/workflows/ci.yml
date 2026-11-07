@@ -1,8 +1,8 @@
 name: CI
 
 # W0.2: build the tree and run the checks on every push and pull
-# request. The steps run the five gates: lake build, lake
-# test, the -N1 pass, the import lint, and the provenance check.
+# request. The steps run the build, both scheduler modes, the import
+# lint, the CLI driver checks and the provenance check.
 
 on:
   push:
@@ -63,6 +63,11 @@ jobs:
         # within-group downward orders with the §3.1 carve-out
         # (docs/ARCHITECTURE.md §2, §3.1).
         run: scripts/lint-imports.sh
+
+      - name: Check the CLI interop driver
+        # Unit checks of deadlines, readiness and process cleanup.
+        # These do not run or replace the live networking gate.
+        run: python3 -m unittest discover -s scripts -p test_ping_interop.py
 
       - name: Verify vector provenance
         # The step reruns the extractor over the pinned vendor copies
