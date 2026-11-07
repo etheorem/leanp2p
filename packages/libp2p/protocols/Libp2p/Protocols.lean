@@ -6,6 +6,7 @@ import Libp2p.Protocols.Gossipsub.Cache
 import Libp2p.Protocols.Gossipsub.Sign
 import Libp2p.Protocols.Gossipsub.Core
 import Libp2p.Protocols.Gossipsub.Node
+import Libp2p.Protocols.Gossipsub.Interop
 
 /-!
 # Libp2p.Protocols
