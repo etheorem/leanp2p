@@ -31,6 +31,7 @@ import Tests.Core
 import Tests.Noise
 import Tests.Negotiate
 import Tests.Upgrade
+import Tests.Host
 
 /-!
 # Test entry point
@@ -77,4 +78,5 @@ def main : IO UInt32 := do
   Tests.Noise.run r
   Tests.Negotiate.run r
   Tests.Upgrade.run r
+  Tests.Host.run r
   r.summary

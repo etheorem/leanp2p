@@ -20,9 +20,11 @@ libp2p group is §7, row 10).
 | `Libp2p/Host/Registry.lean` | the session and handler registries, each a `Std.HashMap` inside an `OnceRef`, their pure update functions, and the shared table types (§3.8, §3.10) |
 | `Libp2p/Host/Dedup.lean` | the dedup rule as one pure function over the session table |
 | `Libp2p/Host/Peerstore.lean` | the third registry, addresses by peer, deduplicated at add (§3.8) |
-| `Libp2p/Host/Swarm.lean` | `dial`, `dialPeer`, `startListening`, the accept loop, the upgrade pipeline, and stream serving |
+| `Libp2p/Host/Gate.lean` | `Gate`, a task group that refuses new tasks once its owner closes it, for the tasks that start outside any task the host owns |
+| `Libp2p/Host/Swarm.lean` | `Config`, the `Host` state, `dial`, `dialPeer`, `startListening`, `newStream`, the accept loop, the upgrade pipeline, and stream serving |
 | `Libp2p/Host/Shutdown.lean` | `Host.close`, the §5.5 sequence |
-| `Libp2p/Host/Policy.lean` | the permissive default gater, and the permissive and denying test doubles the core pair assigned here |
+| `Libp2p/Host/Policy.lean` | the permissive default gater, and the permissive and denying test doubles the core pair assigned here; the default resource manager (admits everything) and the default ranker (keeps the order, no delay) |
+| `Libp2p/Host/Mock/{Core,Negotiate}.lean` | the mocks of W5.2 and W5.5 until they merge (see "The mocks") |
 
 All declarations live in the `Libp2p.Host` namespace, and the root
 module re-exports the public submodules.
@@ -44,10 +46,21 @@ module re-exports the public submodules.
   enters the upgrade pipeline as a pending connection.
 - `setHandler` stores one `StreamHandler` under its `ProtocolId`
   through `OnceRef.update`. The registry is the
-  `Std.HashMap ProtocolId StreamHandler` of §3.10. A handler failure
+  `Std.HashMap ProtocolId StreamHandler` of §3.10. The host calls the
+  handler with the `StreamContext` of the session: the peer the
+  upgrade proved, and the connection's remote address, which the
+  session entry keeps from the upgrade. A handler failure
   closes the stream, never the session, and the error reaches the
   owner through the spawned task's completion (PRINCIPLES 3.2). This
   settles the question the core pair left open.
+- `newStream` opens a stream to a peer and negotiates one of the given
+  protocol ids, in preference order. With no live session, it dials
+  the peer first. The answer is the selected id and the stream, with
+  the bytes the negotiation over-read at its front (§4.7, §5.6). This
+  is go-libp2p's `host.NewStream`
+  (`vendor/go-libp2p/core/host/host.go`, lines 61 to 65). The clients
+  of `libp2p/protocols` and the binaries of `cli/` reach their
+  outbound streams through it.
 - The peerstore surface: `addAddrs` (deduplicated at add, so a redial
   grows nothing) and `addrsOf`. Limits and TTLs stay deferred (§9,
   delta 3).
@@ -157,6 +170,151 @@ module re-exports the public submodules.
   value, and a consumer passes its own. A limiting gater is open work
   (§9, delta 4) behind the same seam.
 
+## Refinements fixed at implementation (unit 1a)
+
+The public surface leaves these points to implementation time. Unit 1a
+fixes them as follows.
+
+- **The `Host.Error` arms.** The four proposed arms stay. Three more
+  name host decisions that the dial path makes: `noTransport`, no
+  configured transport handles the address (`Transport.handles`, the
+  streams pair); `unreachable`, the transport dialed and nobody
+  listens there (`Transport.dial` answers `none`); and `dialSelf`, the
+  dial targets our own id, which also keeps every dedup decision
+  between two different ids. `gated` names the refusing checkpoint
+  through the closed set `Checkpoint` (§3.4): `dial`, `inbound`,
+  `secured`, and `resources`. go-libp2p's swarm has the same failures:
+  `ErrSwarmClosed` (`vendor/go-libp2p/p2p/net/swarm/swarm.go`, line
+  43), and `ErrDialToSelf`, `ErrNoTransport`, `ErrNoAddresses`, and
+  `ErrGaterDisallowedConnection`
+  (`vendor/go-libp2p/p2p/net/swarm/swarm_dial.go`, lines 49, 53, 60,
+  and 68).
+- **The session table entry.** An entry holds a session number, our
+  role, the birth time on the host clock, the liveness field, and the
+  session handle. The handle is a type parameter, so the table
+  functions run in a test with no connection. The host draws a fresh
+  number per session, and `markDead` matches it, so the exit of a
+  session that dedup replaced cannot mark its successor dead.
+- **The dedup function.** `dedup` returns `commit displaced` (the
+  candidate took the slot; `displaced` is the live session it
+  replaced, which the caller closes) or `keep standing` (the caller
+  closes the candidate and serves the peer through `standing`). The
+  window test is `now < born + simulWindowMs`. "Larger id" orders the
+  binary form of the ids (`PeerId.toBytes`), byte by byte: both peers
+  hold the same bytes, and a text order would compare the form that
+  one side parsed the id in. The theorem `raceLoserAgree` proves that
+  both peers drop the same connection of a race.
+- **The handler ids.** The handler table lists its ids in
+  `ProtocolId` order, so the stream negotiation answers the same way
+  whatever the hash order.
+- **The peerstore order.** The addresses of a peer keep the order
+  they first arrived in, and `dialPeer` walks them in that order
+  unless the address ranker reorders them.
+
+## Refinements fixed at implementation (unit 1b)
+
+- **The configuration and the state.** `Config` holds the identity,
+  the transport list, the ordered security and muxer lists, the
+  initial handlers, the gater, the resource manager, the ranker, the
+  `Clock`, and `onFailure`. `Host.new` derives the local peer id from
+  the identity and answers `.error` when the key derives none. The
+  host's cells are the three registries, a counter for session numbers
+  and pending keys, the closing flag, the listener list, and the
+  pending list, each changed through `OnceRef.update` (contract 1).
+- **The transport choice.** A dial or a listen uses the first transport
+  of the list whose `handles` accepts the address (the streams pair,
+  public surface). A trailing `/p2p/<id>` comes off first: it names
+  the peer and no transport (`vendor/specs/addressing/README.md`, "The
+  p2p multiaddr"), as go-libp2p's swarm drops it before its transport
+  lookup (`vendor/go-libp2p/p2p/net/swarm/swarm_transport.go`, lines
+  37 to 48). The component's value is the peer id's binary form, which
+  `PeerId.ofBytes?` reads. An address that is only `/p2p/<id>` is
+  `noTransport`.
+- **The checkpoints, in go-libp2p's order.** `allowDial` before the
+  dial (`vendor/go-libp2p/p2p/net/swarm/swarm_dial.go`, lines 251 and
+  550); the resource manager's `openConnection` before the transport
+  dial (`vendor/go-libp2p/p2p/transport/tcp/tcp.go`, line 255);
+  `allowInbound`, then `openConnection`, after an accept
+  (`vendor/go-libp2p/p2p/net/upgrader/listener.go`, lines 183 and
+  193); and `allowSecured`, then `ConnectionScope.setPeer`, inside the
+  upgrade, through `Negotiate.upgradeWith`
+  (`vendor/go-libp2p/p2p/net/upgrader/upgrader.go`, line 176). A
+  refusal is `gated` with the checkpoint, and the scope is released.
+  The policy shapes are this unit's refinement of the core seams (the
+  core ARCHITECTURE, "The policy shapes").
+- **The answers of the dial path.** `dial` and `dialPeer` answer the
+  peer id the handshake proved. The caller reaches the session through
+  that id (`newStream`), and the host keeps the session handle. A
+  live session of the expected peer answers at once, with no dial. A
+  committed dial stores its transport address in the peerstore.
+  `dialPeer` walks the ranker's schedule in order and waits out each
+  delay on the `Clock`; the wait also wakes when `close` closes the
+  shutdown channel (PRINCIPLES 3.1). With no success, it answers the
+  failure of the last address.
+- **Two more `Core.Error` wrappers.** `session` reports a running
+  session whose join answered a failure, and `stream` reports a
+  stream whose open, negotiation, or handler failed. Each wraps the
+  seam error once, as `upgrade` does (§3.5).
+- **Failures with no caller go to `Config.onFailure`.** An inbound
+  upgrade, a session's end, and an inbound stream run in tasks that no
+  caller awaits. The owner of each task reads its completion and hands
+  a failure to `onFailure`, with the peer and the protocol when known,
+  so a failure never reaches the owner as EOF alone (§3.5; PRINCIPLES
+  3.2). A policy refusal is a decision, and goes nowhere. A fault
+  passes on to the join of the task, and `close` throws it.
+- **Stream serving.** The serve task of a session accepts the peer's
+  streams, and each stream runs in a task that the serve task owns and
+  joins when the session ends. The stream negotiates against the
+  handler ids through `Negotiate.negotiateStream`, which puts the
+  bytes it read past the selecting message at the front of the stream
+  (§4.7). A failed negotiation, an id whose handler left the table,
+  and a handler failure reset the stream; the session stays. go-libp2p
+  resets a stream whose negotiation fails in the same place
+  (`vendor/go-libp2p/p2p/host/basic/basic_host.go`, line 347). A
+  stream the peer ends before it picks a protocol is an orderly end,
+  and no failure.
+- **Outbound streams.** `newStream` dials the peer through the
+  peerstore when no session is live, as go-libp2p's `NewStream` calls
+  `Connect` first (`basic_host.go`, line 452). It opens a stream,
+  negotiates one of the caller's ids in order, and answers the
+  selected id and the stream; a failed negotiation resets the stream.
+  The caller owns the stream.
+- **Stream shares.** Every stream takes a share from its connection's
+  scope (`ConnectionScope.reserveStream`). A served stream returns it
+  when its handler ends. An outbound stream returns it at a reset, or
+  once our close and the peer's end have both happened. The
+  connection scope's release returns every share it still holds when
+  the session ends.
+- **The registration race with `close`.** A path that registers a
+  listener, a pending connection, or a session reads the closing flag
+  after it registers, and closes what it registered when the flag is
+  set. The session and host task groups are `Gate`s: a task that
+  starts after `close` joined its group is refused, and the refused
+  caller wakes the work and joins it itself. `Gate` lives in
+  `Libp2p/Host/Gate.lean`, since a `Conc.TaskSet` keeps taking tasks
+  after its join.
+- **The shutdown stages.** `close` takes an optional `onStage` that
+  hears each stage of §5.5 as it starts, the instrument of the unit
+  1b milestone. A fault of a joined task does not stop the sequence,
+  and `close` throws the first fault at the end.
+
+## The mocks
+
+W5.2 (`libp2p/core`) and W5.5 (`libp2p/negotiate`) have not merged,
+so the package builds against mocks of their frozen surfaces (RULES.md,
+"Working ahead of the tree"), under `Libp2p/Host/Mock/`. A type is a
+copy of the frozen shape; an operation is `opaque`, and its body fails
+with the name of the missing package. No body negotiates or opens a
+session, and the mocks state no axiom. The host modules open
+`Libp2p.Host.Mock`, so `Core.Error` and `Negotiate.upgradeWith` resolve
+as they will against the real packages, and the integration swaps the
+imports and drops the `open`. The keys and the peer id come from the
+merged `libp2p/identity`.
+
+Every upgrade runs through the negotiate mock and fails there, and the
+legs also need the Noise and yamux values (W5.3, W5.4), so the unit 1b
+milestones run at the integration. Unit 1a runs in full.
+
 ## What the package must not depend on
 
 - Inside libp2p, the chain puts everything below the host at its
@@ -174,10 +332,16 @@ module re-exports the public submodules.
   `Connection`, `Listener`, and `Stream` (§2). `net/yamux` stays
   behind the `Muxer` value of `libp2p/mux`, and no host module names
   it.
+- From the codec group, `codec/multiformats` for `Multiaddr`: the
+  peerstore holds addresses, and the dial path takes the `/p2p`
+  component off an address. The dial path names one `base/bytes`
+  function, `Bytes.ofNatList`, to give a `/p2p` component value the
+  `ByteArray` form that `PeerId.ofBytes?` reads. The name arrives
+  through the transitive `net/streams` import, and the host imports no
+  `base/bytes` module. The other codecs arrive through `negotiate` and
+  `identity`, and the host names none of them.
 - From base, `base/conc` for `Async`, `OnceRef`, `TaskSet`,
-  `withinDeadline`, and `Clock` (§4.1). `base/bytes` and the codecs
-  arrive through `negotiate` and `identity`, and the host names none
-  of them directly.
+  `withinDeadline`, and `Clock` (§4.1).
 - No crypto by name. Key material reaches the host only through the
   types of its dependencies: the private key and `PeerId` come from
   `libp2p/identity` (§2). If a refinement needs a direct import, this
