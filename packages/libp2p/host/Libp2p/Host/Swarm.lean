@@ -2,7 +2,7 @@ import Std.Data.HashMap
 import Conc
 import Streams
 import Libp2p.Identity
-import Libp2p.Host.Mock.Core
+import Libp2p.Core
 import Libp2p.Host.Mock.Negotiate
 import Libp2p.Host.Error
 import Libp2p.Host.Registry
@@ -72,7 +72,7 @@ namespace Libp2p.Host
 -- The mocks of the unmerged packages (RULES.md, "Working ahead of the
 -- tree"); `Negotiate.Error` resolves through `Libp2p.Host.Mock`.
 open Conc Streams Multiformats Libp2p.Host.Mock Libp2p.Identity
-  Libp2p.Host.Mock.Core Libp2p.Host.Mock.Negotiate
+  Libp2p.Core Libp2p.Host.Mock.Negotiate
 
 /-- A failure of a task that no caller awaits: an inbound upgrade, a
 session that ended badly, an inbound stream. -/

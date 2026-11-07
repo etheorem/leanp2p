@@ -27,7 +27,7 @@ set_option autoImplicit false
 
 namespace Tests
 
-open Conc Multiformats Libp2p.Identity Libp2p.Host.Mock.Core Libp2p.Host
+open Conc Multiformats Libp2p.Identity Libp2p.Core Libp2p.Host
 
 /-! ## Helpers -/
 

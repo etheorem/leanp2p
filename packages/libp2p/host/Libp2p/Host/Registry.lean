@@ -1,6 +1,6 @@
 import Std.Data.HashMap
 import Libp2p.Identity
-import Libp2p.Host.Mock.Core
+import Libp2p.Core
 
 /-!
 # The session and handler registries
@@ -44,7 +44,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Host
 
-open Libp2p.Identity Libp2p.Host.Mock.Core
+open Libp2p.Identity Libp2p.Core
 
 /-! ## The session table -/
 

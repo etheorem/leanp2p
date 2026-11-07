@@ -1,7 +1,7 @@
 import Conc
 import Streams
 import Libp2p.Identity
-import Libp2p.Host.Mock.Core
+import Libp2p.Core
 
 /-!
 # Mock: the surface of `libp2p/negotiate` that the host uses
@@ -35,7 +35,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Host.Mock.Negotiate
 
-open Conc Streams Libp2p.Identity Libp2p.Host.Mock.Core
+open Conc Streams Libp2p.Identity Libp2p.Core
 
 /-- How a stream negotiation failed. The host reads two arms: the end of
 the stream before a selection, an orderly end, and the empty proposal
