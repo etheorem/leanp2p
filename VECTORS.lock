@@ -147,3 +147,91 @@ commit = "96a179180f0ad6bba9b1e7b6e38d0affb0168e9a"
 branch = "master"
 paths = ["/internal/impl/decode.go", "/LICENSE"]
 used-for = "v1.36.11, the protobuf runtime of go-libp2p v0.50.0: the decoder keeps unknown fields (libp2p/identity, the Keys message)"
+
+[[vendor]]
+dir = "vendor/eips"
+repo = "https://github.com/ethereum/EIPs"
+commit = "dc5d5fa688b7fe87b95a907fcc128b4fde2f4d2f"
+branch = "master"
+paths = ["/EIPS/eip-778.md", "/LICENSE.md"]
+used-for = "EIP-778: the node record format, the v4 identity scheme, and the example record (W6.1)"
+
+[[vendor]]
+dir = "vendor/ethereum-tests"
+repo = "https://github.com/ethereum/tests"
+commit = "c67e485ff8b5be9abc8ad15345ec21aa22e290d9"
+branch = "develop"
+paths = ["/RLPTests/rlptest.json", "/RLPTests/invalidRLPTest.json", "/LICENSE"]
+used-for = "RLPTests: the valid and invalid RLP vectors, the acceptance suite of the identity RLP codec (W6.1)"
+
+[[vendor]]
+dir = "vendor/go-ethereum"
+repo = "https://github.com/ethereum/go-ethereum"
+commit = "0d061403cf53263b95f9beec48f07046e78e1bed"
+branch = "master"
+paths = ["/p2p/enode/idscheme.go", "/p2p/enode/node.go", "/crypto/signature_cgo.go", "/crypto/signature_nocgo.go", "/crypto/secp256k1/libsecp256k1/include/secp256k1.h", "/COPYING.LESSER"]
+used-for = "the v4 identity scheme's signer and verifier and its high-S refusal, in both builds (W6.1, identity contract 5); the enr: text form, Parse and String (W6.1, identity contract 7)"
+
+[[vendor]]
+dir = "vendor/sigp-enr"
+repo = "https://github.com/sigp/enr"
+commit = "5d0421a6af06d69e89fc7e09257240436516db8d"
+branch = "master"
+paths = ["/src/lib.rs", "/src/keys/k256_key.rs", "/src/keys/rust_secp256k1.rs", "/Cargo.toml", "/LICENSE"]
+used-for = "v0.14.0, the Rust ENR crate: its v4 verifiers over k256 and over libsecp256k1 (W6.1, identity contract 5); the enr: text form and its padding and trailing-bits rejections (W6.1, identity contract 7)"
+
+[[vendor]]
+dir = "vendor/rustcrypto-elliptic-curves"
+repo = "https://github.com/RustCrypto/elliptic-curves"
+commit = "c63dddfbacea826c685c92ef87bf407e7f5c23c3"
+branch = "master"
+paths = ["/k256/src/ecdsa.rs", "/k256/Cargo.toml", "/k256/LICENSE-MIT", "/k256/LICENSE-APACHE"]
+used-for = "k256 v0.14.0, the curve of sigp/enr: NORMALIZE_S is true for secp256k1 (W6.1, identity contract 5)"
+
+[[vendor]]
+dir = "vendor/rustcrypto-signatures"
+repo = "https://github.com/RustCrypto/signatures"
+commit = "25e6bf946725ace2af69b15874c29131acc7db60"
+branch = "master"
+paths = ["/ecdsa/src/hazmat.rs", "/ecdsa/Cargo.toml", "/ecdsa/LICENSE-MIT", "/ecdsa/LICENSE-APACHE"]
+used-for = "ecdsa v0.17.0, the k256 verifier core: a high S fails when NORMALIZE_S is set (W6.1, identity contract 5)"
+
+[[vendor]]
+dir = "vendor/consensus-specs"
+repo = "https://github.com/ethereum/consensus-specs"
+commit = "0216d01ba3215a169953f8783444b8ddaee51ed8"
+branch = "master"
+paths = ["/specs/phase0/p2p-interface.md", "/specs/altair/p2p-interface.md", "/LICENSE"]
+used-for = "the Req/Resp domain: the ssz_snappy encoding, the response chunk, the result codes, the context bytes, and the size caps (W6.3)"
+
+[[vendor]]
+dir = "vendor/snappy"
+repo = "https://github.com/google/snappy"
+commit = "946606459314e55d029c85f9a8c46f8809467f0f"
+branch = "main"
+paths = ["/framing_format.txt", "/format_description.txt", "/COPYING"]
+used-for = "the snappy framing format and the block format the req/resp payload uses (W6.3)"
+
+[[vendor]]
+dir = "vendor/lighthouse"
+repo = "https://github.com/sigp/lighthouse"
+commit = "bee5677194e3cc528fd22a49415330dc7adbe723"
+branch = "unstable"
+paths = ["/beacon_node/lighthouse_network/src/rpc/codec.rs", "/beacon_node/lighthouse_network/src/rpc/methods.rs", "/LICENSE"]
+used-for = "the req/resp decisions: the frame decoder, the length handling, and the error payload of every non-zero result (W6.3)"
+
+[[vendor]]
+dir = "vendor/prysm"
+repo = "https://github.com/OffchainLabs/prysm"
+commit = "4ccffee97f3c5938c70b2cba64629484d09fc094"
+branch = "develop"
+paths = ["/beacon-chain/p2p/encoder/ssz.go", "/beacon-chain/p2p/encoder/varint.go", "/go.mod", "/LICENSE.md"]
+used-for = "the req/resp decisions: the writer shape of the go fixtures, the varint reader, and the snappy version pin (W6.3)"
+
+[[vendor]]
+dir = "vendor/lodestar"
+repo = "https://github.com/ChainSafe/lodestar"
+commit = "50ed45c251a9894bbae0c2ce8ee2a4916e2b4571"
+branch = "unstable"
+paths = ["/packages/reqresp/src/encodingStrategies/sszSnappy/decode.ts", "/LICENSE"]
+used-for = "the req/resp decisions: the reader that takes the size bounds of the type (W6.3)"

@@ -191,7 +191,6 @@ globs = ["Libp2p.Protocols.*"]
 name = "Cli"
 srcDir = "packages/cli"
 roots = ["Cli", "GossipsubInterop", "GossipsubSession"]
-globs = ["GossipsubInterop.*", "GossipsubSession.*"]
 
 # The test tree: one suite module per upstream file, with the shared
 # runner in `Tests/Support.lean`. The `tests` executable is the

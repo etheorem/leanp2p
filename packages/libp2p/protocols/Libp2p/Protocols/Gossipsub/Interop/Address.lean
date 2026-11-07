@@ -23,9 +23,11 @@ def nodeId? (hostname : String) : Option Nat :=
     match suffix.toList with
     | [] => none
     | '0' :: _ :: _ => none
-    | _ => match suffix.toNat? with
-      | some value => if value ≤ 18446744073709551615 then some value else none
-      | none => none
+    | chars =>
+      if !chars.all (fun c => '0' ≤ c && c ≤ '9') then none
+      else match suffix.toNat? with
+        | some value => if value ≤ 18446744073709551615 then some value else none
+        | none => none
 
 /-- Return one little endian byte from a natural number. -/
 def littleEndianByte (value index : Nat) : Nat :=

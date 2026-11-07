@@ -1,5 +1,6 @@
 import Backend
 import LeanHazmatKeccak
+import LeanHazmatSecp256k1
 import Crypto.P256
 import Crypto.Rng
 
@@ -9,7 +10,7 @@ import Crypto.Rng
 The crypto facade, the one crypto import of every caller (root
 ARCHITECTURE §3.6). Each line below names the production
 implementation of one primitive, or of one family. The sources are
-`crypto/backend`, the OpenSSL 3 shim, and two etheorem hazmat packages.
+`crypto/backend`, the OpenSSL 3 shim, and three etheorem hazmat packages.
 The facade ARCHITECTURE gives the reason for each route.
 
 **The swap rule.** To move a primitive, change the right-hand side of
@@ -72,6 +73,15 @@ export Backend (ed25519PublicKey ed25519Sign ed25519Verify ed25519SigLen
 and a DER signature: the etheorem package `LeanHazmatP256`, through
 the adapter of `Crypto.P256`. -/
 abbrev p256Verify : ByteArray → ByteArray → ByteArray → Bool := P256.verify
+
+/-- secp256k1 key recovery: the 64-byte public key `x ‖ y` from a
+32-byte hash, the 32-byte `r` and `s`, and a recovery id from 0 to 3.
+An empty answer covers every failure. The etheorem package
+`LeanHazmatSecp256k1` serves it (root ARCHITECTURE §4.6), and the
+backend binds no recovery. The library accepts a high S here, so a
+caller with a low-S rule checks S itself. -/
+abbrev secp256k1Recover : ByteArray → ByteArray → ByteArray → UInt32 → ByteArray :=
+  LeanHazmat.Secp256k1.ecdsaRecover
 
 /-! ## X.509: the backend -/
 

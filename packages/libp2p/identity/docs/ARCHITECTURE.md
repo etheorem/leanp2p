@@ -14,15 +14,16 @@ imports it for `PeerId`, and nothing in it knows a connection (§2,
 | Module | Holds, and why |
 |---|---|
 | `Libp2p/Identity.lean` | the root module; one import line per public submodule |
-| `Libp2p/Identity/Constants.lean` | the 42-byte inlining threshold, the per-type `Data` lengths, and the DER minima; one home per fact (PRINCIPLES 1.5) |
+| `Libp2p/Identity/Constants.lean` | the 42-byte inlining threshold, the per-type `Data` lengths, and the DER minima; the ENR record cap, field sizes, key names, the secp256k1 half order, and the `enr:` text prefix; one home per fact (PRINCIPLES 1.5) |
 | `Libp2p/Identity/KeyType.lean` | the closed set (§3.4): four constructors, `toCode`/`ofCode?`, and the `ofCodeToCode` theorem |
 | `Libp2p/Identity/Error.lean` | `Identity.Error`, the one error inductive of the package (§3.5) |
 | `Libp2p/Identity/Marshal.lean` | the per-type `Data` forms; produces the bytes the backend loads |
 | `Libp2p/Identity/Keys.lean` | `PubKey` and `PrivKey`, the `ProtoMessage` instances over the field table, and the sign/verify/derive dispatch |
 | `Libp2p/Identity/Unmarshal.lean` | the strict unmarshal: decode, then the per-type `Data` check, before anything derives from the key |
 | `Libp2p/Identity/PeerId.lean` | derivation over the marshaled key, identity inlining, and the text forms |
-| `Libp2p/Identity/Rlp.lean` | the wrapper over the imported RLP library: the `Codec` instances, the error mapping, and the surface; the codec itself comes from the etheorem monorepo |
-| `Libp2p/Identity/Enr.lean` | the ENR record, its typed pairs, and the signature check |
+| `Libp2p/Identity/Rlp.lean` | the package's own RLP (the decision below): the item tree, the model codec with the `Codec` and `LawfulCodec` instances, and the canonical scalars |
+| `Libp2p/Identity/Rlp/Bytes.lean` | the `ByteArray` decoder and encoder, the production path that the harness of `base/bytes` pins to the model |
+| `Libp2p/Identity/Enr.lean` | the ENR record, its typed pairs, the `v4` signature check and signer, and the text form |
 | `Libp2p/Identity/Enr/Mapping.lean` | the peer-id mapping and the multiaddr mapping |
 
 All declarations live in the `Libp2p.Identity` namespace, and the root
@@ -76,22 +77,33 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   ("extract the multihash from the CID. This is the peer ID"), so code
   that asks whether two values name the same peer compares `a.hash ==
   b.hash`. The derived `==` also compares the recorded form.
-- The ENR surface (PLAN W6.1): `Rlp` encodes and decodes through the
-  imported library, behind a `Codec` instance and its law. `Enr`
-  holds the record as a sequence number and typed pairs; the known
-  keys (`secp256k1`, `id`, `ip`, `tcp`, `udp`) are named constructors
+- The ENR surface (PLAN W6.1): `Rlp.Value` encodes and decodes
+  behind a `Codec` instance and its law. `Enr` holds the record as a
+  sequence number and typed pairs. The eight keys that EIP-778 names
+  (`id`, `secp256k1`, `ip`, `tcp`, `udp`, `ip6`, `tcp6`, `udp6`) are
+  named constructors, and any other key is `other` with its bytes
   (PRINCIPLES 1.9). The pairs serialize in sorted key order, and the
-  signature covers that content. EIP-778 fixes the record format and
-  the `v4` identity scheme, and the discv5 specification's ENR
-  section names the `ip6`, `tcp6`, and `udp6` keys the mapping may
-  need. Under `v4`, the record signs the keccak-256 digest of the
-  RLP content with secp256k1, and the signature carries a recovery
-  byte. The digest routes to `LeanHazmatKeccak` through the `Crypto`
-  facade (§3.6; root §4.6).
+  signature covers that content. EIP-778 fixes the record format, the
+  300-byte cap, and the `v4` identity scheme. Under `v4`, the record
+  signs the keccak-256 digest of the RLP content with secp256k1, and
+  the signature is the 64 bytes `r ‖ s`: "the recovery ID `v` is
+  omitted". The digest routes to `LeanHazmatKeccak`, the key
+  recovery to `LeanHazmatSecp256k1`, and the signer to the backend's
+  `secp256k1SignDigest`, each through one `Crypto` facade line (§3.6;
+  root §4.6). `Enr.sign` builds a record from a scalar, a `seq`, and
+  pairs. `Enr.toText` and `Enr.ofText?` carry the text form, `enr:`
+  and a base64url body (contract 7).
   `Enr` verifies the signature before a caller reads a pair (§5.2;
   PRINCIPLES 2.4). `Enr/Mapping` maps the `secp256k1` entry to the
   peer id and the address entries to a `Multiaddr` (§8, "ENR ↔
   multiaddr/peer-id mapping").
+  Both mappings use the real identity and multiformats types. Key
+  construction and peer-id derivation failures map to `Enr.Error.publicKey`.
+  Address decoding failures map to `Enr.Error.multiaddr`.
+  The text encoder fixes the multibase to base64url, whose error arm
+  is unreachable. Its proof keeps `Enr.toText` total through the shared
+  checked encoder. Other bases and codec failures at the multibase
+  boundary map to `Enr.Error.text`.
 
 ## Owned contracts and how the package keeps them
 
@@ -123,15 +135,22 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
 5. **The ENR signature gates the pairs.** The signature verifies
    through the facade before the pairs are readable (§5.2;
    PRINCIPLES 2.4), and a record that fails the check yields no
-   pairs. The scheme's specification is silent on low-S, so a `v4`
-   signature makes no low-S promise, and it carries a recovery byte,
-   as the Ethereum signing convention does. The secp256k1 verifier
-   behind the facade rejects high-S signatures (§4.6), so the ENR
-   module verifies
-   through the recovery path or normalizes S locally, behind its own
-   function. This is the one documented exception to the low-S rule:
-   the discv5 specification fixes the scheme, and weakening the
-   shared verifier would touch every caller.
+   pairs: `Enr` has a private constructor, and only the decoder
+   builds one. `Enr.sign` returns the decode of the record it
+   encodes. EIP-778 is silent on low-S. The implementations refuse
+   a high S: go-ethereum's `crypto.VerifySignature` in both builds
+   (`vendor/go-ethereum/crypto/signature_nocgo.go`, "Reject malleable
+   signatures"; libsecp256k1 in the cgo build, `secp256k1.h`,
+   "secp256k1_ecdsa_verify will not accept others"), and sigp/enr
+   over libsecp256k1 and over k256 (`NORMALIZE_S` in
+   `vendor/rustcrypto-elliptic-curves/k256/src/ecdsa.rs`, checked in
+   `vendor/rustcrypto-signatures/ecdsa/src/hazmat.rs`). So the ENR
+   verifier refuses a high S, and the low-S rule of §4.6 holds here
+   too. The record carries a compressed key and the signature no
+   recovery id, so the module recovers the key for each recovery id,
+   compresses it, and compares it with the record's key. The etheorem
+   recovery accepts a high S, so the module checks S first. The suite
+   pins the high-S twin of the EIP-778 signature as a rejection.
 6. **The print form is the recorded decision.** Go prints the legacy
    base58btc form and js prints the CIDv1 form. The package stores
    the parsed form and prints it back (PRINCIPLES 2.1), so parsing a
@@ -139,6 +158,32 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
    records the base58btc form, the go form, so `ToString` is total.
    `codec/multiformats` fixes the same rule for its `p2p` component
    and hands the peer-id side to this package.
+7. **The ENR text form is canonical.** EIP-778 writes the text form
+   as `enr:` and the URL-safe base64 of the record, with no padding
+   (RFC 4648 §5). The writer prints exactly that. The reader refuses
+   three inputs:
+   - a text without the `enr:` prefix,
+   - an `=` in the body,
+   - non-zero trailing bits in the last character.
+
+   The body runs through `Multibase` under `base64url`, and the
+   canonical decoder of `codec/multiformats` gives the last two rules.
+   The two implementations disagree on two of the rules, so the choice
+   is a decision (PRINCIPLES 2.1):
+   - go-ethereum's `enode.Parse` requires the prefix and decodes with
+     `base64.RawURLEncoding`, which accepts non-zero trailing bits
+     (`vendor/go-ethereum/p2p/enode/node.go`, lines 149 to 152).
+   - sigp/enr's `FromStr` takes the text with or without the prefix,
+     and its decoder refuses the trailing bits
+     (`vendor/sigp-enr/src/lib.rs`, lines 1068 to 1083, and the test
+     `test_read_enr_base64url_decoding_enforce_no_pad_no_extra_trailingbits`).
+
+   The prefix rule follows EIP-778 and go-ethereum. The trailing-bits
+   rule follows sigp/enr and RFC 4648 §3.5, which makes the pad bits
+   zero, so one record has one text. `Tests/vectors/enr-text-sigp.json`
+   extracts sigp's two cases, and the suite refuses both. Its
+   `goEthereum` field records go's answers: it refuses the padded text
+   and accepts the trailing-bits text as the same record.
 
 ## Decisions
 
@@ -152,26 +197,27 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   stay in the surface that W5.1 closes (§8).
 - **The ENR side lives here.** Root PLAN W6.1 assigns it to
   `libp2p/identity`, next to the keys it signs with and the peer id
-  it maps to. discv5 itself stays out of scope (§8). EIP-778 and the
-  discv5 specification's ENR section govern the surface, and the
-  spike branch vendors neither text under `vendor/specs`. Landing
-  unit 2 starts by vendoring both texts and committing the record
-  fixture with recorded provenance, the way the backend plan handles
-  its generated certificates. The keccak-256 digest routes to
-  `LeanHazmatKeccak` (the etheorem package), per the root §4.6 origin
-  split, and the route is one facade line (§3.6).
-- **RLP is imported from etheorem.** Root PLAN W6.1 takes the RLP
-  codec from the etheorem monorepo (`etheorem/etheorem`), the Lean 4
-  consensus implementation this stack targets. The owner picked it
-  over writing a fourth codec. Its facts, recorded: the RLP package
-  is upstream work and not yet on its `main` (the monorepo says
-  per-package publication repos will exist later); the license is
-  LGPL-3.0 with a contributor agreement; the monorepo pins Lean
-  v4.34.1 against this repo's v4.34.0. Unit 2 tracks the package,
-  checks the toolchain skew, and wraps it behind the `Codec` surface
-  and the package's own error mapping, with no second RLP. The
-  recorded fallback, should the upstream not land in time or the
-  skew not close, is the package's own small RLP.
+  it maps to. discv5 itself stays out of scope (§8). EIP-778
+  (`vendor/eips/EIPS/eip-778.md`) governs the surface: the record,
+  the eight key names, the `v4` scheme, and the example record that
+  `Tests/vectors/enr-eip778.json` extracts. The keccak-256 digest
+  routes to `LeanHazmatKeccak` and the key recovery to
+  `LeanHazmatSecp256k1` (the etheorem packages), per the root §4.6
+  origin split. The signer is the backend's, because the etheorem
+  family binds no signer. Each route is one facade line (§3.6).
+- **The RLP is the package's own.** The RLP package of the etheorem
+  monorepo (`LeanRlp`, LGPL-3.0) is the upstream source, and the
+  package's own small RLP is the fallback while the upstream has not
+  landed what the unit needs. The upstream facts: `LeanRlp` has its
+  item codec and the fuel and header theorems on `main` (`2569ba5a`,
+  etheorem/etheorem#123). Its vector runner (its PLAN, Stage 2) and
+  its round-trip, injectivity, and canonical-form theorems (Stage 3)
+  have not landed. The unit needs both: the `LawfulCodec` law, and a
+  vector suite as the acceptance test. So the fallback is in force.
+  `Rlp.lean` proves the law over the byte model (§6, layer 1), and
+  the ethereum/tests `RLPTests` vectors are the acceptance suite. The
+  `Codec` surface is the one boundary, so the codec behind it is one
+  module.
 - **The strictness depth stops at the DER shell.** A full DER parse
   here would duplicate the backend's parser, and two parsers drift.
   The shell check is enough to gate the id derivation; the verifier
@@ -188,15 +234,9 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   and `codec/multiformats` (multihash, multibase, base58, CID, and
   multiaddr for the ENR mapping). The multiformats pair fixes the
   multihash this package validates over. `codec/varint` arrives
-  through `codec/proto`.
+  through `codec/proto`, and the ENR mapping imports it for the
+  protocol codes of a binary multiaddr component.
 - From base, `base/bytes` for the byte model. The package is pure; it
   spawns no task, so it has no use for `base/conc`.
-- One external Lean dependency, the etheorem monorepo's RLP package
-  (`etheorem/etheorem`, LGPL-3.0), for the RLP wrapper, and no other.
-  CLAUDE.md's dependency rule records it: the require block,
-  `lake update`, the pinned git rev, and `lake-manifest.json`
-  committed. Unit 2's first step is tracking the upstream package,
-  which is not yet on the monorepo's `main`, and the v4.34
-  toolchain-compat check of the pin (the monorepo pins v4.34.1). The
-  recorded fallback is the package's own small RLP if the upstream
-  does not land or the skew does not close.
+- No external Lean dependency: the RLP is the package's own (the
+  decision above).

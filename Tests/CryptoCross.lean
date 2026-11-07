@@ -26,6 +26,9 @@ the P-256 differential against the backend verifier.
   must give the same bytes.
 * **The P-256 route.** The etheorem route against `Backend.p256Verify`,
   case by case.
+* **The secp256k1 recovery route.** Fresh backend keys and signatures:
+  the etheorem recovery gives back each signer's point, for the low S
+  and for its high-S twin.
 -/
 
 set_option autoImplicit false
@@ -351,6 +354,38 @@ private def p256Generated (r : Runner) : IO Unit := do
   r.check s!"P-256 route: {draws} fresh keys and signatures, both accept and both reject a tamper ({good} did)"
     (good == draws)
 
+/-- The secp256k1 recovery route. The backend binds no recovery, so the
+backend derivation is the reference: some recovery id from 0 to 3 must
+give back the signer's point. A high S recovers too, which the route's
+docstring tells callers. -/
+private def k1Recover (r : Runner) : IO Unit := do
+  let msg := ofString "the secp256k1 recovery route"
+  let hash ← okX "sha256" (Crypto.sha256 msg)
+  -- The SEC1 compressed form of `x ‖ y`: 0x02 or 0x03 by the parity of
+  -- y, then x.
+  let compress (k : ByteArray) : ByteArray :=
+    ByteArray.mk #[0x02 ||| (k.get! 63 &&& 1)] ++ k.extract 0 32
+  let recovers (point sr ss : ByteArray) : Bool :=
+    [0, 1, 2, 3].any fun (id : UInt32) =>
+      let k := Crypto.secp256k1Recover hash sr ss id
+      k.size == 64 && compress k == point
+  let draws := 8
+  let mut low := 0
+  let mut high := 0
+  for _ in [0:draws] do
+    let scalar ← okX "secp256k1Generate" (← Crypto.secp256k1Generate.run)
+    let point ← okX "secp256k1PublicKey" (Crypto.secp256k1PublicKey scalar)
+    let (sr, ss) ← Ecdsa.derSig "secp256k1Sign" (← okX "secp256k1Sign" (Crypto.secp256k1Sign scalar msg))
+    let srB := Ecdsa.bytesOfNat 32 sr
+    if recovers point srB (Ecdsa.bytesOfNat 32 ss) then low := low + 1
+    if recovers point srB (Ecdsa.bytesOfNat 32 (Ecdsa.secp256k1Order - ss)) then high := high + 1
+  r.check s!"secp256k1 recovery route: {draws} fresh signatures recover the signer's point ({low} did)"
+    (low == draws)
+  r.check s!"secp256k1 recovery route: their high-S twins recover it too ({high} did)"
+    (high == draws)
+  r.check "secp256k1 recovery route: a recovery id past 3 gives the empty answer"
+    (Crypto.secp256k1Recover hash (Ecdsa.bytesOfNat 32 1) (Ecdsa.bytesOfNat 32 1) 4).isEmpty
+
 def CryptoCross.run (r : Runner) : IO Unit := do
   r.section "crypto cross-check"
     "RFC 4231, RFC 5869, FIPS 180-4, multihash README, go-libp2p core/crypto/test_data"
@@ -361,5 +396,6 @@ def CryptoCross.run (r : Runner) : IO Unit := do
   generated r
   p256Fixture r
   p256Generated r
+  k1Recover r
 
 end Tests

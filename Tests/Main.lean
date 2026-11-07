@@ -1,5 +1,4 @@
 import Tests.Support
-import Tests.Vectors
 import Tests.Gossipsub.Core
 import Tests.Gossipsub.Sign
 import Tests.Gossipsub.Cache
@@ -8,6 +7,7 @@ import Tests.Gossipsub.Rpc
 import Tests.Gossipsub.Node
 import Tests.Gossipsub.Wire
 import Tests.Gossipsub.Interop
+import Tests.Vectors
 import Tests.Concurrency
 import Tests.Protobuf
 import Tests.Bytes
@@ -25,14 +25,17 @@ import Tests.BackendSoak
 import Tests.Hashes
 import Tests.Facade
 import Tests.CryptoCross
-import Tests.Protocols
 import Tests.Yamux
 import Tests.Identity
 import Tests.Core
 import Tests.Noise
+import Tests.Rlp
+import Tests.Enr
 import Tests.Negotiate
 import Tests.Upgrade
 import Tests.Host
+import Tests.Protocols
+import Tests.ReqResp
 
 /-!
 # Test entry point
@@ -73,12 +76,15 @@ def main : IO UInt32 := do
   Tests.Hashes.run r
   Tests.Facade.run r
   Tests.CryptoCross.run r
-  Tests.Protocols.run r
   Tests.Yamux.run r
   Tests.Identity.run r
   Tests.Core.run r
   Tests.Noise.run r
+  Tests.Rlp.run r
+  Tests.Enr.run r
   Tests.Negotiate.run r
   Tests.Upgrade.run r
   Tests.Host.run r
+  Tests.Protocols.run r
+  Tests.ReqResp.run r
   r.summary
