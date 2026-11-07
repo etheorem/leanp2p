@@ -25,6 +25,19 @@ structure Running where
   host : Libp2p.Host.Host
   node : Node
 
+/-- The protocol ids this host serves, as the identify responder
+advertises them. `Host.new` installs identify; `Node.start` installs
+meshsub before `listen`, so every peer that asks after the listen sees
+both ids.
+
+A peer that learns no served id here never opens its own gossipsub
+stream to this node: go-libp2p-pubsub adds a peer only after identify
+reports a protocol that the router speaks, then opens the router stream.
+An empty list leaves the peer with no router stream, so it never enters
+the mesh. -/
+def servedProtocols : List String :=
+  [identifyId.toString, meshsubId.toString]
+
 /-- Build Noise and the real TCP host. Node.start installs meshsub. -/
 def start (identity : PrivKey) (nodeConfig : Node.Config := {}) : IO (Except String Running) := do
   let generated ← (Libp2p.Security.Noise.Config.generate identity).run
@@ -39,7 +52,7 @@ def start (identity : PrivKey) (nodeConfig : Node.Config := {}) : IO (Except Str
     transports := [Streams.Tcp.transport]
     security := [Libp2p.Security.Noise.securityProtocol noise]
     muxers := [yamuxMuxer]
-    handlers := [Identify.respondHandler pubkey [] [] none "leanp2p"] }
+    handlers := [Identify.respondHandler pubkey [] servedProtocols none "leanp2p"] }
   let hostResult ← BaseIO.toIO (Libp2p.Host.Host.new config)
   let host ← match hostResult with
     | .error e => return .error (reprStr e)
