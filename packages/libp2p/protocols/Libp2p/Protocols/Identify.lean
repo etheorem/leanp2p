@@ -6,7 +6,7 @@ import Streams.Framing
 import Streams.Stream
 import Multiformats.Multiaddr.Binary
 import Libp2p.Protocols.Identity
-import Libp2p.Protocols.Mock.Host
+import Libp2p.Host
 import Libp2p.Protocols.Constants
 import Libp2p.Protocols.StreamError
 
@@ -41,7 +41,6 @@ set_option autoImplicit false
 
 namespace Libp2p.Protocols
 
-open Mock
 
 /-- One identify response. The field numbers are the ones of the
 go-libp2p v0.50.0 identify protobuf. -/
@@ -497,7 +496,7 @@ def mapIdentifyError : Error → Libp2p.Core.Error
 An empty read leaves the peerstore unchanged. This is a delta from go,
 whose `consumeMessage` runs on the empty message and clears the peer's
 protocols. -/
-def push (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
+def push (store : Libp2p.Host.Host) (expected : Libp2p.Identity.PeerId)
     (clock : Conc.Clock) (timeoutMs : Nat) (s : Streams.Stream) :
     Conc.Async (Except Error Unit) := do
   match ← Conc.withinDeadline clock timeoutMs (resetQuietly s) (readFrame s) with
@@ -509,15 +508,15 @@ def push (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
       match validate payload (some expected) with
       | .error e => return .error e
       | .ok (m, pid) =>
-          store.addAddrs pid m.listenAddrs
+          store.addAddrs pid (m.listenAddrs.filterMap (fun a => (Multiformats.Multiaddr.ofBytes? a).toOption))
           return .ok ()
 
 /-- The push handler value. -/
-def pushHandler (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
+def pushHandler (store : Libp2p.Host.Host)
     (clock : Conc.Clock) (timeoutMs : Nat) : Libp2p.Core.StreamHandler :=
   { id := pushId,
-    handle := fun _ s => ExceptT.mk ((Except.mapError mapIdentifyError) <$>
-      push store expected clock timeoutMs s) }
+    handle := fun ctx s => ExceptT.mk ((Except.mapError mapIdentifyError) <$>
+      push store ctx.remotePeer clock timeoutMs s) }
 
 /-- Write one length-delimited message and half-close. The
 responder and the push sender share this body: both announce the same
