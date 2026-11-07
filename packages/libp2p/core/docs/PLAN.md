@@ -50,8 +50,8 @@ is a check the build enforces.
 - The seams admit their test values. A test module assembles a
   `SecurityProtocol` value from test doubles over the sim transport of
   `net/streams` (W4.1), a `Muxer` value over a toy session, and a
-  `StreamHandler` over a toy callback. Each assembly is an `example`
-  the build type-checks. When W5.3 and W5.4 land, their production
+  `StreamHandler` over a toy callback. Each assembly is a definition
+  the build type-checks, and the suite runs it over a sim pair. When W5.3 and W5.4 land, their production
   and test values must compile against this frozen surface with no
   edit to `core`, or with a refinement `core` records first; their
   own plans carry that check. The spike already answered the
@@ -74,8 +74,9 @@ is a check the build enforces.
   target the §2 lint guards for the rule "implementations import
   `core`; `negotiate` and `host` import `core` and no implementation".
 - The `-N1` pass (§6, PRINCIPLES 5.3) is trivially green here: the
-  suite is compile-level and spawns no task. The run stays in the
-  definition of done, so the check exists even where it cannot fail.
+  runtime checks run the doubles over the sim transport in the test
+  task and spawn no task. The run stays in the definition of done, so
+  the check exists even where it cannot fail.
 
 ## Vector stance
 
