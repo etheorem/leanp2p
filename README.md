@@ -13,7 +13,7 @@ bottom-up, in the order of [`docs/PLAN.md`](docs/PLAN.md). W1 starts
 ## What it is
 
 A libp2p stack in Lean 4. Its first target is the **Ethereum consensus
-layer**: `tcp + /noise + /yamux`, identify, req/resp (`ssz_sn`), and
+layer**: `tcp + /noise + /yamux`, identify, req/resp (`ssz_snappy`), and
 gossipsub v1.1. Everything else that libp2p offers stays a deferred
 seam behind the interfaces. ARCHITECTURE.md §8 gives the full priority
 list.

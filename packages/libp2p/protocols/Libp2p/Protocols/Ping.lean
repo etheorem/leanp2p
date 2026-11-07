@@ -145,7 +145,7 @@ def mapPingError : Error → Mock.Core.Error
 /-- The ping handler value. -/
 def pingHandler : Mock.Core.StreamHandler :=
   { id := protocolId,
-    handle := fun s => ExceptT.mk ((Except.mapError mapPingError) <$> handleCore s) }
+    handle := fun _ctx s => ExceptT.mk ((Except.mapError mapPingError) <$> handleCore s) }
 
 /-- Accumulate echo chunks until one whole payload is present. The
 initiator reads one 32-byte payload, so an accumulator above that size

@@ -1007,7 +1007,7 @@ interface seams exist, and no implementation work is scheduled.
 | keys + peer id, **Ed25519** (+ secp256k1 host keys) | host identity; clients use Ed25519/secp256k1 | done (Ed25519 and secp256k1) |
 | identify (+ identify-push) | peer metadata; gossipsub peer scoring | done (push is trivial) |
 | protobuf codec + key/identify messages | identify, ENR, host keys | done |
-| **req/resp framework** (`/eth2/.../ssz_sn`) | Status, BlocksByRange/ByRoot, BlobSidecarsByRange/ByRoot, Metadata, Ping, Goodbye; SSZ with **snappy** framing over libp2p streams | **new work** (snappy is a new dependency, bound FFI first per the §4 dependency strategy; SSZ encoding is pure Lean) |
+| **req/resp framework** (`/eth2/beacon_chain/req/.../ssz_snappy`) | Status, BlocksByRange/ByRoot, BlobSidecarsByRange/ByRoot, Metadata, Ping, Goodbye; SSZ with **snappy** framing over libp2p streams | **new work** (snappy is a new dependency, bound FFI first per the §4 dependency strategy; the framing format and its CRC-32C are pure Lean over the block binding; SSZ encoding is pure Lean) |
 | **gossipsub v1.1** | blocks, aggregates, slashings, exits, blob sidecars | **new work** (the largest component) |
 | host/upgrade/peerstore, dedup, deadlines | everything above composes through them | done (TTLs/limits deferred) |
 | ENR ↔ multiaddr/peer-id mapping | discovery integration (discv5 sits outside libp2p and outside this scope) | multiaddr side done; ENR codec new (simple RLP) |

@@ -47,6 +47,13 @@ private def testPeer (tag : UInt8) : PeerId :=
   PeerId.inline (ByteArray.mk #[tag]) (by
     simp [ByteArray.size, Libp2p.Identity.maxInlineKeyBytes])
 
+/-- A placeholder served-stream context. The identify and ping
+handlers read no context field, so the empty address never reaches a
+check. -/
+private def testContext : Libp2p.Protocols.Mock.Core.StreamContext :=
+  { remotePeer := testPeer 0,
+    remoteAddr := ⟨{ frames := [], valid := by decide }⟩ }
+
 /-- The model decode over the byte list. -/
 private def decodeModel (bs : List Nat) : Except Pb.Error (Identify × List Nat) :=
   Pb.decodeMessage? (α := Identify) bs
@@ -121,7 +128,7 @@ private def isProtocolError (x : Except Libp2p.Protocols.Mock.Core.Error Unit) :
 answers an error. -/
 private def runHandler (h : Libp2p.Protocols.Mock.Core.StreamHandler)
     (s : Streams.Stream) : Conc.Async Unit := do
-  let res : Except Libp2p.Protocols.Mock.Core.Error Unit ← h.handle s
+  let res : Except Libp2p.Protocols.Mock.Core.Error Unit ← h.handle testContext s
   match res with
   | .error e => throw (IO.userError s!"the handler answered {repr e}")
   | .ok () => pure ()
@@ -408,7 +415,7 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
       Conc.OnceRef.new none
     let ts ← Conc.TaskSet.new
     ts.spawn do
-      answer.set (some (← Ping.pingHandler.handle pair.b))
+      answer.set (some (← Ping.pingHandler.handle testContext pair.b))
     discard <| pair.a.write (Bytes.ofNatList (List.replicate 20 7))
     pair.ab.close
     ts.joinAll
