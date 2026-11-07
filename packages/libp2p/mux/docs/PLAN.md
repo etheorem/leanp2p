@@ -12,13 +12,14 @@ the suite passes under `+RTS -N1`, and the import lint is green.
 | Unit | Root deps | Deliverable | Done when |
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
-| 1 | W4.3, W5.2 | the yamux `Muxer` value over the W4.3 session: `Mux.yamux`, the constants module, the `Except.mapError` into `Core.Error`, and the fixed-ids test value | the root W5.4 row holds, and the unit 1 milestones below pass |
+| 1 | W4.3, W5.2 | the yamux `Muxer` value over the W4.3 session: `Mux.yamux` with the `Role` conversion, the constants module, the `Except.mapError` into `Core.Error`, and the independent `Mux.test` session, with its private frame codec and incremental parser. The temporary W5.2 seam mock stays isolated under `Libp2p/Mux/Mock/` and is replaced by `Libp2p.Core` when that package lands | the root W5.4 row holds, and the unit 1 milestones below pass |
 | 2 | W2.1, W5.2, unit 1 | the mplex value (P2, §8): the message codec, `Mux.mplex`, the go-compatible `(id, initiator)` identity, the half-close rules, and the 1 MiB cap | the mplex half of the root W5.4 deliverable holds, and the unit 2 milestones below pass |
 
 Unit 2's deps are the package's own call. The root graph lets mplex
 follow W5.4 at any time, and the mplex core needs the seam (W5.2) and
 no yamux session. Unit 1 comes first because it lays the constants
-module and the test-value pattern that unit 2 reuses.
+module, including `Mux.mplexMessageCap`. Unit 2 checks a declared
+length against that cap.
 
 Unit 0 is done.
 
@@ -51,10 +52,63 @@ Unit 0 is done.
 - The error path maps once: a hostile frame tears the session down,
   and the completion reports `Core.Error.protocol` through the single
   `Except.mapError` (§3.5).
-- The fixed-ids test value serves a suite above, kept honest: a demo
-  registry dials itself over the sim pair and serves one handler
-  through the test session (§3.1).
-- The suite passes under `+RTS -N1` (§6, PRINCIPLES 5.3).
+- The private frame codec and the incremental parser (the
+  architecture, private frame; parser and codec).
+- `Mux.test` is independent of Yamux. The build checks
+  `Mux.test.id = Mux.testId` and
+  `Mux.testId.toString = "/leanp2p/test-mux/1.0.0"` (the architecture,
+  an independent test muxer).
+- The temporary W5.2 seam mock stays isolated, and the package
+  replaces it with `Libp2p.Core` when W5.2 lands (the architecture,
+  boundary).
+- Pure state-transition tests, then deterministic two-ended sim tests
+  (PRINCIPLES 1.4). A demo registry dials itself over the sim pair and
+  serves one handler through the test session (§3.1).
+- Simultaneous opens in both roles, and several concurrent streams
+  (the architecture, stream ids).
+- Ordered writes, multi-frame writes, and an empty write (the
+  architecture, scheduling and writes).
+- Half-close and reset (the architecture, scheduling and writes;
+  stream lifetime).
+- Both directions close, the id leaves the live table, and a read
+  still drains buffered bytes to EOF (the architecture, stream
+  lifetime).
+- A reset retires the id at once (the architecture, stream lifetime).
+- Reset ordering on one stream: queue bytes, reset, read those bytes,
+  then `.error .reset` once, then `.ok none`. New writes fail, and
+  the id is already retired (the architecture, stream lifetime).
+- Data after a received fin, and a duplicate fin, are ignored on a
+  live stream (the architecture, stream lifetime).
+- A remote open refused for capacity consumes that expected id, and
+  the next remote id is accepted (the architecture, stream ids).
+- A local open that waits takes no id (the architecture, stream ids).
+- A blocked read, write, open, and `accept` each wake on shutdown
+  (the architecture, ownership; terminal causes).
+- A writer waiting outside admission wakes on half-close and on
+  shutdown, and completes with the closed stream result (the
+  architecture, scheduling and writes).
+- Malformed header and body cases. Partial input followed by more
+  bytes. Partial input followed by connection end (the architecture,
+  parser and codec).
+- Id parity, strict sequencing, the final valid ids, and exhaustion
+  (the architecture, stream ids).
+- Accept and inbox backpressure (the architecture, accept and
+  backpressure).
+- Owner-close, connection-end, fault, and protocol terminal races
+  (the architecture, terminal causes).
+- Fairness under a large write and under dense inbound frames (the
+  architecture, scheduling and writes).
+- Buffered frames and a multi-frame write make progress while no new
+  event is queued (the architecture, scheduling and writes).
+- Resource checks separate the copied-byte subtotal from retained
+  caller arrays, the `Connection.read` array, and parked callers (the
+  architecture, resources).
+- `Mux.yamux` maps `initiator` to the Yamux client and `responder` to
+  the Yamux server (the architecture, the `Role` decision).
+- The Yamux wire parity cases belong to the `net/yamux` suite (the
+  yamux pair, plan).
+- The ordinary suite and the `+RTS -N1` suite both pass (§6,
+  PRINCIPLES 5.3).
 
 ## Test milestones (unit 2)
 
@@ -64,8 +118,8 @@ Unit 0 is done.
   map holds `(0, initiator)` beside `(0, non-initiator)` with no
   cross-delivery. The flag bit routes every inbound message to the key
   it names.
-- The 1 MiB cap: a declared length one over the cap is a protocol
-  error, rejected before allocation (§5.1, PRINCIPLES 2.3).
+- The 1 MiB cap: a declared length one over `Mux.mplexMessageCap` is a
+  protocol error, rejected before allocation (§5.1, PRINCIPLES 2.3).
 - A header varint that cannot complete within 9 bytes is a protocol
   error, not a request for more bytes; a short prefix stays incomplete
   (§5.2, PRINCIPLES 5.4).

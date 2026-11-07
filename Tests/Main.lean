@@ -16,6 +16,7 @@ import Tests.Snappy
 import Tests.Multiformats
 import Tests.MultiaddrWire
 import Tests.Streams
+import Tests.Mux
 import Tests.Backend
 import Tests.HazmatPins
 import Tests.BackendX509
@@ -59,6 +60,7 @@ def main : IO UInt32 := do
   Tests.Multiformats.run r
   Tests.MultiaddrWire.run r
   Tests.Streams.run r
+  Tests.Mux.run r
   Tests.Backend.run r
   Tests.HazmatPins.run r
   Tests.BackendX509.run r
