@@ -72,12 +72,28 @@ def run (args : List String) : IO UInt32 := do
         let (_, targetPeer) ← match identityForNode target.toNat with
           | .ok value => pure value
           | .error e => return .error e
-        let addressText := s!"/ip4/172.30.246.{10 + target.toNat}/tcp/9000"
+        let nodeName := s!"node{target.toNat}"
+        let ip? ← lookupHostsFile nodeName
+        let addressText ← match ip? with
+          | none => return .error s!"no /etc/hosts entry for {nodeName}"
+          | some ip =>
+            match multiaddrPrefix ip with
+            | some value => pure value
+            | none => return .error s!"invalid IPv4 entry for {nodeName}"
         let address ← match Multiaddr.parse? addressText with
           | .ok value => pure value
           | .error e => return .error (reprStr e)
         active.host.addAddrs targetPeer [address]
-        match ← active.host.dialPeer targetPeer with
+        let mut dialResult := ← active.host.dialPeer targetPeer
+        for attempt in [1, 2, 3, 4] do
+          match dialResult with
+          | .error (.unreachable _) =>
+            IO.eprintln s!"dial {nodeName} unreachable, retry {attempt}/5 after 200 ms"
+            let timer ← (Conc.Clock.system.after 200 : BaseIO (Conc.Park Unit))
+            discard <| Conc.select #[timer]
+            dialResult ← active.host.dialPeer targetPeer
+          | _ => break
+        match dialResult with
           | .ok joined =>
             if ← active.node.peerJoined joined .meshsub then pure (.ok ())
             else pure (.error "peerJoined queue refused")
