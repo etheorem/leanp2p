@@ -29,6 +29,8 @@ import Tests.Yamux
 import Tests.Identity
 import Tests.Core
 import Tests.Noise
+import Tests.Negotiate
+import Tests.Upgrade
 
 /-!
 # Test entry point
@@ -73,4 +75,6 @@ def main : IO UInt32 := do
   Tests.Identity.run r
   Tests.Core.run r
   Tests.Noise.run r
+  Tests.Negotiate.run r
+  Tests.Upgrade.run r
   r.summary
