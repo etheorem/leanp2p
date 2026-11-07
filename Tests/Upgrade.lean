@@ -741,10 +741,16 @@ private def secValueExact (seedRef : Conc.OnceRef (Option ByteArray)) :
     match ← readExactly conn seed 4 with
     | none => throw (.closed "test handshake read ended before the marker")
     | some four =>
-      return { toConnection := conn,
+      let extra := Bytes.ofNatList (four.drop 4)
+      let pending ← Conc.OnceRef.new extra
+      let secureConn : Streams.Connection := { conn with
+        read := do
+          let bytes ← (pending.updateGet (fun b => (b, ByteArray.empty)) : BaseIO ByteArray)
+          if bytes.isEmpty then conn.read else pure (some bytes) }
+      return { toConnection := secureConn,
                localPeer := if role = .initiator then dialerId else listenerId,
                remotePeer := if role = .initiator then listenerId else dialerId,
-               leftover := Bytes.ofNatList (four.drop 4),
+               leftover := extra,
                join := pure () }
 
 /-- The multistream exchange of both roles over a splitting sim, for a
