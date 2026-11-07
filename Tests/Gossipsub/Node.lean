@@ -1,5 +1,6 @@
 import Tests.Support
 import Tests.Gossipsub.Identity
+import Tests.Gossipsub.Switch
 import Libp2p.Protocols.Gossipsub.Node
 
 /-!
@@ -20,7 +21,7 @@ open Conc
 open Libp2p.Protocols
 open Libp2p.Protocols.Gossipsub
 open Libp2p.Protocols.Gossipsub.Node
-open Libp2p.Protocols.Mock.Host (Switch HostSeam)
+open Tests.Gossipsub (Switch)
 
 private def pa : Peer := Identity.peer 1
 private def pb : Peer := Identity.peer 2
@@ -89,7 +90,8 @@ private def probe (sw : Switch) (me : Peer) (seen : Chan Seen)
   let (host, _) ← sw.host me
   host.setHandler {
     id := Constants.meshsubId
-    handle := fun sender stream => ExceptT.lift do
+    handle := fun ctx stream => ExceptT.lift do
+      let sender := ctx.remotePeer
       let mut buf : List Nat := []
       let mut done := false
       repeat
@@ -175,9 +177,9 @@ private def switchChecks (r : Tests.Runner) : Async Unit := do
   let (a, _) ← (sw.host pa : BaseIO (HostSeam × TaskSet))
   let (b, _) ← (sw.host pb : BaseIO (HostSeam × TaskSet))
   let sender ← (Chan.new 8 : BaseIO (Chan Peer))
-  let id : Mock.Core.ProtocolId := ⟨"/node-test-echo"⟩
-  (b.setHandler { id, handle := fun peer s => ExceptT.lift do
-    discard (sender.trySend peer : BaseIO Bool)
+  let id : Libp2p.Core.ProtocolId := ⟨"/node-test-echo"⟩
+  (b.setHandler { id, handle := fun ctx s => ExceptT.lift do
+    discard (sender.trySend ctx.remotePeer : BaseIO Bool)
     repeat
       match ← s.read with
       | .ok (some bytes) => discard <| s.write bytes
@@ -336,7 +338,7 @@ private def frameBoundaryChecks (r : Tests.Runner) : Async Unit := do
         write := fun _ => pure (.ok ())
         close := pure ()
         reset := (reset.set true : BaseIO Unit) }
-    let result ← ((handler events).handle pa stream).run
+    let result ← ((handler events).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } stream).run
     r.check s!"node.framing.{name}"
       ((match result with | .error (.protocol _) => true | _ => false) &&
         (← (reset.get : BaseIO Bool)))
@@ -349,7 +351,7 @@ private def outboundFailureChecks (r : Tests.Runner) : Async Unit := do
   let closed ← (Chan.new 8 : BaseIO (Chan Unit))
   let inbound ← (Pipe.new 16 : BaseIO Pipe)
   let opens ← (OnceRef.new 0 : BaseIO (OnceRef Nat))
-  let saved ← (OnceRef.new (none : Option Mock.Core.StreamHandler) : BaseIO (OnceRef (Option Mock.Core.StreamHandler)))
+  let saved ← (OnceRef.new (none : Option Libp2p.Core.StreamHandler) : BaseIO (OnceRef (Option Libp2p.Core.StreamHandler)))
   let host : HostSeam := {
     setHandler := fun h => saved.set (some h)
     newStream := fun _ _ => do
@@ -362,7 +364,7 @@ private def outboundFailureChecks (r : Tests.Runner) : Async Unit := do
   let tc ← (TestClock.new : BaseIO TestClock)
   let n ← (start host { clock := tc.clock, onRpc := fun _ _ => discard (receipts.trySend ()) } : BaseIO Node)
   discard (n.subscribe topic (fun m => discard <| deliveries.trySend m) : BaseIO Bool)
-  let some h ← (saved.get : BaseIO (Option Mock.Core.StreamHandler))
+  let some h ← (saved.get : BaseIO (Option Libp2p.Core.StreamHandler))
     | throw <| IO.userError "missing node handler"
   let owner ← (TaskSet.new : BaseIO TaskSet)
   let stream : Streams.Stream := {
@@ -371,7 +373,7 @@ private def outboundFailureChecks (r : Tests.Runner) : Async Unit := do
     close := pure ()
     reset := (inbound.close : BaseIO Unit) }
   owner.spawn do
-    discard <| (h.handle pa stream).run
+    discard <| (h.handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } stream).run
   discard <| inbound.write (frame (Core.publishRpc (message [31])))
   r.check "node.failure.first-inbound-publish-delivers"
     ((← receive deliveries) == some (message [31]))
@@ -405,7 +407,7 @@ private def readerCopyChecks (r : Tests.Runner) : Async Unit := do
     write := fun _ => pure (.ok ())
     close := pure ()
     reset := pure () }
-  let result ← ((handler events).handle pa dribble).run
+  let result ← ((handler events).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } dribble).run
   let inputs ← (events.drain : BaseIO (List Input))
   let bodies := inputs.filterMap fun
     | .event (.rpc _ bytes) => some bytes
@@ -421,7 +423,7 @@ private def readerCopyChecks (r : Tests.Runner) : Async Unit := do
   let mixed := { dribble with read := do
     let bytes ← (pending.updateGet (fun xs => (xs.head?, xs.drop 1)) : BaseIO (Option ByteArray))
     return .ok bytes }
-  let mixedResult ← ((handler mixedEvents).handle pa mixed).run
+  let mixedResult ← ((handler mixedEvents).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } mixed).run
   let mixedInputs ← (mixedEvents.drain : BaseIO (List Input))
   let mixedBodies := mixedInputs.filterMap fun
     | .event (.rpc _ bytes) => some bytes
