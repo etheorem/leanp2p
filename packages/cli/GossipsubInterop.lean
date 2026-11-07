@@ -135,12 +135,28 @@ structure ReceiptObserver where
 def ReceiptObserver.new (writer : RecordWriter) : BaseIO ReceiptObserver := do
   return { writer, offers := ← Conc.OnceRef.new 0, failures := ← Conc.OnceRef.new 0 }
 
-/-- RFC3339 UTC time with fixed millisecond precision. -/
+/-- Format a natural number with at least two decimal digits. -/
+def pad2 (value : Nat) : String :=
+  let text := String.ofList (Nat.toDigits 10 value)
+  if text.length = 1 then "0" ++ text else text
+
+/-- Format a natural number with at least three decimal digits. -/
+def pad3 (value : Nat) : String :=
+  let text := String.ofList (Nat.toDigits 10 value)
+  if text.length = 1 then "00" ++ text
+  else if text.length = 2 then "0" ++ text
+  else text
+
+/-- RFC3339 UTC time from the monotonic millisecond clock. -/
 def observationTime : BaseIO String := do
-  let millis ← IO.monoMsNow
-  let fraction := String.ofList (Nat.toDigits 10 (millis % 1000))
-  let fixed := if fraction.length = 1 then "00" ++ fraction else if fraction.length = 2 then "0" ++ fraction else fraction
-  return "1970-01-01T00:00:00." ++ fixed ++ "Z"
+  let nowMs ← IO.monoMsNow
+  let secs := (nowMs / 1000) % 86400
+  let ms := nowMs % 1000
+  let hours := secs / 3600
+  let minutes := (secs / 60) % 60
+  let seconds := secs % 60
+  return "1970-01-01T" ++ pad2 hours ++ ":" ++ pad2 minutes ++ ":" ++
+    pad2 seconds ++ "." ++ pad3 ms ++ "Z"
 
 /-- Decode one RPC and offer one receipt for every publish entry. -/
 def ReceiptObserver.onRpc (observer : ReceiptObserver) (sender : String) (bytes : List Nat) : BaseIO Unit := do
