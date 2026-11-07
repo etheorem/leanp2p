@@ -506,21 +506,42 @@ private def upgradeCore {ρ : Type} (role : Libp2p.Core.Role) (conn : Streams.Co
       | .error e => return .error e
       | .ok sc =>
         match checkIdentity expected sc.remotePeer with
-        | .error e => return .error e
+        | .error e =>
+          sc.toConnection.closeQuietly
+          discard sc.join.run
+          return .error e
         | .ok () =>
           if let some reason ← (admit sc.remotePeer : BaseIO (Option ρ)) then
             sc.toConnection.closeQuietly
+            discard sc.join.run
             return .ok (.refused reason)
           let muxReader := Streams.BufReader.new sc.toConnection
           match ← negotiate role muxReader sc.toConnection ByteArray.empty (muxers.map (·.id)) with
-          | .error e => return .error e
+          | .error e =>
+            sc.toConnection.closeQuietly
+            discard sc.join.run
+            return .error e
           | .ok stage2 =>
             match muxers.find? (fun m => decide (m.id = stage2.proto)) with
-            | none => return .error (.protocol "selected muxer is not configured")
+            | none =>
+              sc.toConnection.closeQuietly
+              discard sc.join.run
+              return .error (.protocol "selected muxer is not configured")
             | some mux =>
               match ← mux.«open» role sc.toConnection stage2.leftover with
-              | .error e => return .error e
-              | .ok session => return .ok (.upgraded { session, remotePeer := sc.remotePeer, join := sc.join })
+              | .error e =>
+                sc.toConnection.closeQuietly
+                discard sc.join.run
+                return .error e
+              | .ok session =>
+                let join : ExceptT Libp2p.Core.Error Conc.Async Unit := do
+                  let muxResult ← session.join.run
+                  let secureResult ← sc.join.run
+                  match muxResult, secureResult with
+                  | .error e, _ => throw e
+                  | _, .error e => throw e
+                  | .ok (), .ok () => pure ()
+                return .ok (.upgraded { session, remotePeer := sc.remotePeer, join })
 
 /-- Whether the deadline boundary already closed the connection.
 `withinDeadline` returns an error value only on expiry, after the hook
