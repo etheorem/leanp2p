@@ -247,7 +247,7 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     r.check "identify e2e push sender announces the record"
       ((match sent with
         | Except.ok _ => true
-        | Except.error _ => false) && stored == [addr])
+        | Except.error _ => false) && stored.map Multiformats.Multiaddr.toBytes == [addr])
     r.check "identify e2e push sender half-closes the stream" (isOkNone ended)
     tc.close
 
