@@ -124,6 +124,11 @@ def Enr.run (r : Runner) : IO Unit := do
     -- The mapping: the peer id go-libp2p derives, one address, and back.
     r.check s!"{file}: the peer id is go-libp2p's"
       ((rec.peerId.toOption.map PeerId.toString) == some examplePeerId)
+    -- The identity multihash wraps the 37-byte protobuf: key type 2
+    -- and the 33-byte compressed secp256k1 point.
+    r.check s!"{file}: the peer id inlines the complete secp256k1 protobuf"
+      (rec.peerId.toOption.map PeerId.toBytes ==
+        some (ofNatList ([0, 37, 8, 2, 18, 33] ++ rec.publicKey)))
     match rec.multiaddrs with
     | .error e => r.check s!"{file}: the multiaddrs ({repr e})" false
     | .ok addrs =>

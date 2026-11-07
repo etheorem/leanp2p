@@ -97,6 +97,13 @@ side is `Crypto/Keys.lean` and `Crypto/PeerId.lean` (§10 row 11);
   PRINCIPLES 2.4). `Enr/Mapping` maps the `secp256k1` entry to the
   peer id and the address entries to a `Multiaddr` (§8, "ENR ↔
   multiaddr/peer-id mapping").
+  Both mappings use the real identity and multiformats types. Key
+  construction and peer-id derivation failures map to `Enr.Error.publicKey`.
+  Address decoding failures map to `Enr.Error.multiaddr`.
+  The text encoder fixes the multibase to base64url, whose error arm
+  is unreachable. Its proof keeps `Enr.toText` total through the shared
+  checked encoder. Other bases and codec failures at the multibase
+  boundary map to `Enr.Error.text`.
 
 ## Owned contracts and how the package keeps them
 
