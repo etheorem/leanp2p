@@ -1,5 +1,5 @@
 import Libp2p.Mux.Test.Wire
-import Libp2p.Mux.Mock.Core
+import Libp2p.Core
 import Streams
 
 /-!
@@ -39,7 +39,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Mux.Test.State
 
-open Libp2p.Mux.Mock.Core
+open Libp2p.Core
 open Libp2p.Mux.Test.Wire
 
 /-! ## Caps and ids -/

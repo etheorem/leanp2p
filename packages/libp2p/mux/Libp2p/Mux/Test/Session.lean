@@ -1,4 +1,4 @@
-import Libp2p.Mux.Mock.Core
+import Libp2p.Core
 import Libp2p.Mux.Test.State
 import Libp2p.Mux.Test.Wire
 import Conc
@@ -28,7 +28,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Mux.Test.Session
 
-open Libp2p.Mux.Mock.Core
+open Libp2p.Core
 open Libp2p.Mux.Test.State
 open Libp2p.Mux.Test.Wire
 open Conc hiding Error
@@ -847,7 +847,7 @@ private def startRuntime (role : Role) (conn : Streams.Connection)
     openStream := openStream rt
     accept := accept rt
     close := close rt
-    join := join rt }
+    join := ExceptT.mk (join rt) }
 
 /-- The reader and the owner for `role` on `conn`. `leftover` is the
 negotiation suffix. The tasks belong to the session `TaskSet`. -/
