@@ -500,7 +500,7 @@ private def upgradeCore (role : Mock.Core.Role) (conn : Streams.Connection)
         | .error e => return .error e
         | .ok () =>
           let muxReader := Streams.BufReader.new sc.conn
-          match ← negotiate role muxReader sc.conn sc.leftover (muxers.map (·.id)) with
+          match ← negotiate role muxReader sc.conn ByteArray.empty (muxers.map (·.id)) with
           | .error e => return .error e
           | .ok stage2 =>
             match muxers.find? (fun m => decide (m.id = stage2.proto)) with

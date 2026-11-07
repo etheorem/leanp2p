@@ -131,7 +131,12 @@ private def secValue (overread : Bool) (seedRef : Conc.OnceRef (Option ByteArray
         | none => throw (.closed "test handshake over-read found the connection closed")
         | some chunk => pure chunk
       else pure ByteArray.empty
-    return { conn := conn,
+    let pending ← Conc.OnceRef.new (rest ++ over)
+    let secureConn : Streams.Connection := { conn with
+      read := do
+        let bytes ← (pending.updateGet (fun b => (b, ByteArray.empty)) : BaseIO ByteArray)
+        if bytes.isEmpty then conn.read else pure (some bytes) }
+    return { conn := secureConn,
              localPeer := if role = .initiator then dialerId else listenerId,
              remotePeer := if role = .initiator then listenerId else dialerId,
              leftover := rest ++ over,
@@ -281,8 +286,8 @@ private def checkNegotiationLeftover (r : Runner) : Async Unit := do
   (← sideConn iside).close
   (← sideConn rside).close
 
-/-- The handshake over-reads the muxer header chunk, and the muxer
-stage still selects from the `SecureConn` leftover. -/
+/-- The secure reader delivers bytes the handshake over-read before
+the muxer stage reads the connection. -/
 private def checkHandshakeLeftover (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
   let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
