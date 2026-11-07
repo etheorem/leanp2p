@@ -16,6 +16,11 @@ example : (publishPayload 42 7).isError = true := by decide
 example : (publishPayload 42 maxPayloadBytes).map ByteArray.size = .ok maxPayloadBytes.toNat := by decide
 example : (publishPayload 42 (maxPayloadBytes + 1)).isError = true := by decide
 
+example : formatObservationTime 0 = "1970-01-01T00:00:00.000Z" := by decide
+example : formatObservationTime 3723004 = "1970-01-01T01:02:03.004Z" := by decide
+example : formatObservationTime 86399999 = "1970-01-01T23:59:59.999Z" := by decide
+example : formatObservationTime 86400000 = "1970-01-01T00:00:00.000Z" := by decide
+
 example : nodeId? "node0" = some 0 := by decide
 example : nodeId? "node31" = some 31 := by decide
 example : nodeId? "node" = none := by decide

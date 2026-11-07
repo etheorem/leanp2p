@@ -147,16 +147,19 @@ def pad3 (value : Nat) : String :=
   else if text.length = 2 then "0" ++ text
   else text
 
-/-- RFC3339 UTC time from the monotonic millisecond clock. -/
-def observationTime : BaseIO String := do
-  let nowMs ← IO.monoMsNow
+/-- Format a monotonic millisecond value as fixed-width RFC3339 UTC text. -/
+def formatObservationTime (nowMs : Nat) : String :=
   let secs := (nowMs / 1000) % 86400
   let ms := nowMs % 1000
   let hours := secs / 3600
   let minutes := (secs / 60) % 60
   let seconds := secs % 60
-  return "1970-01-01T" ++ pad2 hours ++ ":" ++ pad2 minutes ++ ":" ++
+  "1970-01-01T" ++ pad2 hours ++ ":" ++ pad2 minutes ++ ":" ++
     pad2 seconds ++ "." ++ pad3 ms ++ "Z"
+
+/-- RFC3339 UTC time from the monotonic millisecond clock. -/
+def observationTime : BaseIO String := do
+  return formatObservationTime (← IO.monoMsNow)
 
 /-- Decode one RPC and offer one receipt for every publish entry. -/
 def ReceiptObserver.onRpc (observer : ReceiptObserver) (sender : String) (bytes : List Nat) : BaseIO Unit := do
