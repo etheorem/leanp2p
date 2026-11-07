@@ -138,6 +138,8 @@ structure Config where
   core sees them. A harness reads it to log each received message, including
   a duplicate. It runs on the loop task, so it must not park. -/
   onRpc : Peer → List Nat → BaseIO Unit := fun _ _ => pure ()
+  /-- Called for every outbound RPC before it enters the peer queue. -/
+  onSend : Peer → Rpc.RPC → BaseIO Unit := fun _ _ => pure ()
 
 /-- A running node. Every field is a seam over the loop task, which is the
 only owner of the router state. -/
@@ -357,6 +359,7 @@ private structure Env where
 A full queue drops its frame. Each peer has one writer and one stream. -/
 private def enqueue (env : Env) (peer : Peer) (rpc : Rpc.RPC) : BaseIO Unit := do
   if ← env.closing.get then return ()
+  (env.config.onSend peer rpc : BaseIO Unit)
   let some frame := Rpc.encodeFrame? rpc | return ()
   let table ← env.outbound.get
   let ob ← match table.find? (fun e => e.1 == peer) with

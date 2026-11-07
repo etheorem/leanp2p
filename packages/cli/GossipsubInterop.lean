@@ -9,6 +9,7 @@ set_option autoImplicit false
 namespace Libp2p.Protocols.Gossipsub.Interop
 
 open Libp2p.Identity
+open Libp2p.Protocols.Gossipsub
 
 /-- Parse the harness command line. -/
 def paramsPath (args : List String) : Except String System.FilePath :=
@@ -100,6 +101,31 @@ def peerRecord (time peer : String) (nodeId : Nat) : String :=
 /-- Build a pre-deduplication receipt record. -/
 def receivedRecord (time : String) (payload : List Nat) (sender topic : Option String) : String :=
   receivedMessageLine time (messageIdNumber payload) sender topic
+
+/-- Format the RPC fields that matter for the mixed-cell wire trace. -/
+def rpcTraceSummary (rpc : Rpc.RPC) : String :=
+  let controlCount := match rpc.control with
+    | none => 0
+    | some c => c.ihave.length + c.iwant.length + c.graft.length + c.prune.length
+  let subscriptionTopics := rpc.subscriptions.map (fun s => s.topicid)
+  let publishTopics := rpc.publish.map (fun m => m.topic.name)
+  let controlTopics := match rpc.control with
+    | none => []
+    | some c => c.ihave.map (fun x => x.topicId) ++
+        c.graft.map (fun x => x.topicId) ++ c.prune.map (fun x => x.topicId)
+  let topics := subscriptionTopics ++ publishTopics ++ controlTopics
+  s!"subscriptions={rpc.subscriptions.length} publish={rpc.publish.length} control={controlCount} topic_ids=[{String.intercalate "," topics}]"
+
+/-- Emit one gated inbound RPC trace to stderr. -/
+def traceInbound (enabled : Bool) (sender : String) (bytes : List Nat) : BaseIO Unit := do
+  if enabled then
+    match Core.decodeRpc bytes with
+    | .ok rpc => discard (IO.eprintln s!"INTEROP_TRACE inbound peer={sender} {rpcTraceSummary rpc}").toBaseIO
+    | .error _ => discard (IO.eprintln s!"INTEROP_TRACE inbound peer={sender} decode_error").toBaseIO
+
+/-- Emit one gated outbound RPC trace to stderr. -/
+def traceOutbound (enabled : Bool) (peer : Peer) (rpc : Rpc.RPC) : BaseIO Unit := do
+  if enabled then discard (IO.eprintln s!"INTEROP_TRACE outbound peer={peer} {rpcTraceSummary rpc}").toBaseIO
 
 /-- Topic validation delays are updated in one atomic step. -/
 structure DelayTable where

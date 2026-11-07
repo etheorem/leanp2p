@@ -41,14 +41,18 @@ def run (args : List String) : IO UInt32 := do
   let writer ← BaseIO.toIO RecordWriter.start
   let observer ← BaseIO.toIO (ReceiptObserver.new writer)
   let delayTable ← BaseIO.toIO DelayTable.new
+  let traceEnabled := (← IO.getEnv "INTEROP_TRACE").getD "" == "1"
   let coreParams ← match toCoreParams params with
     | .ok value => pure value
     | .error e =>
       (RecordWriter.close writer).run
       return ← fail e
-  let receiptCallback : Peer → List Nat → BaseIO Unit := fun sender bytes =>
+  let receiptCallback : Peer → List Nat → BaseIO Unit := fun sender bytes => do
+    traceInbound traceEnabled (toString sender) bytes
     observer.onRpc (toString sender) bytes
-  let config : Node.Config := { params := coreParams, onRpc := receiptCallback }
+  let sendCallback : Peer → Rpc.RPC → BaseIO Unit := fun peer rpc =>
+    traceOutbound traceEnabled peer rpc
+  let config : Node.Config := { params := coreParams, onRpc := receiptCallback, onSend := sendCallback }
   let mut running : Option GossipsubSession.Running := none
   let mut resultCode : UInt32 := 1
   try
