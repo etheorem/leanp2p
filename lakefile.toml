@@ -151,6 +151,7 @@ globs = ["Libp2p.Identity.*"]
 name = "Libp2pCore"
 srcDir = "packages/libp2p/core"
 roots = ["Libp2p.Core"]
+globs = ["Libp2p.Core.*"]
 
 [[lean_lib]]
 name = "Libp2pSecurity"
