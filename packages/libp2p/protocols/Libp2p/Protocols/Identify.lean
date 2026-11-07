@@ -515,7 +515,7 @@ def push (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
 def pushHandler (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
     (clock : Conc.Clock) (timeoutMs : Nat) : Mock.Core.StreamHandler :=
   { id := pushId,
-    handle := fun s => ExceptT.mk ((Except.mapError mapIdentifyError) <$>
+    handle := fun _ctx s => ExceptT.mk ((Except.mapError mapIdentifyError) <$>
       push store expected clock timeoutMs s) }
 
 /-- Write one length-delimited message and half-close. The
@@ -567,7 +567,7 @@ def respondHandler (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat) := none) : Mock.Core.StreamHandler :=
   { id := protocolId,
-    handle := fun s => respondTo key addrs protocols observed agent spr s }
+    handle := fun _ctx s => respondTo key addrs protocols observed agent spr s }
 
 /-! ## The client-core theorems
 
