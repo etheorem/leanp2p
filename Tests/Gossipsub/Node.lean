@@ -451,6 +451,30 @@ private def pairChecks (r : Tests.Runner) : Async Unit := do
   r.check "node.pair.no-local-delivery" ((← (b.deliveries.tryRecv : BaseIO (Option Message))).isNone)
   finish sw [a, b]
 
+/-- A subscription made before a peer joins is sent once to that peer. -/
+private def postJoinSubscriptionChecks (r : Tests.Runner) : Async Unit := do
+  let sw ← (Switch.new : BaseIO Switch)
+  let f ← fixture sw pa
+  discard (subscribe f : BaseIO Bool)
+  r.check "node.post-join-subscription.local-barrier" (← barrier f)
+  let seen ← (Chan.new 32 : BaseIO (Chan Seen))
+  let ended ← (Chan.new 16 : BaseIO (Chan Unit))
+  let source ← (probe sw pb seen ended : BaseIO HostSeam)
+  let stream ← openStream source pa
+  let first ← receive seen
+  r.check "node.post-join-subscription.receives-topic"
+    (first.map (fun s => s.rpc) == some (subOptRpc topic true))
+  let markerTopic : TopicId := ⟨"post-join-marker"⟩
+  discard (f.node.subscribe markerTopic (fun _ => pure ()) : BaseIO Bool)
+  r.check "node.post-join-subscription.marker-barrier" (← barrier f)
+  let second ← receive seen
+  r.check "node.post-join-subscription.exactly-one"
+    (second.map (fun s => s.rpc) == some (subOptRpc markerTopic true) &&
+      (← (seen.tryRecv : BaseIO (Option Seen))).isNone)
+  stream.close
+  discard (f.node.peerLeft pb : BaseIO Bool)
+  finish sw [f]
+
 /-- The loop announces the topic before grafting its already announced peer.
 Repeat joins emit no hello. Multiple callbacks preserve registration order. -/
 private def surfaceChecks (r : Tests.Runner) : Async Unit := do
@@ -720,6 +744,7 @@ def run (r : Tests.Runner) : IO Unit := do
     outboundFailureChecks r
     readerCopyChecks r
     pairChecks r
+    postJoinSubscriptionChecks r
     surfaceChecks r
     subscribeRace r
     trickleChecks r

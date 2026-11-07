@@ -428,17 +428,36 @@ private def perform (env : Env) (gossipAt : Option Millis) (index : Nat)
       | none => enqueue env to rpc
   return (delayed.toList, gossipIndex)
 
-/-- Tell every known peer about a subscription change (module doc). -/
+/-- Tell peers about a subscription change, or tell a new peer about all
+current subscriptions. Each offer uses the bounded per-peer queue. -/
 private def announce (env : Env) (st : LoopState) (event : Core.Event) :
     BaseIO LoopState := do
-  let record? := match event with
-    | .subscribe t => some (subOptRpc t true)
-    | .unsubscribe t => some (subOptRpc t false)
-    | _ => none
-  if let some rpc := record? then
+  match event with
+  | .subscribe t =>
+    let rpc := subOptRpc t true
     for (peer, _) in st.router.peers do
       enqueue env peer rpc
+  | .unsubscribe t =>
+    let rpc := subOptRpc t false
+    for (peer, _) in st.router.peers do
+      enqueue env peer rpc
+  | .peerJoined peer _ =>
+    if !st.router.topics.isEmpty then
+      enqueue env peer (Core.helloRpc st.router.topics)
+  | _ => pure ()
   return st
+
+/-- Drop the core hello when the node already sent per-topic join records. -/
+private def withoutPeerHello (peer : Peer) (topics : List TopicId) :
+    List Core.Action → List Core.Action
+  | [] => []
+  | action :: rest =>
+    match action with
+    | .sendRpc target rpc =>
+      if !topics.isEmpty && target == peer && rpc == Core.helloRpc topics then
+        withoutPeerHello peer topics rest
+      else action :: withoutPeerHello peer topics rest
+    | _ => action :: withoutPeerHello peer topics rest
 
 /-- One core step, then its actions. Only an RPC that does not decode makes
 the core answer `.error`. That answer keeps the state, and the loop runs on. -/
@@ -456,6 +475,9 @@ private def stepAndAct (env : Env) (st : LoopState) (event : Core.Event) : BaseI
   match Core.step env.config.params st.router event with
   | .error (.decode _) => return st
   | .ok (router, actions) =>
+    let actions := match event with
+      | .peerJoined peer _ => withoutPeerHello peer st.router.topics actions
+      | _ => actions
     let gossipAt := match event with
       | .tick now _ => some now
       | _ => none
