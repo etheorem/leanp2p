@@ -19,15 +19,17 @@ here, since the rule never reads it.
 Unit 1b runs hosts over the sim transport, with the real
 `Noise.securityProtocol` and `Mux.yamux` values (PRINCIPLES 1.4). Every
 host derives its peer id through `libp2p/identity`, and the upgrade runs
-through `libp2p/negotiate`, so the legs wait for W5.3, W5.4, and W5.5
-to merge. Until then the suite names each leg as a skip.
+through `libp2p/negotiate`. Those packages merged over mocks of
+`libp2p/core`, so the legs wait for their seam swaps: issues #53
+(negotiate), #76 (Noise), #77 (`Mux.yamux`), and the negotiate swap of
+the host, issue #70. Until then the suite names each leg as a skip.
 -/
 
 set_option autoImplicit false
 
 namespace Tests
 
-open Conc Multiformats Libp2p.Identity Libp2p.Host.Mock.Core Libp2p.Host
+open Conc Multiformats Libp2p.Identity Libp2p.Core Libp2p.Host
 
 /-! ## Helpers -/
 
@@ -298,6 +300,6 @@ def Host.run (r : Runner) : IO Unit := do
   (peerstoreChecks r).run
   errorChecks r
   for leg in swarmLegs do
-    r.skip s!"host: {leg}" "needs W5.3, W5.4, and W5.5 merged"
+    r.skip s!"host: {leg}" "needs the seam swaps of issues #53, #76, #77, and #70"
 
 end Tests
