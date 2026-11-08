@@ -1,4 +1,4 @@
-import Libp2p.Mux.Mock.Core
+import Libp2p.Core.Mux
 import Libp2p.Mux.Test.State
 import Libp2p.Mux.Test.Wire
 import Conc
@@ -28,7 +28,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Mux.Test.Session
 
-open Libp2p.Mux.Mock.Core
+open Libp2p.Core
 open Libp2p.Mux.Test.State
 open Libp2p.Mux.Test.Wire
 open Conc hiding Error
