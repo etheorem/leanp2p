@@ -22,8 +22,8 @@ only the framed IO path and the seam values, which unit 1b carries.
 
 Units 0, 1a, and 1b are done: the suite is `Tests/Noise.lean`, and the
 interop check of the vector stance runs through
-`scripts/noise-interop.sh`. The package docs record the mock of W5.2
-and the integration that drops it ("The mock" in the ARCHITECTURE).
+`scripts/noise-interop.sh`. The seam types come from `libp2p/core`
+(W5.2).
 
 ## Consumers
 

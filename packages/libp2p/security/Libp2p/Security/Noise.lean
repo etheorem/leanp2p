@@ -1,7 +1,7 @@
 import Crypto
 import Streams
 import Libp2p.Identity
-import Libp2p.Security.Mock.Core
+import Libp2p.Core.Security
 import Libp2p.Security.Constants
 import Libp2p.Security.Handshake
 import Libp2p.Security.Payload
@@ -56,9 +56,8 @@ set_option autoImplicit false
 
 namespace Libp2p.Security.Noise
 
--- The seam types come from the mock of W5.2 (RULES.md, "Working ahead
--- of the tree"). At the integration, `Mock.Core` reads `Libp2p.Core`
--- again.
+-- The seam types stay qualified as `Core.…`: inside this namespace a
+-- bare `Error` is `Noise.Error`.
 open Libp2p.Identity
 open Conc (Async)
 open Streams (Connection BufReader)
@@ -71,7 +70,7 @@ The key MUST then be used to validate"), and `verify` gates and decodes
 the payload on the way. The end of the connection inside the handshake
 is `closed`; every other failure breaks the spec, and is `protocol`.
 The detail is the rendered Noise error. -/
-def Error.toCore (e : Error) : Mock.Core.Error :=
+def Error.toCore (e : Error) : Core.Error :=
   let detail := s!"noise: {repr e}"
   match e with
   | .payloadTooLarge _ | .payload _ | .missingIdentity | .identity _ | .badSignature =>
@@ -128,7 +127,7 @@ private def performAll (conn : Connection) (l : Learned) (acts : List Action) :
 
 /-- The handshake shell. The answer holds the completion, the checked
 payload, and the reader that holds the bytes past the last message. -/
-private def runHandshake (cfg : Config) (rng : Crypto.Rng) (role : Mock.Core.Role)
+private def runHandshake (cfg : Config) (rng : Crypto.Rng) (role : Core.Role)
     (conn : Connection) (leftover : ByteArray) :
     ExceptT Error Async (Completion × Verified × BufReader) := do
   let st0 ← ofExcept (State.init role .empty cfg.static)
@@ -175,8 +174,8 @@ private def runHandshake (cfg : Config) (rng : Crypto.Rng) (role : Mock.Core.Rol
 /-- The handshake of a seam value: the shell, then the transport over
 the cipher states. A failure closes the connection before the answer
 (root §3.5). -/
-private def handshakeWith (cfg : Config) (rng : Crypto.Rng) (role : Mock.Core.Role)
-    (conn : Connection) (leftover : ByteArray) : ExceptT Mock.Core.Error Async Mock.Core.SecureConn :=
+private def handshakeWith (cfg : Config) (rng : Crypto.Rng) (role : Core.Role)
+    (conn : Connection) (leftover : ByteArray) : ExceptT Core.Error Async Core.SecureConn :=
   ExceptT.mk do
     let shaken ← try (runHandshake cfg rng role conn leftover).run
       catch e => do conn.closeQuietly; throw e
@@ -204,7 +203,7 @@ private def handshakeWith (cfg : Config) (rng : Crypto.Rng) (role : Mock.Core.Ro
 
 /-- The production value: Noise with the configured keys, and the
 ephemeral keys from `Rng.system`. -/
-def securityProtocol (cfg : Config) : Mock.Core.SecurityProtocol where
+def securityProtocol (cfg : Config) : Core.SecurityProtocol where
   id := protocolId
   handshake := handshakeWith cfg Crypto.Rng.system
 
@@ -212,7 +211,7 @@ def securityProtocol (cfg : Config) : Mock.Core.SecurityProtocol where
 its ephemeral key from a fresh `Rng.seeded seed`, so with an Ed25519
 identity, whose signature is deterministic (§3.6), the same peer
 behavior gives the same bytes on the wire. -/
-def fixedKeyProtocol (cfg : Config) (seed : ByteArray) : Mock.Core.SecurityProtocol where
+def fixedKeyProtocol (cfg : Config) (seed : ByteArray) : Core.SecurityProtocol where
   id := protocolId
   handshake role conn leftover := ExceptT.mk do
     let rng ← Crypto.Rng.seeded seed
