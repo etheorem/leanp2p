@@ -4,6 +4,7 @@ import Libp2p.Mux
 import Libp2p.Mux.Test.Wire
 import Libp2p.Mux.Test.State
 import Libp2p.Mux.Test.Session
+import Yamux.Header
 import Conc
 import Streams
 import Multiformats
@@ -12,8 +13,9 @@ import Multiformats
 # Mux suite (unit W5.4)
 
 The constant checks, the core seam, the private
-test-wire codec and parser, the pure session transitions, and the
-runtime shell (`packages/libp2p/mux/docs/ARCHITECTURE.md`).
+test-wire codec and parser, the pure session transitions, the
+runtime shell, and the yamux adapter boundary
+(`packages/libp2p/mux/docs/ARCHITECTURE.md`).
 -/
 
 set_option autoImplicit false
@@ -3744,6 +3746,248 @@ def runLocal (r : Runner) : IO Unit := do
 
 end Tests.Mux.Public
 
+namespace Tests.Mux.YamuxAdapter
+
+open Libp2p.Mux
+open Libp2p.Core
+open Conc
+open Streams hiding Error
+open Streams.Sim
+open Multiformats
+
+/-- A protocol id passed to `openStream`. A Yamux header carries the
+type, the flags, the stream id, and the length. -/
+private def unrelatedId : ProtocolId := { toString := "/leanp2p/adapter-probe/1" }
+
+/-- The payload the initiator writes. -/
+private def toResponder : ByteArray := "from the initiator".toUTF8
+
+/-- The payload the responder writes. -/
+private def toInitiator : ByteArray := "from the responder".toUTF8
+
+private structure Ends where
+  dialer : Connection
+  peer : Connection
+
+/-- Close the listener, then join it. A close fault is dropped, so the
+caller can rethrow the error that happened first. -/
+private def closeListener (l : Listener) : Async Unit := do
+  try
+    l.close
+    l.join
+  catch _ =>
+    pure ()
+
+/-- A connected pair on a fresh sim net. The listener closes once both
+ends exist. It also closes when dial or accept fails, and that failure
+is the one that propagates. -/
+private def ends (n : Nat) : Async Ends := do
+  let net ← Net.new
+  let addr ← match Multiaddr.parse? s!"/ip4/127.0.0.1/tcp/{n}" with
+    | .ok a => pure a
+    | .error _ => throw <| IO.userError s!"test address {n} does not parse"
+  let l ← net.listen addr
+  let dialed : Except IO.Error Connection ← try
+    match ← net.dial l.addr with
+    | some dialer => pure (.ok dialer)
+    | none => pure (.error <| IO.userError "dial failed")
+  catch e =>
+    pure (.error e)
+  match dialed with
+  | .error e =>
+    closeListener l
+    throw e
+  | .ok dialer =>
+    let accepted : Except IO.Error Connection ← try
+      match ← l.accept with
+      | some peer => pure (.ok peer)
+      | none => pure (.error <| IO.userError "accept failed")
+    catch e =>
+      pure (.error e)
+    match accepted with
+    | .error e =>
+      dialer.closeQuietly
+      closeListener l
+      throw e
+    | .ok peer =>
+      let closed : Except IO.Error Unit ← try
+        l.close
+        l.join
+        pure (.ok ())
+      catch e =>
+        pure (.error e)
+      match closed with
+      | .error e =>
+        dialer.closeQuietly
+        peer.closeQuietly
+        throw e
+      | .ok () =>
+        return { dialer, peer }
+
+/-- The next header-sized read, decoded as one Yamux header. -/
+private def nextHeader (c : Connection) : Async (Except String Yamux.Header) := do
+  match ← c.readExactly Yamux.headerSize with
+  | none => return .error "the peer connection ended before a header"
+  | some (frame, _) =>
+    match Yamux.Header.decodeB? frame with
+    | .error e => return .error s!"the next frame is not a Yamux header ({repr e})"
+    | .ok (h, _) => return .ok h
+
+/-- The Yamux stream-open frame for `streamId`: a window update, the
+SYN flag alone, and a zero length. -/
+private def isSynOpen (h : Yamux.Header) (streamId : Nat) : Bool :=
+  h.type == .windowUpdate
+    && h.flags == { Yamux.Flags.none with syn := true }
+    && h.streamId == streamId
+    && h.length == 0
+
+/-- Close `sessions`, then both raw ends. The body error in `fault`
+has priority. Otherwise the first session close or join error is
+reported. Both raw ends are always closed quietly. -/
+private def cleanup (fault : Option IO.Error) (sessions : List MuxSession)
+    (dialer peer : Connection) : Async Unit := do
+  let mut cleanupError : Option IO.Error := none
+  for s in sessions do
+    let closed ← try
+      s.close
+      pure true
+    catch e =>
+      if cleanupError.isNone then
+        cleanupError := some e
+      pure false
+    if closed then
+      try
+        match ← s.join with
+        | .ok () => pure ()
+        | .error e =>
+          if cleanupError.isNone then
+            cleanupError := some (IO.userError s!"yamux adapter join: {e}")
+      catch e =>
+        if cleanupError.isNone then
+          cleanupError := some e
+  dialer.closeQuietly
+  peer.closeQuietly
+  match fault with
+  | some e => throw e
+  | none =>
+    match cleanupError with
+    | some e => throw e
+    | none => pure ()
+
+/-- Read `n` bytes from the stream. A short close or a stream error
+throws. -/
+private def readBytes (s : Stream) (n : Nat) : Async ByteArray := do
+  let mut acc : ByteArray := .empty
+  while acc.size < n do
+    match ← s.read with
+    | .ok (some chunk) => acc := acc ++ chunk
+    | .ok none => throw <| IO.userError "the stream ended before the payload"
+    | .error e => throw <| IO.userError s!"a stream read failed: {repr e}"
+  return acc
+
+/-- The first outbound frame of one isolated session. The raw peer
+reads it. `streamId` is the id that role opens first. -/
+private def runRole (r : Runner) (n : Nat) (role : Role) (streamId : Nat)
+    (title : String) : Async Unit := do
+  let pair ← ends n
+  let mut opened : Option MuxSession := none
+  let outcome : Except IO.Error Unit ← try
+    match ← (yamux.open role pair.dialer .empty).run with
+    | .error e =>
+      r.check s!"{title} ({e})" false
+      pure (.ok ())
+    | .ok sess =>
+      opened := some sess
+      match ← (sess.openStream unrelatedId).run with
+      | .error e =>
+        r.check s!"{title} ({e})" false
+      | .ok _ =>
+        match ← nextHeader pair.peer with
+        | .error detail =>
+          r.check s!"{title} ({detail})" false
+        | .ok h =>
+          -- `unrelatedId` is the argument of this open. The check
+          -- reads the Yamux header fields.
+          r.check title (isSynOpen h streamId)
+      pure (.ok ())
+  catch e =>
+    pure (.error e)
+  let fault := match outcome with
+    | .error e => some e
+    | .ok () => none
+  cleanup fault opened.toList pair.dialer pair.peer
+
+/-- One full-duplex stream through `Mux.yamux`, with payloads in both
+directions, then clean joins. -/
+private def runExchange (r : Runner) : Async Unit := do
+  let pair ← ends 4182
+  let mut dialSess : Option MuxSession := none
+  let mut peerSess : Option MuxSession := none
+  let outcome : Except IO.Error Unit ← try
+    match ← (yamux.open .initiator pair.dialer .empty).run with
+    | .error e =>
+      r.check s!"the initiator session opens ({e})" false
+      pure (.ok ())
+    | .ok dial =>
+      dialSess := some dial
+      match ← (yamux.open .responder pair.peer .empty).run with
+      | .error e =>
+        r.check s!"the responder session opens ({e})" false
+        pure (.ok ())
+      | .ok peer =>
+        peerSess := some peer
+        match ← (dial.openStream unrelatedId).run with
+        | .error e =>
+          r.check s!"the initiator opens a stream ({e})" false
+          pure (.ok ())
+        | .ok outbound =>
+          match ← peer.accept with
+          | none =>
+            r.check "the responder accepts the initiator's stream" false
+            pure (.ok ())
+          | some inbound =>
+            r.check "the responder accepts the initiator's stream" true
+            match ← outbound.write toResponder with
+            | .error e => throw <| IO.userError s!"the initiator write failed: {repr e}"
+            | .ok () => pure ()
+            let got ← readBytes inbound toResponder.size
+            r.check "the initiator's payload arrives unchanged" (got == toResponder)
+            match ← inbound.write toInitiator with
+            | .error e => throw <| IO.userError s!"the responder write failed: {repr e}"
+            | .ok () => pure ()
+            let back ← readBytes outbound toInitiator.size
+            r.check "the responder's payload arrives unchanged" (back == toInitiator)
+            dial.close
+            peer.close
+            match ← dial.join with
+            | .ok () => r.check "the initiator joins cleanly" true
+            | .error e => r.check s!"the initiator joins cleanly ({e})" false
+            match ← peer.join with
+            | .ok () => r.check "the responder joins cleanly" true
+            | .error e => r.check s!"the responder joins cleanly ({e})" false
+            dialSess := none
+            peerSess := none
+            pure (.ok ())
+  catch e =>
+    pure (.error e)
+  let fault := match outcome with
+    | .error e => some e
+    | .ok () => none
+  cleanup fault (dialSess.toList ++ peerSess.toList) pair.dialer pair.peer
+
+private def checks (r : Runner) : Async Unit := do
+  r.check "Mux.yamux.id is Mux.yamuxId" (decide (yamux.id = yamuxId))
+  runRole r 4180 .initiator 1 "an initiator open emits a Yamux SYN for stream 1"
+  runRole r 4181 .responder 2 "a responder open emits a Yamux SYN for stream 2"
+  runExchange r
+
+/-- The yamux adapter boundary over the sim connection. -/
+def run (r : Runner) : IO Unit := do
+  r.section "mux yamux adapter" "packages/libp2p/mux/Libp2p/Mux/Yamux.lean"
+  Async.run (checks r)
+
+end Tests.Mux.YamuxAdapter
+
 namespace Tests
 
 open Libp2p.Mux
@@ -3767,5 +4011,6 @@ def Mux.run (r : Runner) : IO Unit := do
   Mux.State.run r
   Mux.Session.run r
   Mux.Public.run r
+  Mux.YamuxAdapter.run r
 
 end Tests
