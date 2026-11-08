@@ -1,5 +1,6 @@
 import Tests.Support
 import Libp2p.Protocols.ReqResp.Exchange
+import Libp2p.Protocols.Mock.Muxer
 import Libp2p.Protocols.Mock.HostStream
 import Multiformats.Multiaddr
 

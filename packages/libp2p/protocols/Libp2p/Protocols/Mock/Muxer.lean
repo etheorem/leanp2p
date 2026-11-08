@@ -1,19 +1,17 @@
 import Std.Data.HashMap
 import Conc
 import Streams
-import Libp2p.Protocols.Mock.Core
+import Libp2p.Core.Mux
 
 /-!
 # Muxer mock
 
-`Libp2p.Core` (W5.2, PR #37) and the yamux `Muxer` value (W5.4) are not
-merged. This mock declares the seam shapes that root ARCHITECTURE §4.9
-and the core pair freeze: `Role`, `MuxSession` (`openStream`, `accept`,
-`close`, and the completion its owner joins), and `Muxer` with `open :
-Role → Connection → ByteArray → ExceptT Error Async MuxSession`. The
-value `muxer` runs over any `Connection`, so the req/resp suite runs over
-the sim transport (PRINCIPLES 1.4; RULES.md, "Working ahead of the
-tree").
+The muxer values of `libp2p/mux` (W5.4) type over that package's own
+mock of `libp2p/core`, so the req/resp suite cannot take one yet
+(issue #77). This module stands in with one value, `muxer`, of the real
+`Muxer` seam of `libp2p/core`. It runs over any `Connection`, so the
+req/resp suite runs over the sim transport (PRINCIPLES 1.4; RULES.md,
+"Working ahead of the tree").
 
 ## The wire of the mock
 
@@ -36,7 +34,7 @@ yamux window of W5.4 is what bounds them in production.
 
 ## Tasks and parks
 
-One reader task per session, in a `TaskSet` the session owns; `done`
+One reader task per session, in a `TaskSet` the session owns; `join`
 joins it. The reader parks on `Connection.read`, which `close` wakes.
 Writers take a one-token channel around each frame write, so two
 streams never interleave the bytes of their frames; the token's park
@@ -44,8 +42,8 @@ wakes when the writer before it sends the token back.
 
 ## Integration
 
-Delete this module. Import `Libp2p.Core` for `Role`, `MuxSession`, and
-`Muxer`, and use `Mux.yamux` (W5.4) where the suite takes `muxer`. The
+Delete this module, and use `Mux.test` or `Mux.yamux` (W5.4) where the
+suite takes `muxer`, once they type over `libp2p/core` (issue #77). The
 suite needs no other change: it uses the seam fields only.
 -/
 
@@ -54,34 +52,7 @@ set_option autoImplicit false
 namespace Libp2p.Protocols.Mock.Muxer
 
 open Conc Streams
-open Libp2p.Protocols.Mock.Core (ProtocolId)
-
-/-- Which end of the connection a session serves. -/
-inductive Role where
-  /-- The end that dialed. -/
-  | initiator
-  /-- The end that accepted. -/
-  | responder
-  deriving DecidableEq, Repr
-
-/-- The uniform session view of the core seam. -/
-structure MuxSession where
-  /-- Open a stream to the peer. -/
-  openStream : ExceptT Core.Error Async Stream
-  /-- The next stream the peer opened; `none` after the session closed. -/
-  accept : Async (Option Stream)
-  /-- Close the session and its connection. -/
-  close : IO Unit
-  /-- The completion of the session loop, which the owner joins. -/
-  done : Async Unit
-
-/-- The muxer seam of the core. -/
-structure Muxer where
-  /-- The protocol id of the muxer. -/
-  id : ProtocolId
-  /-- Run a session over a connection. The `ByteArray` holds what the
-  negotiation read past its last message. -/
-  «open» : Role → Connection → ByteArray → ExceptT Core.Error Async MuxSession
+open Libp2p.Core (Role MuxSession Muxer)
 
 /-! ## Frames -/
 
@@ -219,7 +190,7 @@ partial def readLoop (sh : Shared) (peerParity : Nat) (buf : ByteArray) : Async 
 
 /-- Run a mock session over `conn`. -/
 def openSession (role : Role) (conn : Connection) (leftover : ByteArray) :
-    ExceptT Core.Error Async MuxSession := do
+    ExceptT Libp2p.Core.Error Async MuxSession := do
   let token : Chan Unit ← Chan.new 1
   discard <| token.trySend ()
   let sh : Shared := {
@@ -232,14 +203,18 @@ def openSession (role : Role) (conn : Connection) (leftover : ByteArray) :
   let peerParity := if role = .initiator then 0 else 1
   owner.spawn (readLoop sh peerParity leftover)
   return {
-    openStream := do
+    -- The mock wire carries no protocol label, so the id goes unread,
+    -- as yamux drops it (the core `MuxSession.openStream` doc).
+    openStream := fun _ => do
       let sid ← (sh.next.updateGet fun n => (n, n + 2) : BaseIO Nat)
       let e ← newEntry
       sh.streams.update (·.insert sid e)
       mkStream sh sid e
     accept := sh.incoming.recv
     close := sh.conn.close
-    done := owner.joinAll }
+    -- The reader loop has no failure of its own, so the join answers
+    -- `.ok` once the loop ends.
+    join := ExceptT.lift owner.joinAll }
 
 /-- The mock muxer value. -/
 def muxer : Muxer := ⟨⟨"/leanp2p-mock-mux/1.0.0"⟩, openSession⟩

@@ -1,20 +1,20 @@
 import Conc
 import Streams
-import Libp2p.Protocols.Mock.Core
-import Libp2p.Protocols.Mock.Muxer
+import Libp2p.Core.Handler
+import Libp2p.Core.Mux
+import Libp2p.Protocols.StreamError
 
 /-!
 # Host stream mock
 
-`Libp2p.Host` (W5.6, issue #19) is not merged. The protocols docs have
-the req/resp client open its stream through the host, and the host pair
-names the inbound side, `setHandler` over the registry of §3.10. Its
-surface lists no outbound call yet; go-libp2p's is `NewStream`
-(`vendor/go-libp2p/p2p/host/basic/basic_host.go`, line 441), which
-opens a stream to the peer and negotiates one of the caller's ids. This
-mock fixes minimal signatures for both sides over one mock muxer
-session, as #45's peerstore mock does for the names the host docs
-freeze (RULES.md, "Working ahead of the tree").
+`Libp2p.Host` (W5.6) merged, but it still runs its upgrade through a
+mock of `libp2p/negotiate` (issue #70), so no host opens a session yet.
+The protocols docs have the req/resp client open its stream through
+the host, with `newStream`, and serve through `setHandler` over the
+registry of §3.10; go-libp2p's outbound call is `NewStream`
+(`vendor/go-libp2p/p2p/host/basic/basic_host.go`, line 441). This
+mock fixes minimal signatures for both sides over one muxer session of
+the real `MuxSession` seam (RULES.md, "Working ahead of the tree").
 
 ## What it leaves out
 
@@ -46,8 +46,7 @@ set_option autoImplicit false
 namespace Libp2p.Protocols.Mock.HostStream
 
 open Conc Streams
-open Libp2p.Protocols.Mock.Core (ProtocolId StreamContext StreamHandler)
-open Libp2p.Protocols.Mock.Muxer
+open Libp2p.Core (ProtocolId StreamContext StreamHandler MuxSession)
 
 /-- One end of a peer connection, with its handler registry. -/
 structure Host where
@@ -59,7 +58,7 @@ structure Host where
   /-- The registry, by protocol id; changed only through `update`. -/
   handlers : OnceRef (List StreamHandler)
   /-- The handler failures, newest first. -/
-  failures : OnceRef (List Core.Error)
+  failures : OnceRef (List Libp2p.Core.Error)
   /-- The tasks of the served streams and the serve loop. -/
   owner : TaskSet
 
@@ -78,14 +77,14 @@ def idHeader (id : ProtocolId) : Option ByteArray :=
 
 /-- Open a stream to the peer for the first id of `protocols`. -/
 def Host.newStream (h : Host) (protocols : List ProtocolId) :
-    Async (Except Core.Error (ProtocolId × Stream)) := do
+    Async (Except Libp2p.Core.Error (ProtocolId × Stream)) := do
   let some id := protocols.head? | return .error (.protocol "newStream: no protocol id")
   let some header := idHeader id | return .error (.protocol "newStream: an id over 255 bytes")
-  match ← h.session.openStream.run with
+  match ← (h.session.openStream id).run with
   | .error e => return .error e
   | .ok s =>
     match ← s.write header with
-    | .error e => s.reset; return .error (Core.mapStreamError e)
+    | .error e => s.reset; return .error (mapStreamError e)
     | .ok () => return .ok (id, s)
 
 /-- Read the id header from `s`: the id and the bytes after it. `none`
@@ -135,9 +134,11 @@ def Host.serve (h : Host) : BaseIO Unit := do
 /-- Close the session. -/
 def Host.close (h : Host) : IO Unit := h.session.close
 
-/-- Wait for the serve loop, its streams, and the session loop. -/
+/-- Wait for the serve loop, its streams, and the session loop. The
+session of `Mock.Muxer.muxer` always joins with `.ok`, so the answer
+goes unread. -/
 def Host.join (h : Host) : Async Unit := do
   h.owner.joinAll
-  h.session.done
+  discard h.session.join.run
 
 end Libp2p.Protocols.Mock.HostStream

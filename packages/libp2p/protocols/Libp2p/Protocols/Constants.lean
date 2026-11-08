@@ -1,3 +1,4 @@
+import Libp2p.Core.ProtocolId
 import Libp2p.Protocols.Mock.Core
 
 /-!
@@ -44,7 +45,9 @@ def pingSize : Nat := 32
 /-- The protocol version the responder writes, the spike's constant. -/
 def identifyProtocolVersion : String := "/ipfs/1.0.0"
 
-open Libp2p.Protocols.Mock.Core
+-- Req/resp takes its ids from `libp2p/core`. The identify and ping ids
+-- above stay on the mock until their swap (issue #55).
+open Libp2p.Core (ProtocolId)
 
 /-! ## Req/resp: the protocol id -/
 
