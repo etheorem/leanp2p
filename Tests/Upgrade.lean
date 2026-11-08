@@ -17,8 +17,8 @@ The test milestones of the negotiate package plan, unit 1b. The full
 pipeline runs both directions over an in-process pipe pair, and the
 byte-split runs use the in-memory sim transport of `Streams.Sim`. The
 fixed-key plaintext security value and the minimal muxer value replace
-the Noise and yamux milestones (#16 merged, #17 open; the matrix check
-names the live gate). The deadline check
+the Noise and yamux milestones, so the suite runs no crypto and no
+session loop (the matrix check names the live gate). The deadline check
 advances the test `Clock` of `base/conc`, so the suite waits on no wall
 clock.
 
@@ -102,15 +102,33 @@ private def dialerId : Libp2p.Identity.PeerId := peerOf 1
 /-- The fixed peer id of the listening side. -/
 private def listenerId : Libp2p.Identity.PeerId := peerOf 2
 
+/-- The secure connection of a test handshake: `conn`, whose `read`
+delivers `front` before any connection byte, as the core seam asks of a
+`SecureConn` (the core pair, "The leftover hand-over"). `leftover`
+records the same bytes. The plaintext handshake starts no task, so the
+join answers at once. -/
+private def secureOf (conn : Streams.Connection) (front : ByteArray)
+    (localPeer remotePeer : Libp2p.Identity.PeerId) : BaseIO Libp2p.Core.SecureConn := do
+  let pending ← Conc.OnceRef.new front
+  return {
+    conn with
+    read := do
+      -- Hand out the front once; every later read goes to the connection.
+      let b ← (pending.updateGet fun b => (b, ByteArray.empty) : BaseIO ByteArray)
+      if b.isEmpty then conn.read else return some b
+    localPeer, remotePeer
+    leftover := front
+    join := pure () }
+
 /-- The fixed-key plaintext test security value. It replaces the Noise
-milestone (#16, merged; the real value joins when the core mock drops).
-The handshake writes its marker, reads the
+milestone, since the suite needs a handshake with no crypto in the
+loop. The handshake writes its marker, reads the
 peer's marker from the seed first and then from the connection, and
 hands the unconsumed bytes to the next stage. `overread` adds one read
 whose chunk joins the leftover, so a check can force the hand-over.
 `seedRef` records the seed the negotiation handed over. -/
 private def secValue (overread : Bool) (seedRef : Conc.OnceRef (Option ByteArray)) :
-    Mock.Core.SecurityProtocol where
+    Libp2p.Core.SecurityProtocol where
   id := ⟨"/test/plain/1.0.0"⟩
   handshake := fun role conn seed => do
     seedRef.set (some seed)
@@ -133,25 +151,23 @@ private def secValue (overread : Bool) (seedRef : Conc.OnceRef (Option ByteArray
         | none => throw (.closed "test handshake over-read found the connection closed")
         | some chunk => pure chunk
       else pure ByteArray.empty
-    return { conn := conn,
-             localPeer := if role = .initiator then dialerId else listenerId,
-             remotePeer := if role = .initiator then listenerId else dialerId,
-             leftover := rest ++ over,
-             close := Streams.Connection.closeQuietly conn }
+    secureOf conn (rest ++ over)
+      (if role = .initiator then dialerId else listenerId)
+      (if role = .initiator then listenerId else dialerId)
 
 /-- The test muxer value. It replaces the yamux milestone (#17,
 unmerged). `open` records its leftover argument, the opened id, and a
 ran flag in shared cells, and returns a no-op session. -/
-private def muxValue (id : Mock.Core.ProtocolId) (ranRef : Conc.OnceRef Bool)
+private def muxValue (id : Libp2p.Core.ProtocolId) (ranRef : Conc.OnceRef Bool)
     (leftRef : Conc.OnceRef (Option ByteArray))
-    (openRef : Conc.OnceRef (Option Mock.Core.ProtocolId)) : Mock.Core.Muxer where
+    (openRef : Conc.OnceRef (Option Libp2p.Core.ProtocolId)) : Libp2p.Core.Muxer where
   id := id
   «open» := fun _ _ leftover => do
     ranRef.set true
     leftRef.set (some leftover)
     openRef.set (some id)
-    return { openStream := (throw (.protocol "the test session opens no stream") :
-                ExceptT Mock.Core.Error Conc.Async Streams.Stream),
+    return { openStream := fun _ => (throw (.protocol "the test session opens no stream") :
+                ExceptT Libp2p.Core.Error Conc.Async Streams.Stream),
              accept := pure none,
              close := pure (),
              join := pure () }
@@ -196,7 +212,7 @@ private def recordWrites (conn : Streams.Connection) (ref : Conc.OnceRef (List B
 
 /-- The answer of one upgrade run. -/
 private abbrev UpAnswer :=
-  Option (Except Mock.Core.Error (Mock.Core.MuxSession × Libp2p.Identity.PeerId))
+  Option (Except Libp2p.Core.Error (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId))
 
 /-! ## The pipeline checks -/
 
@@ -205,15 +221,15 @@ assertion. The test security value carries no advertisement
 field, so the wire exchange alone selects the muxer. -/
 private def checkFullPipeline (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
-  let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
+  let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
   let dSeed : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
   let lSeed : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
   let dRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let lRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let dLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
   let lLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
-  let dOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
-  let lOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
+  let dOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
+  let lOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
   let dAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let lAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let tasks ← Conc.TaskSet.new
@@ -230,8 +246,9 @@ private def checkFullPipeline (r : Runner) : Async Unit := do
   | some (.ok (ds, dp)), some (.ok (ls, lp)) => do
       ds.close
       ls.close
-      ds.join
-      ls.join
+      let dj ← ds.join.run
+      let lj ← ls.join.run
+      r.check "upgrade sessions join cleanly" (dj matches .ok () && lj matches .ok ())
       r.check "upgrade full pipeline dial and listen"
         (dp == listenerId && lp == dialerId)
       r.check "upgrade muxer selected on the wire"
@@ -251,7 +268,7 @@ responder's negotiation over-reads the marker and hands it to the
 handshake. -/
 private def checkNegotiationLeftover (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
-  let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
+  let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
   let count : Conc.OnceRef Nat ← Conc.OnceRef.new 0
   let dSeed : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
   let lSeed : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
@@ -259,8 +276,8 @@ private def checkNegotiationLeftover (r : Runner) : Async Unit := do
   let lRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let dLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
   let lLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
-  let dOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
-  let lOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
+  let dOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
+  let lOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
   let dAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let lAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let tasks ← Conc.TaskSet.new
@@ -283,17 +300,18 @@ private def checkNegotiationLeftover (r : Runner) : Async Unit := do
   (← sideConn iside).close
   (← sideConn rside).close
 
-/-- The handshake over-reads the muxer header chunk, and the muxer
-stage still selects from the `SecureConn` leftover. -/
+/-- The handshake over-reads the muxer header chunk. The secure `read`
+delivers it first, so the muxer stage still selects, and `Muxer.open`
+gets no bytes. -/
 private def checkHandshakeLeftover (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
-  let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
+  let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
   let dRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let lRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let dLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
   let lLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
-  let dOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
-  let lOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
+  let dOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
+  let lOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
   let dAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let lAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let tasks ← Conc.TaskSet.new
@@ -321,15 +339,15 @@ private def checkHandshakeLeftover (r : Runner) : Async Unit := do
 `Muxer.open` as its `ByteArray` argument. -/
 private def checkMuxOpenLeftover (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
-  let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
+  let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
   let extra := Bytes.ofNatList [9, 9, 9]
   let count : Conc.OnceRef Nat ← Conc.OnceRef.new 0
   let dRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let lRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let dLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
   let lLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
-  let dOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
-  let lOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
+  let dOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
+  let lOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
   let dAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let lAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let tasks ← Conc.TaskSet.new
@@ -356,14 +374,14 @@ private def checkMuxOpenLeftover (r : Runner) : Async Unit := do
 supports only the second, and the chosen session is the second id. -/
 private def checkNaRetry (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
-  let muxA : Mock.Core.ProtocolId := ⟨"/test/mux/a"⟩
-  let muxB : Mock.Core.ProtocolId := ⟨"/test/mux/b"⟩
+  let muxA : Libp2p.Core.ProtocolId := ⟨"/test/mux/a"⟩
+  let muxB : Libp2p.Core.ProtocolId := ⟨"/test/mux/b"⟩
   let aRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
-  let aOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
+  let aOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
   let bRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
-  let bOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
+  let bOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
   let lRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
-  let lOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
+  let lOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
   let lWrites : Conc.OnceRef (List ByteArray) ← Conc.OnceRef.new []
   let dAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let lAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
@@ -400,7 +418,7 @@ parked negotiation with `closed`. -/
 private def checkIdentityMismatch (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
   let wrongId : Libp2p.Identity.PeerId := peerOf 3
-  let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
+  let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
   let dRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let lRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let dAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
@@ -432,7 +450,7 @@ connection, and the parked read ends on its own. -/
 private def checkDeadline (r : Runner) : Async Unit := do
   let tc ← Conc.TestClock.new
   let (sc, farPipe) ← silentPeer
-  let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
+  let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
   let answer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let tasks ← Conc.TaskSet.new
   tasks.spawn do
@@ -475,7 +493,7 @@ private def checkEmptySecurity (r : Runner) : Async Unit := do
 propose fails, and the teardown close reaches the responder. -/
 private def checkEmptyMuxer (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
-  let muxB : Mock.Core.ProtocolId := ⟨"/test/mux/b"⟩
+  let muxB : Libp2p.Core.ProtocolId := ⟨"/test/mux/b"⟩
   let lRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let dAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let lAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
@@ -508,7 +526,7 @@ private def checkEmptyMuxer (r : Runner) : Async Unit := do
 private def checkEof (r : Runner) : Async Unit := do
   let tc ← Conc.TestClock.new
   let (iside, rside) ← newPair
-  let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
+  let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
   let answer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let tasks ← Conc.TaskSet.new
   tasks.spawn do
@@ -528,8 +546,8 @@ private def checkEof (r : Runner) : Async Unit := do
 list and the `negotiationFailed` maps to `protocol`. -/
 private def checkExhausted (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
-  let muxA : Mock.Core.ProtocolId := ⟨"/test/mux/a"⟩
-  let muxB : Mock.Core.ProtocolId := ⟨"/test/mux/b"⟩
+  let muxA : Libp2p.Core.ProtocolId := ⟨"/test/mux/a"⟩
+  let muxB : Libp2p.Core.ProtocolId := ⟨"/test/mux/b"⟩
   let dRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let lRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let dAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
@@ -564,7 +582,7 @@ private def checkExhausted (r : Runner) : Async Unit := do
 teardown close reaches the peer. -/
 private def checkHostile (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
-  let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
+  let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
   let garbage := Bytes.ofNatList (List.replicate 9 255)
   let count : Conc.OnceRef Nat ← Conc.OnceRef.new 0
   let dAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
@@ -616,7 +634,7 @@ private def traceHexes (file : String) (trace : List Json) : IO (List String × 
 writes equal the recorded `r2i` bytes, byte for byte. -/
 private def checkGoTraces (r : Runner) : Async Unit := do
   let goj ← Tests.loadJson "mss-go-trace.json"
-  let kadId : Mock.Core.ProtocolId := ⟨"/ipfs/kad/1.0.0"⟩
+  let kadId : Libp2p.Core.ProtocolId := ⟨"/ipfs/kad/1.0.0"⟩
   let fullTrace ← Tests.jArr "mss-go-trace.json" goj "fullTrace"
   let (i2rF, r2iF) ← traceHexes "mss-go-trace.json" fullTrace
   let rs : State := { role := .responder, supported := [kadId], proposals := [],
@@ -653,7 +671,7 @@ private def checkGoTraces (r : Runner) : Async Unit := do
 /-! ## The send-side cap -/
 
 /-- A protocol id whose frame is over the 1 KiB cap. -/
-private def overCapId : Mock.Core.ProtocolId :=
+private def overCapId : Libp2p.Core.ProtocolId :=
   ⟨String.ofList (List.replicate 1100 'a')⟩
 
 /-- A configured id that would produce an over-cap frame is refused before
@@ -668,14 +686,14 @@ private def checkSendCap (r : Runner) : Async Unit := do
      | .error .negotiationFailed => true
      | _ => false)
   r.check "negotiate send cap admits a normal id"
-    (match initiatorStart [Mock.Core.ProtocolId.mk "/ipfs/kad/1.0.0"] with
+    (match initiatorStart [Libp2p.Core.ProtocolId.mk "/ipfs/kad/1.0.0"] with
      | .ok _ => true
      | _ => false)
 
 /-- The responder writes its header before it reads anything, so a dialer
 that also waits does not stall. -/
 private def checkResponderFirst (r : Runner) : Async Unit := do
-  match responderStart [Mock.Core.ProtocolId.mk "/ipfs/kad/1.0.0"] with
+  match responderStart [Libp2p.Core.ProtocolId.mk "/ipfs/kad/1.0.0"] with
   | .ok (s, ws) =>
       r.check "negotiate responder sends its header first"
         (ws == [encodeMsg header] && s.phase = .negotiating)
@@ -722,11 +740,10 @@ private def readExactly (conn : Streams.Connection) (seed : ByteArray) (n : Nat)
 
 /-- The fixed-key test handshake, chunk-agnostic: it reads its marker
 with `readExactly`, so it accepts whatever chunks the transport chose.
-It replaces the Noise milestone (#16, merged; the real value joins
-when the core mock drops) as `secValue` does, and
+It replaces the Noise milestone as `secValue` does, and
 it exists so the pipeline can run over the splitting sim. -/
 private def secValueExact (seedRef : Conc.OnceRef (Option ByteArray)) :
-    Mock.Core.SecurityProtocol where
+    Libp2p.Core.SecurityProtocol where
   id := ⟨"/test/plain/1.0.0"⟩
   handshake := fun role conn seed => do
     seedRef.set (some seed)
@@ -739,29 +756,27 @@ private def secValueExact (seedRef : Conc.OnceRef (Option ByteArray)) :
     match ← readExactly conn seed 4 with
     | none => throw (.closed "test handshake read ended before the marker")
     | some four =>
-      return { conn := conn,
-               localPeer := if role = .initiator then dialerId else listenerId,
-               remotePeer := if role = .initiator then listenerId else dialerId,
-               leftover := Bytes.ofNatList (four.drop 4),
-               close := Streams.Connection.closeQuietly conn }
+      secureOf conn (Bytes.ofNatList (four.drop 4))
+        (if role = .initiator then dialerId else listenerId)
+        (if role = .initiator then listenerId else dialerId)
 
 /-- The multistream exchange of both roles over a splitting sim, for a
 supported id and for the `na` retry. Each run also asserts that the
 responder's reader saw one byte per chunk, which shows the sim split the
 writes. -/
 private def checkSplitNegotiate (r : Runner) : Async Unit := do
-  let kadId : Mock.Core.ProtocolId := ⟨"/ipfs/kad/1.0.0"⟩
-  let idId : Mock.Core.ProtocolId := ⟨"/ipfs/id/1.0.0"⟩
-  let runOne (name : String) (iIds rIds : List Mock.Core.ProtocolId)
-      (expect : Mock.Core.ProtocolId) : Async Unit := do
+  let kadId : Libp2p.Core.ProtocolId := ⟨"/ipfs/kad/1.0.0"⟩
+  let idId : Libp2p.Core.ProtocolId := ⟨"/ipfs/id/1.0.0"⟩
+  let runOne (name : String) (iIds rIds : List Libp2p.Core.ProtocolId)
+      (expect : Libp2p.Core.ProtocolId) : Async Unit := do
     let (ic, rc) ← simPair true
     let sizes : Conc.OnceRef (List Nat) ← Conc.OnceRef.new []
     let split := recordReadSizes rc sizes
     let iReader := Streams.BufReader.new ic
     let rReader := Streams.BufReader.new split
-    let iAnswer : Conc.OnceRef (Option (Except Mock.Core.Error StageResult)) ←
+    let iAnswer : Conc.OnceRef (Option (Except Libp2p.Core.Error StageResult)) ←
       Conc.OnceRef.new none
-    let rAnswer : Conc.OnceRef (Option (Except Mock.Core.Error StageResult)) ←
+    let rAnswer : Conc.OnceRef (Option (Except Libp2p.Core.Error StageResult)) ←
       Conc.OnceRef.new none
     let tasks ← Conc.TaskSet.new
     tasks.spawn do
@@ -789,15 +804,15 @@ and the open. This is the two-party run that the definition of done of
 #18 requires. -/
 private def checkSplitPipeline (r : Runner) : Async Unit := do
   let (ic, rc) ← simPair true
-  let muxId : Mock.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
+  let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
   let dSeed : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
   let lSeed : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
   let dRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let lRan : Conc.OnceRef Bool ← Conc.OnceRef.new false
   let dLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
   let lLeft : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
-  let dOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
-  let lOpen : Conc.OnceRef (Option Mock.Core.ProtocolId) ← Conc.OnceRef.new none
+  let dOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
+  let lOpen : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
   let dAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let lAnswer : Conc.OnceRef UpAnswer ← Conc.OnceRef.new none
   let tasks ← Conc.TaskSet.new
@@ -814,8 +829,9 @@ private def checkSplitPipeline (r : Runner) : Async Unit := do
   | some (.ok (ds, dp)), some (.ok (ls, lp)) => do
       ds.close
       ls.close
-      ds.join
-      ls.join
+      let dj ← ds.join.run
+      let lj ← ls.join.run
+      r.check "split sim upgrade sessions join cleanly" (dj matches .ok () && lj matches .ok ())
       r.check "split sim upgrade pipeline, dial and listen"
         (dp == listenerId && lp == dialerId)
       r.check "split sim upgrade selects the muxer on the wire"
@@ -852,6 +868,6 @@ def run (r : Runner) : IO Unit := do
     checkSplitPipeline r
   Conc.Async.run all
   r.skip "upgrade noise yamux matrix over tcp"
-    "needs the core swap, which frees the merged Noise value, and the muxer value of #17 (the W5.9 live gate)"
+    "needs the Noise value on the real core (#76) and the yamux muxer value (#77) (the W5.9 live gate)"
 
 end Tests.Upgrade
