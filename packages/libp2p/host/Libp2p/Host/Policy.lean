@@ -1,4 +1,4 @@
-import Libp2p.Core.Policy
+import Libp2p.Core
 
 /-!
 # The policy values

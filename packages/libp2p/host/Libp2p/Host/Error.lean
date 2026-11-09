@@ -1,6 +1,6 @@
 import Multiformats
 import Libp2p.Identity
-import Libp2p.Core.Error
+import Libp2p.Core
 
 /-!
 # `Host.Error`
@@ -20,8 +20,6 @@ set_option autoImplicit false
 
 namespace Libp2p.Host
 
--- `Core.Error` resolves to `Libp2p.Core.Error` through the parent
--- namespace `Libp2p`.
 open Multiformats Libp2p.Identity
 
 /-- The policy checkpoint that refused a connection (§3.4: a closed
