@@ -17,8 +17,12 @@ row 18).
 |---|---|
 | `Main.lean` | the demo node, the `demo` executable; the §3.1 assembly as running code, the spike's `Main.lean` mapped here |
 | `PingNode.lean` | the ping node, the `pingnode` executable; the `serve` and `dial` modes and their argument parsing |
-| `Interop.lean` | the transport-interop harness, the `interop` executable; the config environment and the listener and dialer modes |
-| `Interop/Redis.lean` | the harness coordination client, private to the `interop` executable; the spike's `LeanP2P/Interop/Redis.lean` mapped here |
+| `Interop.lean` | the transport-interop harness; the host assembly and the listener and dialer modes |
+| `Interop/Main.lean` | the `interop` executable's `main`, apart from `Interop.lean` so the suite can import the harness |
+| `Interop/Config.lean` | the test plan's environment variables, read into a `Config`, and the timing record |
+| `Interop/Resp.lean` | RESP2, pure: the reply header parse with its caps, and the command encoding |
+| `Interop/Redis.lean` | the harness coordination client, private to the `interop` executable: `PING`, `RPUSH`, and `BLPOP` over one connection; the spike's `LeanP2P/Interop/Redis.lean` mapped here |
+| `Interop/Mock/Stack.lean` | the mock of the unmerged stack under the harness (RULES.md, "Working ahead of the tree"), until W5.2 to W5.7 merge |
 
 The package is executables only, with no library root (see
 Decisions). The W0.1 scaffold gives every leaf a nominal `lean_lib`;
@@ -64,7 +68,8 @@ three CLI contracts.
   test plan's keys verbatim, `handshakePlusOneRTTMillis` and
   `pingRTTMilllis`, typo included, because the runner compares the
   JSON keys literally. Diagnostics go to stderr, and
-  a failure or a timeout exits nonzero.
+  a failure or a timeout exits nonzero. `ip` and `redis_addr` take
+  literal IPv4 addresses (see Decisions).
 
 ## Owned contracts and how the package keeps them
 
@@ -93,7 +98,14 @@ three CLI contracts.
    PRINCIPLES 2.3). The Redis client reads server-supplied line and
    bulk lengths, each read is capped, and an over-long length is an
    error. The spike's client read `readExactly n` with no cap; the
-   port adds the cap.
+   port adds the cap. The largest value the harness reads is the
+   listener's address as multiaddr text. The multiformats JSON path
+   admits address text up to `maxAddressJsonBytes`, and JSON escaping
+   never shortens a string, so that constant caps each reply line and
+   each bulk string. An array is capped at two elements, the key and
+   the value of a `BLPOP` answer. The theorems
+   `parseHeaderBulkOverCap` and `parseHeaderArrayOverCap` state both
+   caps on the header parse.
 
 ## Decisions
 
@@ -104,15 +116,53 @@ three CLI contracts.
 - **The go-side helpers stay scripts, test-only.** CLAUDE.md's
   dependencies rule keeps Go and Rust tooling test-only, confined to
   the harness, and never on a shipped or proof path. The scripts are
-  `pingd.go`, `interopd.go`, `ping-interop.sh`, and
-  `interop-matrix.sh` under the root `scripts/`, beside the W0.3
+  `pingd.go`, `ping-interop.sh`, `interop-matrix.sh`, and
+  `interop-slowreader/` under the root `scripts/`, beside the W0.3
   vector tooling (§7 row 11's note). The spike also kept a
   test-plans runner image, `interop/leanp2p/{Makefile,Dockerfile}`.
   The target drops the image, and `scripts/interop-matrix.sh` is the
   gate's only form, so docker appears only inside the scripts.
+- **The matrix's go peer is go-libp2p's own test-plan program.** The
+  test plan builds its go image from go-libp2p's `test-plans/`
+  directory with `PingDockerfile`
+  (`vendor/test-plans/transport-interop/impl/go/v0.48/Makefile`, line
+  7). The script builds the same program from `vendor/go-libp2p` at
+  the pinned v0.50.0, so the peer across the wire is the one the
+  test plan runs. The slow-reader program joins that module, with its
+  `go.mod` and `go.sum`.
+- **The listener publishes the local address of its Redis
+  connection.** go's peer publishes its first address that is not
+  loopback, from the host's interface list
+  (`vendor/go-libp2p/test-plans/cmd/ping/main.go`, lines 202 to 209).
+  The Lean runtime has no interface list. When `ip` is `0.0.0.0`, the
+  harness takes the IP of its Redis connection's local address: the
+  kernel picked it to reach the server that both peers share, so the
+  dialer reaches it too. A concrete `ip` is published as given.
+- **`redis_addr` is a literal IPv4 address.** The test plan defaults
+  it to the host name `redis` (`vendor/test-plans/transport-interop/README.md`,
+  line 26). Root §4.1 keeps `Std.Async`, and so its DNS resolver, out
+  of every package but `base/conc`, and the TCP transport dials `/ip4`
+  and `/ip6` only (the streams ARCHITECTURE, "Public surface"). A host
+  name is a configuration error with its own message. The gate runs
+  only through `scripts/interop-matrix.sh`, which passes literal
+  addresses.
 - **The demo composition doubles as the composition documentation**
   (root §2: "shows, as running code, how to compose the stack"). A
   reader who wants to compose the stack reads `Main.lean`.
+
+## The mock
+
+W5.2, W5.3, W5.4, W5.6, and W5.7 are open, so the harness builds
+against `Interop/Mock/Stack.lean`, a mock of their frozen surfaces
+(RULES.md, "Working ahead of the tree"). A type is a copy of the frozen
+shape, reduced to the fields the harness touches. An operation is
+`opaque`, and its body fails with the name of the missing package: no
+body fakes a connection or a handshake. The mock states no axiom.
+W5.1 has merged, so the identity key and the peer id come from the
+real `Libp2p.Identity`, and the harness generates its key through it.
+Until the integration, a live run stops at the first host call, and
+the gate cannot pass. At the integration, `Interop.lean` imports the
+real packages, and the module goes.
 
 ## What the package must not depend on
 

@@ -190,7 +190,14 @@ globs = ["Libp2p.Protocols.*"]
 [[lean_lib]]
 name = "Cli"
 srcDir = "packages/cli"
-roots = ["Cli", "GossipsubInterop", "GossipsubSession"]
+roots = ["Cli", "Interop", "GossipsubInterop", "GossipsubSession"]
+globs = ["Cli", "Interop.*"]
+
+# The transport-interop harness of root PLAN W5.9.
+[[lean_exe]]
+name = "interop"
+srcDir = "packages/cli"
+root = "Interop.Main"
 
 # The test tree: one suite module per upstream file, with the shared
 # runner in `Tests/Support.lean`. The `tests` executable is the
