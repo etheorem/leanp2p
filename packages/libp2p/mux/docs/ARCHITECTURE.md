@@ -17,53 +17,81 @@ same node code ran under both muxers in-process and over loopback TCP
 
 | Module | Holds, and why |
 |---|---|
-| `Libp2p/Mux.lean` | the root module. It imports `Constants.lean` and `Test.lean`. The `Test.lean` import loads the session implementation under `Libp2p.Mux.Test` |
-| `Libp2p/Mux/Constants.lean` | `Mux.yamuxId` (`/yamux/1.0.0`), `Mux.mplexId` (`/mplex/6.7.0`), `Mux.testId` (`/leanp2p/test-mux/1.0.0`), and `Mux.mplexMessageCap` (1 MiB); the named ids of §3.4 and the cap of §5.1, one home per fact (§3.8) |
-| `Libp2p/Mux/Yamux.lean` | `Mux.yamux`, the yamux value over the session of `net/yamux`; the `Role` conversion below. Planned |
-| `Libp2p/Mux/Mplex.lean` | the mplex message codec and `Mux.mplex` (P2, §8); the spike reference is `Conn/Mplex.lean` (§10 row 15, §7 row 10). Planned |
-| `Libp2p/Mux/Test.lean` | `Mux.test : Muxer`. Present. `open` calls `Session.start` and lifts the session onto the seam |
-| `Libp2p/Mux/Test/Wire.lean` | the header, frame, and incremental parser. Present. An unsupported implementation detail under `Libp2p.Mux.Test.Wire`. Tests import it directly |
-| `Libp2p/Mux/Test/State.lean` | the pure owner-loop state and its transitions. Present. An unsupported implementation detail under `Libp2p.Mux.Test.State`. A transition returns actions for the runtime shell |
-| `Libp2p/Mux/Test/Session.lean` | the runtime shell, `TestHooks`, and `startWithHooks`. Present. Unsupported implementation and testing details under `Libp2p.Mux.Test.Session`. One reader and one owner loop |
-| `Libp2p/Mux/Mock/Core/ProtocolId.lean` | the temporary `ProtocolId`. Present. `Constants.lean` imports only this module, so the constants stay free of `Conc` and `Streams` |
-| `Libp2p/Mux/Mock/Core.lean` | the temporary `Role`, `Error`, `Muxer`, and `MuxSession` that let W5.4 compile before W5.2. Present. `Test.lean` imports it, so the root loads the seam with `Mux.test` |
+| `Libp2p/Mux.lean` | the root module. It imports `Constants.lean`, `Yamux.lean`, and `Test.lean` |
+| `Libp2p/Mux/Constants.lean` | `Mux.yamuxId` (`/yamux/1.0.0`), `Mux.mplexId` (`/mplex/6.7.0`), `Mux.testId` (`/leanp2p/test-mux/1.0.0`), and `Mux.mplexMessageCap` (1 MiB). The ids are `Libp2p.Core.ProtocolId` values. One home per fact (§3.4, §3.8) |
+| `Libp2p/Mux/Yamux.lean` | public `Mux.yamux`, the yamux `Muxer` over `Yamux.Session`. The adapter described below |
+| `Libp2p/Mux/Mplex.lean` | the mplex message codec and `Mux.mplex` (P2, §8). Not in the tree. The spike reference is `Conn/Mplex.lean` (§10 row 15, §7 row 10) |
+| `Libp2p/Mux/Test.lean` | public `Mux.test : Muxer`. `open` calls `Session.start` and returns that session on the seam |
+| `Libp2p/Mux/Test/Wire.lean` | the header, frame, and incremental parser. An unsupported implementation detail under `Libp2p.Mux.Test.Wire`. Tests import it directly |
+| `Libp2p/Mux/Test/State.lean` | the pure owner-loop state and its transitions. An unsupported implementation detail under `Libp2p.Mux.Test.State`. A transition returns actions for the runtime shell |
+| `Libp2p/Mux/Test/Session.lean` | the runtime shell, `TestHooks`, and `startWithHooks`. Unsupported implementation and testing details under `Libp2p.Mux.Test.Session`. One reader and one owner loop |
 
-The supported names in `Libp2p.Mux` are `Mux.test`, `Mux.testId`,
-and the other constants, together with the `Muxer` and `MuxSession`
-fields. The frame, the parser, the state, and the session shell live
-under `Libp2p.Mux.Test.*`. `Libp2p.Mux` defines no alias for them.
-
-`Libp2p/Mux.lean`, `Libp2p/Mux/Constants.lean`,
-`Libp2p/Mux/Mock/Core/ProtocolId.lean`, `Libp2p/Mux/Mock/Core.lean`,
-`Libp2p/Mux/Test/Wire.lean`, `Libp2p/Mux/Test/State.lean`,
-`Libp2p/Mux/Test/Session.lean`, and `Libp2p/Mux/Test.lean` are in
-the tree. `Yamux.lean` and `Mplex.lean` are the remaining modules
-of this package.
+`Libp2p.Core` owns `ProtocolId`, `Core.Error`, `Role`, `Muxer`, and
+`MuxSession`. This package builds values of those seam types.
 
 ## Public surface
 
-- `Mux.yamux : Muxer` carries `id := Mux.yamuxId` and the core seam's
-  `open : Role → Connection → ByteArray → ExceptT Core.Error Async
-  MuxSession` (§4.9; the core pair, public surface). `Yamux.lean`
-  converts `Role` as the decision below records, and the session entry
-  of `net/yamux` then applies that package's parity. The `ByteArray`
-  argument is the negotiation leftover. `open` hands it to the session
-  entry as data, and the session loop turns it into the first `Event`
-  (§4.7).
-- The error mapping happens once, in `Yamux.lean`: the value lifts the
-  session failure into `Core.Error` with one `Except.mapError` (§3.5).
-  The upgrader and the host match on `Core.Error` alone.
-- `Mux.test : Muxer` carries `id := Mux.testId`. `open` calls
+The supported names in `Libp2p.Mux` are the mux values and constants:
+`Mux.yamux`, `Mux.yamuxId`, `Mux.test`, `Mux.testId`, `Mux.mplexId`,
+and `Mux.mplexMessageCap`. Callers use the `Muxer` and `MuxSession`
+operations owned by `Libp2p.Core`: `open`, `openStream`, `accept`,
+`close`, and `join`.
+
+`Libp2p/Mux.lean` imports `Test.lean`. The frame, the parser, the
+state, the session shell, `TestHooks`, and `startWithHooks` then
+load under `Libp2p.Mux.Test.*`. Those declarations stay unsupported.
+`Libp2p.Mux` defines no alias for them.
+
+- `Mux.yamux : Muxer` has `id = Mux.yamuxId`. The yamux value below
+  records how `open` builds the session.
+- `Mux.test : Muxer` has `id = Mux.testId`. `open` calls
   `Test.Session.start` with the role, the connection, and the
-  leftover bytes. `ExceptT.lift` returns that session on the seam.
-  The lift adds no error arm. `openStream` still takes a
-  `ProtocolId`. The private frame does not carry it.
-- `Mux.mplex : Muxer` is the P2 surface: `id := Mux.mplexId`, the pure
+  leftover bytes, and returns that session on the seam. The lift
+  adds no error arm. `openStream` takes a `ProtocolId`. The private
+  frame has no field for it.
+- `Mux.mplex : Muxer` is the P2 surface: `id := Mux.mplexId`, the
   message codec, and a session that keys streams by
-  `(id, initiator)`. The declared message length is capped at
+  `(id, initiator)`. A declared message length is capped at
   `Mux.mplexMessageCap` (§5.1).
-- `MuxSession.openStream` carries a `ProtocolId`; the decisions below
-  record it (the core pair, public surface).
+
+### The yamux value
+
+`open` forwards the `Connection` and the negotiation leftover to
+`Yamux.Session.new`. The session loop takes that leftover as its
+first input (§4.7).
+
+`Core.Role.initiator` selects the Yamux client. That side opens
+stream id `1` first, then the later odd ids. `Core.Role.responder`
+selects the Yamux server. That side opens stream id `2` first, then
+the later even ids. Yamux reserves stream id `0` for session frames.
+An inbound SYN opens a stream when its id has the remote parity.
+
+`openStream` receives a `ProtocolId` and discards it. The Yamux
+stream-open frame has no protocol-id field.
+
+Two returned errors cross this boundary, and each is mapped once.
+`openStream` maps a returned `Streams.Error` through the private
+`mapOpenError`. `closed` and `reset` become `Core.Error.closed`,
+because the call produced no stream. `timeout` becomes
+`Core.Error.timeout`. `join` maps a returned `Yamux.ProtocolError`
+through the private `mapProtocolError` to `Core.Error.protocol`.
+Each detail is `s!"yamux: {repr e}"`. A later read or write on a
+returned stream keeps `Streams.Error`.
+
+A thrown connection `IO.Error` propagates to the caller.
+`mapOpenError` and `mapProtocolError` are private.
+
+Frames, windows, flow control, keepalive, and the session tasks stay
+in `net/yamux`. That package imports no libp2p module.
+
+## Core boundary
+
+`Constants.lean` uses the `ProtocolId` from `Libp2p.Core`. The muxer
+values fill the landed `Muxer` and `MuxSession` seam. Core owns
+`Core.Error` and the public lifecycle. This package owns the
+conversion of returned errors and the construction of the values.
+`net/yamux` stays independent of every libp2p module. The private
+test protocol is a repository muxer on that same seam.
 
 ## Test session
 
@@ -75,27 +103,6 @@ repository tests can predict every byte. It is not a standardized or
 interoperable libp2p protocol. `Mux.test` is not an alias over Yamux.
 Its id is `Mux.testId`, and
 `Mux.testId.toString = "/leanp2p/test-mux/1.0.0"`.
-
-### Boundary
-
-The supported surface is `Mux.test`, `Mux.testId`, and the `Muxer`
-and `MuxSession` fields. `Libp2p/Mux.lean` imports `Test.lean`.
-That import loads the frame, the parser, the state, the session
-shell, `TestHooks`, and `startWithHooks` under `Libp2p.Mux.Test.*`.
-Those declarations are unsupported implementation and testing
-details. `Libp2p.Mux` defines no alias for them.
-
-Temporary W5.2 types live only under `Libp2p/Mux/Mock/`.
-`Mock/Core/ProtocolId.lean` holds `ProtocolId`, and `Constants.lean`
-imports that module alone. `Mock/Core.lean` holds `Role`, `Error`,
-`Muxer`, and `MuxSession`, so this package can compile before W5.2.
-The four error arms are the categories in the core architecture.
-Each arm carries a `String` as a provisional rendered payload.
-`MuxSession.join` is the provisional name of the completion the owner
-joins. W5.2 has not landed these declarations. When it lands, delete
-both mock modules. The imports then move to the `Libp2p.Core` modules
-that own the same names. The private test protocol is not part of
-the mock.
 
 ### Owner-loop state
 
@@ -536,8 +543,9 @@ leaves the session open.
    `ProtocolId` values.
 2. **A seam value holds no protocol decisions** (§3.1). `Mux.yamux`
    moves the role, the connection, and the leftover into the session
-   entry of `net/yamux`, and maps the error back. The frames are that
-   package's business.
+   of `net/yamux`, and maps the returned open and join errors at this
+   boundary. A thrown connection `IO.Error` propagates. The frames
+   are that package's business.
 3. **Lifecycle is part of the seam** (§3.1, §4.1). The `MuxSession`
    each value returns exposes `close : IO Unit` and the session
    completion, and the owner closes and then joins.
@@ -554,12 +562,12 @@ leaves the session open.
    names no stream, and the session keys every stream by
    `(id, initiator)`. The flag bit routes each inbound message to the
    key it names. The spike validated the rule against the go-mplex
-   spec, in-process, and the suite keeps the validation.
+   spec and in-process. The unit 2 suite will keep that validation.
 6. **The 1 MiB cap is checked before allocation** (§5.1,
    PRINCIPLES 2.3). `Mux.mplexMessageCap` names that 1 MiB limit.
    `Constants.lean` owns it, beside the ids. A declared length over
-   the cap is a protocol error, and it tears the session down.
-   `Mux.mplex` rejects that length before allocation.
+   the cap is a protocol error, and it tears the session down. The
+   P2 value `Mux.mplex` will reject that length before allocation.
 
 ## Decisions
 
@@ -569,18 +577,10 @@ leaves the session open.
   at the seam (§9, delta 10). A new muxer lands as a new value, with
   no edit to the upgrader (PRINCIPLES 1.3).
 - **`Libp2p/Mux/Yamux.lean` converts `Role`, and the Yamux session
-  applies parity.** The core pair folded the spike's client and server
-  entries into one `open` field (the core pair, decisions). The
-  adapter then maps the role. `Core.Role.initiator` selects the Yamux
-  client side, which opens odd ids, starting at `1` and advancing by
-  two. `Core.Role.responder` selects the Yamux server side, which
-  opens even ids, starting at `2` and advancing by two. Yamux reserves
-  stream id `0` for session messages. An inbound SYN creates a stream
-  when its id has the remote parity. A SYN whose id has the local
-  parity creates no stream state. `Libp2p/Mux/Yamux.lean` translates
-  `Core.Role` to the side selector that the final W4.3 public API
-  exports. `net/yamux` keeps its own client and server sides and
-  imports no libp2p module.
+  applies parity.** The seam has one `open` field. The adapter maps
+  the role as "The yamux value" records. `net/yamux` keeps its client
+  and server sides and imports no libp2p module. A SYN whose id has
+  the local parity creates no stream state.
 - **`MuxSession.openStream` takes a `ProtocolId`.** The spike's
   `MuxHandle.openStream` took the name, mplex put it in its NewStream
   frame, and the other muxers ignored it (§10 row 12; the core pair,
