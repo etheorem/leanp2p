@@ -5,6 +5,7 @@ import Libp2p.Mux.Test.Wire
 import Libp2p.Mux.Test.State
 import Libp2p.Mux.Test.Session
 import Yamux.Header
+import Yamux.Core
 import Conc
 import Streams
 import Multiformats
@@ -3975,16 +3976,214 @@ private def runExchange (r : Runner) : Async Unit := do
     | .ok () => none
   cleanup fault (dialSess.toList ++ peerSess.toList) pair.dialer pair.peer
 
+/-- The payload carried in the leftover. -/
+private def leftoverPayload : ByteArray := "from the leftover".toUTF8
+
+/-- The peer's stream open and its payload. The responder sees stream 1.
+The peer connection writes none of these bytes. -/
+private def leftoverBytes : ByteArray :=
+  let openHeader := Yamux.Header.make .windowUpdate
+    { Yamux.Flags.none with syn := true } 1 0
+  let dataHeader := Yamux.Header.make .data
+    { Yamux.Flags.none with fin := true } 1 leftoverPayload.size
+  Yamux.Header.encodeB openHeader ++ Yamux.Header.encodeB dataHeader ++ leftoverPayload
+
+/-- A 12-byte header whose version is 1. The codec accepts version 0. -/
+private def malformedHeader : ByteArray :=
+  ⟨#[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]⟩
+
+/-- The text of the connection fault the read gate throws. -/
+private def readFault : IO.Error :=
+  IO.userError "yamux adapter: the connection read failed"
+
+/-- What one public `join` did. A throw keeps its rendered text. -/
+private inductive ObservedJoin where
+  | returned (result : Except Libp2p.Core.Error Unit)
+  | threw (text : String)
+
+/-- Run `join`. A returned `Core.Error` stays returned. A thrown
+`IO.Error` stays thrown, and this call renders it. -/
+private def observeJoin (s : MuxSession) : Async ObservedJoin := do
+  try
+    return .returned (← (s.join).run)
+  catch e =>
+    return .threw (toString e)
+
+/-- The responder takes a remote open from the leftover `ByteArray`. -/
+private def runLeftover (r : Runner) : Async Unit := do
+  let pair ← ends 4190
+  let mut opened : Option MuxSession := none
+  let outcome : Except IO.Error Unit ← try
+    match ← (yamux.open .responder pair.dialer leftoverBytes).run with
+    | .error e =>
+      r.check s!"the leftover stream is accepted ({e})" false
+      pure (.ok ())
+    | .ok sess =>
+      opened := some sess
+      match ← sess.accept with
+      | none =>
+        r.check "the leftover stream is accepted" false
+        pure (.ok ())
+      | some inbound =>
+        r.check "the leftover stream is accepted" true
+        let got ← readBytes inbound leftoverPayload.size
+        r.check "the leftover payload arrives unchanged" (got == leftoverPayload)
+        sess.close
+        match ← observeJoin sess with
+        | .returned (.ok ()) =>
+          r.check "the leftover session joins cleanly" true
+        | .returned (.error e) =>
+          r.check s!"the leftover session joins cleanly ({e})" false
+        | .threw text =>
+          r.check s!"the leftover session joins cleanly (thrown {text})" false
+        opened := none
+        pure (.ok ())
+  catch e =>
+    pure (.error e)
+  let fault := match outcome with
+    | .error e => some e
+    | .ok () => none
+  cleanup fault opened.toList pair.dialer pair.peer
+
+/-- One malformed header becomes the yamux protocol error, twice. -/
+private def runProtocol (r : Runner) : Async Unit := do
+  let pair ← ends 4191
+  let mut opened : Option MuxSession := none
+  let outcome : Except IO.Error Unit ← try
+    match ← (yamux.open .initiator pair.dialer .empty).run with
+    | .error e =>
+      r.check s!"a malformed header joins as the yamux protocol error ({e})" false
+      pure (.ok ())
+    | .ok sess =>
+      opened := some sess
+      pair.peer.write malformedHeader
+      let detail := s!"yamux: {repr Yamux.ProtocolError.malformedHeader}"
+      match ← observeJoin sess with
+      | .threw text =>
+        r.check s!"a malformed header joins as the yamux protocol error (thrown {text})" false
+      | .returned (.ok ()) =>
+        r.check "a malformed header joins as the yamux protocol error (join returned ok)" false
+      | .returned (.error e) =>
+        r.check "a malformed header joins as the yamux protocol error"
+          (e == .protocol detail)
+        match ← observeJoin sess with
+        | .threw text =>
+          r.check s!"a second join returns the same protocol error (thrown {text})" false
+        | .returned (.ok ()) =>
+          r.check "a second join returns the same protocol error (join returned ok)" false
+        | .returned (.error e2) =>
+          r.check "a second join returns the same protocol error" (e2 == e)
+      opened := none
+      pure (.ok ())
+  catch e =>
+    pure (.error e)
+  let fault := match outcome with
+    | .error e => some e
+    | .ok () => none
+  cleanup fault opened.toList pair.dialer pair.peer
+
+/-- After a clean close, `openStream` returns the yamux closed error. -/
+private def runOpenAfterClose (r : Runner) : Async Unit := do
+  let pair ← ends 4192
+  let mut opened : Option MuxSession := none
+  let outcome : Except IO.Error Unit ← try
+    match ← (yamux.open .initiator pair.dialer .empty).run with
+    | .error e =>
+      r.check s!"a closed session joins cleanly ({e})" false
+      pure (.ok ())
+    | .ok sess =>
+      opened := some sess
+      sess.close
+      match ← observeJoin sess with
+      | .threw text =>
+        r.check s!"a closed session joins cleanly (thrown {text})" false
+      | .returned (.error e) =>
+        r.check s!"a closed session joins cleanly ({e})" false
+      | .returned (.ok ()) =>
+        r.check "a closed session joins cleanly" true
+        let detail := s!"yamux: {repr Streams.Error.closed}"
+        match ← (sess.openStream unrelatedId).run with
+        | .error (.closed d) =>
+          r.check "an open after close returns the yamux closed error" (d == detail)
+        | .error e =>
+          r.check s!"an open after close returns the yamux closed error ({e})" false
+        | .ok _ =>
+          r.check "an open after close returns the yamux closed error (a stream opened)" false
+      opened := none
+      pure (.ok ())
+  catch e =>
+    pure (.error e)
+  let fault := match outcome with
+    | .error e => some e
+    | .ok () => none
+  cleanup fault opened.toList pair.dialer pair.peer
+
+/-- A gated read throws, and both joins throw that same fault. -/
+private def runReadFault (r : Runner) : Async Unit := do
+  let pair ← ends 4193
+  let gate ← Chan.new 1
+  let dialer : Connection := { pair.dialer with
+    read := do
+      discard <| gate.recv
+      throw readFault }
+  let mut opened : Option MuxSession := none
+  let outcome : Except IO.Error Unit ← try
+    match ← (yamux.open .initiator dialer .empty).run with
+    | .error e =>
+      r.check s!"a connection read fault escapes the first join ({e})" false
+      pure (.ok ())
+    | .ok sess =>
+      opened := some sess
+      -- `open` has returned. The read is still parked on `gate`.
+      match ← gate.send () with
+      | .error _ => throw <| IO.userError "the read gate did not release"
+      | .ok () => pure ()
+      let want := toString readFault
+      match ← observeJoin sess with
+      | .returned result =>
+        r.check s!"a connection read fault escapes the first join (returned {repr result})" false
+      | .threw text =>
+        r.check "a connection read fault escapes the first join" (text == want)
+        match ← observeJoin sess with
+        | .returned result =>
+          r.check s!"a second join throws the same connection fault (returned {repr result})" false
+        | .threw text2 =>
+          r.check "a second join throws the same connection fault" (text2 == want)
+      opened := none
+      pure (.ok ())
+  catch e =>
+    pure (.error e)
+  let fault := match outcome with
+    | .error e => some e
+    | .ok () => none
+  cleanup fault opened.toList dialer pair.peer
+
 private def checks (r : Runner) : Async Unit := do
   r.check "Mux.yamux.id is Mux.yamuxId" (decide (yamux.id = yamuxId))
   runRole r 4180 .initiator 1 "an initiator open emits a Yamux SYN for stream 1"
   runRole r 4181 .responder 2 "a responder open emits a Yamux SYN for stream 2"
   runExchange r
+  runLeftover r
+  runProtocol r
+  runOpenAfterClose r
+  runReadFault r
+
+/-- The leftover and the public error boundary. -/
+private def boundary (r : Runner) : Async Unit := do
+  runLeftover r
+  runProtocol r
+  runOpenAfterClose r
+  runReadFault r
 
 /-- The yamux adapter boundary over the sim connection. -/
 def run (r : Runner) : IO Unit := do
   r.section "mux yamux adapter" "packages/libp2p/mux/Libp2p/Mux/Yamux.lean"
   Async.run (checks r)
+
+/-- The leftover and the public error boundary, for a focused run. -/
+def runBoundary (r : Runner) : IO Unit := do
+  r.section "mux yamux adapter errors" "packages/libp2p/mux/Libp2p/Mux/Yamux.lean"
+  Async.run (boundary r)
 
 end Tests.Mux.YamuxAdapter
 
