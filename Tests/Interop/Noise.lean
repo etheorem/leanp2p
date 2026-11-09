@@ -1,4 +1,5 @@
 import Streams
+import Libp2p.Core
 import Libp2p.Security
 
 /-!
@@ -69,7 +70,7 @@ def keyOf (s : ByteArray) : Async PrivKey :=
   orFail "identity" (PrivKey.ofData? .ed25519 s |>.mapError fun e => (repr e).pretty)
 
 /-- Our seam value, and the peer id the go side must prove. -/
-def setup : Async (Mock.Core.SecurityProtocol × PeerId) := do
+def setup : Async (Libp2p.Core.SecurityProtocol × PeerId) := do
   let cfg ← orFail "static key"
     ((← (Noise.Config.generate (← keyOf leanSeed)).run).mapError fun e => (repr e).pretty)
   let goKey ← keyOf goSeed
@@ -78,7 +79,7 @@ def setup : Async (Mock.Core.SecurityProtocol × PeerId) := do
   return (Noise.securityProtocol cfg, want)
 
 /-- Read until `n` bytes have arrived, or the end. -/
-def readN (sc : Mock.Core.SecureConn) (n : Nat) : Async ByteArray := do
+def readN (sc : Libp2p.Core.SecureConn) (n : Nat) : Async ByteArray := do
   let mut acc := ByteArray.empty
   while acc.size < n do
     match ← sc.read with
@@ -87,7 +88,7 @@ def readN (sc : Mock.Core.SecureConn) (n : Nat) : Async ByteArray := do
   return acc
 
 /-- The secure connection's answer, as a failure when it is an error. -/
-def joinOk (sc : Mock.Core.SecureConn) : Async Unit := do
+def joinOk (sc : Libp2p.Core.SecureConn) : Async Unit := do
   orFail "join" (← sc.join.run)
 
 /-- The listener side: the responder, then the echo, then the peer's
