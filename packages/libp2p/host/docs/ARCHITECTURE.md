@@ -24,7 +24,7 @@ libp2p group is §7, row 10).
 | `Libp2p/Host/Swarm.lean` | `Config`, the `Host` state, `dial`, `dialPeer`, `startListening`, `newStream`, the accept loop, the upgrade pipeline, and stream serving |
 | `Libp2p/Host/Shutdown.lean` | `Host.close`, the §5.5 sequence |
 | `Libp2p/Host/Policy.lean` | the permissive default gater, and the permissive and denying test doubles the core pair assigned here; the default resource manager (admits everything) and the default ranker (keeps the order, no delay) |
-| `Libp2p/Host/Mock/Negotiate.lean` | the mock of the W5.5 surface the host calls, until the negotiate package takes the real core (see "The mock") |
+| `Libp2p/Host/Mock/Negotiate.lean` | the mock of the W5.5 surface the host calls, until the host swap of issue #70 (see "The mock") |
 
 All declarations live in the `Libp2p.Host` namespace, and the root
 module re-exports the public submodules.
@@ -300,21 +300,20 @@ fixes them as follows.
 
 ## The mock
 
-The seam types come from `libp2p/core`. W5.5 (`libp2p/negotiate`)
-merged over its own mock of `libp2p/core`, so its upgrader takes seam
-values of another type than the host holds. The host keeps a mock of
-the negotiate surface, `Libp2p/Host/Mock/Negotiate.lean`, until the
-negotiate package takes the real core (issue #53). Its operations are
-`opaque`, and each body fails with the name of the package; it states
-no axiom. Swarm opens `Libp2p.Host.Mock`, so `Negotiate.upgradeWith`
-resolves as it will against the real package. The swap (issue #70)
-is a retype: the merged upgrader takes no `admit` checkpoint and
-exports no `negotiateStream`.
+The seam types come from `libp2p/core`. `libp2p/negotiate` takes the
+real core too (issue #53), so its upgrader takes the values the host
+holds. The host keeps a mock of the negotiate surface,
+`Libp2p/Host/Mock/Negotiate.lean`, until the host swap of issue #70.
+Its operations are `opaque`, and each body fails with the name of the
+package; it states no axiom. Swarm opens `Libp2p.Host.Mock`, so
+`Negotiate.upgradeWith` resolves as it will against the real package.
+The swap (issue #70) is a retype: the merged upgrader takes no `admit`
+checkpoint and exports no `negotiateStream`.
 
-Every upgrade runs through the negotiate mock and fails there, and the
-legs also need the Noise and yamux values on the real core (issues
-#76 and #77), so the unit 1b milestones run after those swaps. Unit
-1a runs in full.
+Every upgrade runs through the negotiate mock and fails there, so the
+unit 1b milestones run after the host swap of issue #70. The Noise and
+yamux values are on the real core (issues #76 and #77). Unit 1a runs
+in full.
 
 ## What the package must not depend on
 

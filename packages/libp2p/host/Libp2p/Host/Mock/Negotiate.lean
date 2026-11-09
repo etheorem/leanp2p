@@ -6,13 +6,12 @@ import Libp2p.Core
 /-!
 # Mock: the surface of `libp2p/negotiate` that the host uses
 
-W5.5 (`libp2p/negotiate`) merged over its own mock of `libp2p/core`,
-so its seam types are not the ones of `Libp2p.Core` that the host
-takes. The host keeps this mock until the negotiate package takes the
-real core (issue #53); the swap is issue #70 (RULES.md, "Working ahead
-of the tree"). The mock imports nothing from the negotiate package,
-and it states no axiom. Both entries fail with the name of the
-package: no body negotiates, runs a handshake, or opens a session.
+The merged `libp2p/negotiate` takes the seam types of `Libp2p.Core`
+(issue #53), so this mock carries those types too. The mock stays
+until the host swap of issue #70 lands (RULES.md, "Working ahead of
+the tree"). It imports nothing from the negotiate package, and it
+states no axiom. Both entries fail with the name of the package: no
+body negotiates, runs a handshake, or opens a session.
 
 The host needs two calls beside `Negotiate.upgrade`. The merged
 package has neither, so the swap retypes the host's use of them
@@ -20,7 +19,8 @@ package has neither, so the swap retypes the host's use of them
 
 * `upgradeWith`, the upgrade with a checkpoint after the handshake and
   before the muxer stage. The host's gater and resource manager decide
-  there, by the proved peer (the core mock, "The policy shapes"); go's
+  there, by the proved peer (the core ARCHITECTURE, "The policy
+  shapes"); go's
   upgrader calls `InterceptSecured` at the same place
   (`vendor/go-libp2p/p2p/net/upgrader/upgrader.go`, line 176). A refusal is a
   value, `UpgradeResult.refused`, and no `Core.Error` arm (§3.5).

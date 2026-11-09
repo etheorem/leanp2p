@@ -69,9 +69,8 @@ set_option autoImplicit false
 
 namespace Libp2p.Host
 
--- The negotiate mock stays until `libp2p/negotiate` takes the real core
--- seams (issue #53); `Negotiate.Error` resolves through
--- `Libp2p.Host.Mock`.
+-- The negotiate mock stays until the host swap of issue #70;
+-- `Negotiate.Error` resolves through `Libp2p.Host.Mock`.
 open Conc Streams Multiformats Libp2p.Host.Mock Libp2p.Identity
   Libp2p.Core Libp2p.Host.Mock.Negotiate
 
