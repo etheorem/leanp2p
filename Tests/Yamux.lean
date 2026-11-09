@@ -1205,7 +1205,7 @@ private def hostileChecks (r : Runner) : Async Unit := do
     -- for its write, and the ticker's for the pong.
     let writeArmed ← tc.nextTimer
     let pongArmed ← tc.nextTimer
-    r.check "hostile: the pong deadline is armed before the clock moves"
+    r.check "hostile: the ping arms its two timers before the clock moves"
       (writeArmed && pongArmed)
     tc.advance pingDeadlineMs
     let res ← try
