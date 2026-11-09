@@ -1,4 +1,5 @@
 import Libp2p.Protocols.Constants
+import Libp2p.Protocols.StreamError
 import Libp2p.Protocols.Identity
 import Libp2p.Protocols.Identify
 import Libp2p.Protocols.Ping

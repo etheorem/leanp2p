@@ -26,7 +26,9 @@ group is §7, row 10). The spike has no req/resp or gossipsub code.
 | `Libp2p/Protocols/ReqResp/Core.lean` | the reader state machine of §3.3: `State`, `Event`, `Action`, and the total `step`; it reads one request or a run of response chunks, and the output so far, the budget spent, the chunk count, and the error/EOF distinction live in the state |
 | `Libp2p/Protocols/ReqResp/Limiter.lean` | `MAX_CONCURRENT_REQUESTS`: the pure table rule with its bound theorem, and the per-peer `Limiter` over `OnceRef` |
 | `Libp2p/Protocols/ReqResp/Exchange.lean` | the shell over the core: the requester `request` and `requestPeer`, the responder `serve`, the handler value the registry stores, and the deadlines |
-| `Libp2p/Protocols/Mock/{Core,Muxer,HostStream}.lean` | the mocks of the dependencies this package still stands in for, W5.2, W5.4, and W5.6 (RULES.md, "Working ahead of the tree"); the integration deletes them |
+| `Libp2p/Protocols/StreamError.lean` | `mapStreamError`, the one map from a stream error into `Core.Error` that the req/resp handler uses |
+| `Libp2p/Protocols/Mock/Core.lean` | the mock of W5.2 that identify and ping still type over, until their swap (issue #55) |
+| `Libp2p/Protocols/Mock/{Muxer,HostStream}.lean` | the test values that stand in for a muxer value of W5.4 and the host of W5.6, over the real core seams; the muxer swap is due (`libp2p/mux` took the real core in PR #84, issue #77 closed, the swap owes on issue #78), and the host swap waits for the host's negotiate swap (issue #70) |
 | `Libp2p/Protocols/Gossipsub/Rpc.lean` | the RPC message with its `ProtoMessage` instance (§3.2) |
 | `Libp2p/Protocols/Gossipsub/Core.lean` | `State`, `Event`, `Action`, `ProtocolError`, and the total `step` that holds mesh, scoring, and heartbeat (§3.3) |
 | `Libp2p/Protocols/Gossipsub/Node.lean` | the loop task over the core, and the publish and subscribe surface at the seam level |
@@ -94,8 +96,9 @@ package; §4.9 names no echo, so no module line covers it.
   stream to the peer and negotiating the id is the host's job (W5.6),
   as go-libp2p's `NewStream` does it
   (`vendor/go-libp2p/p2p/host/basic/basic_host.go`, line 441). The host
-  pair's surface does not list that call yet, so the suite runs against
-  a mock of it. `requestPeer` takes the call as an argument, with a slot
+  names it `newStream`. The host still upgrades through a mock of
+  `libp2p/negotiate` (issue #70), so the suite runs against a mock of
+  the call. `requestPeer` takes the call as an argument, with a slot
   of the peer's `Limiter`, and runs `request` on the stream the call
   returns. `request` needs no host type: it writes
   the request, half-closes, and hands each response chunk to a callback
@@ -261,13 +264,16 @@ Both spike programs call `Ping.ping`.
   forbids the request and a wait would park on another request's
   deadline. The slot goes back on every path. The responder's side of
   the rule, "MAY penalise", is scoring, and stays with the client.
-- **The suite runs over the sim through two mocks.** The mock muxer
-  fills the frozen `Muxer` and `MuxSession` shapes of §4.9 over a sim
+- **The suite runs over the sim through two mocks.** The mock muxer is
+  one value of the `Muxer` seam of `libp2p/core` over a sim
   `Connection`, and the host stream mock fixes minimal signatures for
   the outbound stream call (go-libp2p's `NewStream`,
   `vendor/go-libp2p/p2p/host/basic/basic_host.go`, line 441) and for
-  `setHandler`. The W5.4 and W5.6 integrations replace them, and the
-  suite then runs over yamux and the host.
+  `setHandler`. Both type over the real core. `libp2p/mux` landed its
+  values over the real core (PR #84, issue #77 closed), so the muxer
+  swap is due (issue #78). The host swap waits for the host's
+  negotiate swap (issue #70). The suite then runs over yamux and the
+  host.
 
 ## What the package must not depend on
 
