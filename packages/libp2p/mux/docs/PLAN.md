@@ -12,16 +12,15 @@ the suite passes under `+RTS -N1`, and the import lint is green.
 | Unit | Root deps | Deliverable | Done when |
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
-| 1 | W4.3, W5.2 | the yamux `Muxer` value over the W4.3 session: `Mux.yamux` with the `Role` conversion, the constants module, the `Except.mapError` into `Core.Error`, and the independent `Mux.test` session, with its private frame codec and incremental parser. The temporary W5.2 seam mock stays isolated under `Libp2p/Mux/Mock/` and is replaced by `Libp2p.Core` when that package lands | the root W5.4 row holds, and the unit 1 milestones below pass |
+| 1 | W4.3, W5.2 | the P0 delivery: integration with the landed Core seam, `Mux.yamux` over the Yamux session, the independent `Mux.test` session, and the constants and adapter tests | the root W5.4 row and the unit 1 milestones below are satisfied |
 | 2 | W2.1, W5.2, unit 1 | the mplex value (P2, §8): the message codec, `Mux.mplex`, the go-compatible `(id, initiator)` identity, the half-close rules, and the 1 MiB cap | the mplex half of the root W5.4 deliverable holds, and the unit 2 milestones below pass |
 
-Unit 2's deps are the package's own call. The root graph lets mplex
-follow W5.4 at any time, and the mplex core needs the seam (W5.2) and
-no yamux session. Unit 1 comes first because it lays the constants
-module, including `Mux.mplexMessageCap`. Unit 2 checks a declared
-length against that cap.
+Unit 2 depends on W2.1, on the seam from W5.2, and on the constants
+from unit 1, including `Mux.mplexMessageCap`. The root graph lets
+mplex follow W5.4 at any time. Unit 2 checks a declared length
+against that cap.
 
-Unit 0 is done.
+Units 0 and 1 are complete. Unit 2 remains P2.
 
 ## Consumers
 
@@ -38,77 +37,42 @@ Unit 0 is done.
 
 ## Test milestones (unit 1)
 
-- `Mux.yamux` type-checks against the frozen seam of W5.2 with the
-  session of W4.3, with no edit to `core` (the core pair, plan).
-- `open` over a sim `Connection`, in both roles, returns a working
-  `MuxSession`: the test opens a stream, echoes a payload, and closes
-  (PRINCIPLES 1.4).
-- The leftover `ByteArray` reaches the session as its first `Event`:
-  the "negotiation" over-reads one byte, and the byte arrives at the
-  stream layer (§4.7).
-- The id constant carries the wire string:
-  `Mux.yamuxId.toString = "/yamux/1.0.0"`, as a `#guard` the build
-  checks (§3.4).
-- The error path maps once: a hostile frame tears the session down,
-  and the completion reports `Core.Error.protocol` through the single
-  `Except.mapError` (§3.5).
-- The private frame codec and the incremental parser (the
-  architecture, private frame; parser and codec).
-- `Mux.test` is independent of Yamux. The build checks
-  `Mux.test.id = Mux.testId` and
-  `Mux.testId.toString = "/leanp2p/test-mux/1.0.0"` (the architecture,
-  an independent test muxer).
-- The temporary W5.2 seam mock stays isolated, and the package
-  replaces it with `Libp2p.Core` when W5.2 lands (the architecture,
-  boundary).
-- Pure state-transition tests, then deterministic two-ended sim tests
-  (PRINCIPLES 1.4). A demo registry dials itself over the sim pair and
-  serves one handler through the test session (§3.1).
-- Simultaneous opens in both roles, and several concurrent streams
-  (the architecture, stream ids).
-- Ordered writes, multi-frame writes, and an empty write (the
-  architecture, scheduling and writes).
-- Half-close and reset (the architecture, scheduling and writes;
-  stream lifetime).
-- Both directions close, the id leaves the live table, and a read
-  still drains buffered bytes to EOF (the architecture, stream
-  lifetime).
-- A reset retires the id at once (the architecture, stream lifetime).
-- Reset ordering on one stream: queue bytes, reset, read those bytes,
-  then `.error .reset` once, then `.ok none`. New writes fail, and
-  the id is already retired (the architecture, stream lifetime).
-- Data after a received fin, and a duplicate fin, are ignored on a
-  live stream (the architecture, stream lifetime).
-- A remote open refused for capacity consumes that expected id, and
-  the next remote id is accepted (the architecture, stream ids).
-- A local open that waits takes no id (the architecture, stream ids).
-- A blocked read, write, open, and `accept` each wake on shutdown
-  (the architecture, ownership; terminal causes).
-- A writer waiting outside admission wakes on half-close and on
-  shutdown, and completes with the closed stream result (the
-  architecture, scheduling and writes).
-- Malformed header and body cases. Partial input followed by more
-  bytes. Partial input followed by connection end (the architecture,
-  parser and codec).
-- Id parity, strict sequencing, the final valid ids, and exhaustion
-  (the architecture, stream ids).
-- Accept and inbox backpressure (the architecture, accept and
-  backpressure).
-- Owner-close, connection-end, fault, and protocol terminal races
-  (the architecture, terminal causes).
-- Fairness under a large write and under dense inbound frames (the
-  architecture, scheduling and writes).
-- Buffered frames and a multi-frame write make progress while no new
-  event is queued (the architecture, scheduling and writes).
-- Resource checks separate the copied-byte subtotal from retained
-  caller arrays, the `Connection.read` array, and parked callers (the
-  architecture, resources).
-- `Mux.yamux` maps `initiator` to the Yamux client and `responder` to
-  the Yamux server (the architecture, the `Role` decision).
-- The Yamux wire parity cases belong to the `net/yamux` suite (the
-  yamux pair, plan).
-- The ordinary suite and the `+RTS -N1` suite both pass (§6,
-  PRINCIPLES 5.3).
+**Constants.** The suite checks `Mux.yamuxId.toString = "/yamux/1.0.0"`,
+`Mux.mplexId.toString = "/mplex/6.7.0"`,
+`Mux.testId.toString = "/leanp2p/test-mux/1.0.0"`, the pairwise
+distinctness of the three ids, and `Mux.mplexMessageCap = 1 MiB`. It
+checks `Mux.test.id = Mux.testId`.
+
+**Yamux adapter.** The suite checks `Mux.yamux.id = Mux.yamuxId`. An
+initiator open passes an unrelated `ProtocolId` and emits a
+window-update SYN of length 0 for stream id `1`, the Yamux client
+id. A responder open emits that frame for stream id `2`, the Yamux
+server id. The header carries the type, the flags, the stream id,
+and the length. One full-duplex stream through public `Mux.yamux`
+carries a payload in each direction, and both sessions join cleanly.
+A nonempty leftover on the public responder open accepts the remote
+stream and delivers its payload. One malformed header makes `join`
+return `Core.Error.protocol` with detail
+`s!"yamux: {repr Yamux.ProtocolError.malformedHeader}"`. A second
+`join` returns that same error. After a clean close, `openStream`
+returns `Core.Error.closed` with detail
+`s!"yamux: {repr Streams.Error.closed}"`. A thrown connection
+`IO.Error` leaves the first `join` and the second `join` as that
+same thrown error.
+
+**Yamux session.** Framing, flow control, reset, half-close, hostile
+frames, and keepalive stay in the `net/yamux` suite.
+
+**Test muxer.** `Mux.test` is independent of Yamux. The suite covers
+its lifecycle and hostile input: the private frame codec, the
+incremental parser, the pure state transitions, and deterministic
+two-ended sim tests. Those tests cover stream ids, simultaneous
+opens, ordered and empty writes, half-close, reset, stream lifetime,
+accept and inbox backpressure, terminal races, fairness, and the
+copied-byte accounting.
+
+**Runtime.** CI runs both the ordinary and `+RTS -N1` suites; both
+are required acceptance gates (§6, PRINCIPLES 5.3).
 
 ## Test milestones (unit 2)
 
@@ -141,9 +105,9 @@ Unit 0 is done.
 branch holds no mplex or yamux file; no muxer wire transcript was
 captured. The yamux session carries its own suite in `net/yamux`: the
 fixed header bytes, the hostile frames, and the flow-control cases
-(the yamux pair, plan). This package pins the seam adaptation: the sim
-exchanges of unit 1 through `Mux.yamux` and the test value, and the
-identity and half-close cases of unit 2 through `Mux.mplex`. The live
+(the yamux pair, plan). This package pins the unit 1 seam
+adaptation through `Mux.yamux` and `Mux.test`. Unit 2 will pin the
+mplex identity and half-close cases through `Mux.mplex`. The live
 gate is the go-libp2p interop matrix at W5.9 over `tcp + /noise +
 yamux` (root PLAN W5.9); the spike proved that path once, and W5.9
 re-runs it against this implementation. The same-node-code-under-both
