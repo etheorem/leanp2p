@@ -1,7 +1,6 @@
 import Conc
 import Libp2p.Core.ProtocolId
 import Libp2p.Protocols.Constants
-import Libp2p.Protocols.Mock.Core
 
 /-!
 # Req/resp: the concurrent-request limit
