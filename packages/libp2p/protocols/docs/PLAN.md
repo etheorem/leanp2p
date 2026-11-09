@@ -130,7 +130,8 @@ in the codec group wrapping upstream `google/snappy`.
   The checks cover configured delays across heartbeats and the default
   zero-delay schedule.
 - The loop suite, `Tests/Gossipsub/Node.lean`, runs over the in-memory
-  switch of `Mock/Host.lean`:
+  switch of `Tests/Gossipsub/Switch.lean`, a double of the real
+  `Libp2p.Core` handler seam:
   - One publish crosses two nodes and reaches the callback.
   - Subscribe registers the callback before posting its event. A refused
     post takes back its own registration by id.

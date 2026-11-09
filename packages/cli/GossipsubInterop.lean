@@ -3,7 +3,9 @@ import InteropHostname
 import Libp2p.Identity
 import Libp2p.Protocols.Gossipsub.Interop
 
-/-! Host-free participant core. Host wiring stays provisional until the green interfaces settle. -/
+/-! The host-free script driver of the interop participant. `Cli.Main`
+supplies the driver callbacks over the real host that `Cli.GossipsubSession`
+assembles; the structure's defaults name no host. -/
 set_option autoImplicit false
 
 namespace Libp2p.Protocols.Gossipsub.Interop
