@@ -1,24 +1,26 @@
 import Conc
 import Streams
 import Libp2p.Identity
-import Libp2p.Host.Mock.Core
+import Libp2p.Core
 
 /-!
 # Mock: the surface of `libp2p/negotiate` that the host uses
 
-W5.5 (`libp2p/negotiate`) has not merged, so the host builds against a
-mock (RULES.md, "Working ahead of the tree"). The mock imports nothing
-from the real package, and it states no axiom. Both entries fail with
-the name of the package: no body negotiates, runs a handshake, or opens
-a session.
+The merged `libp2p/negotiate` takes the seam types of `Libp2p.Core`
+(issue #53), so this mock carries those types too. The mock stays
+until the host swap of issue #70 lands (RULES.md, "Working ahead of
+the tree"). It imports nothing from the negotiate package, and it
+states no axiom. Both entries fail with the name of the package: no
+body negotiates, runs a handshake, or opens a session.
 
-The negotiate ARCHITECTURE freezes `Negotiate.upgrade`. The host needs
-two calls beside it, and the negotiate ARCHITECTURE gains both in this
-unit:
+The host needs two calls beside `Negotiate.upgrade`. The merged
+package has neither, so the swap retypes the host's use of them
+(issue #70):
 
 * `upgradeWith`, the upgrade with a checkpoint after the handshake and
   before the muxer stage. The host's gater and resource manager decide
-  there, by the proved peer (the core mock, "The policy shapes"); go's
+  there, by the proved peer (the core ARCHITECTURE, "The policy
+  shapes"); go's
   upgrader calls `InterceptSecured` at the same place
   (`vendor/go-libp2p/p2p/net/upgrader/upgrader.go`, line 176). A refusal is a
   value, `UpgradeResult.refused`, and no `Core.Error` arm (§3.5).
@@ -26,16 +28,13 @@ unit:
   serves each inbound stream through it, and `newStream` negotiates
   each outbound one. The bytes it reads past the selecting message go
   to the stream's front (§4.7, `Stream.prependBytes`).
-
-At the integration, the host imports `Libp2p.Negotiate`, and the module
-goes.
 -/
 
 set_option autoImplicit false
 
 namespace Libp2p.Host.Mock.Negotiate
 
-open Conc Streams Libp2p.Identity Libp2p.Host.Mock.Core
+open Conc Streams Libp2p.Identity Libp2p.Core
 
 /-- How a stream negotiation failed. The host reads two arms: the end of
 the stream before a selection, an orderly end, and the empty proposal
