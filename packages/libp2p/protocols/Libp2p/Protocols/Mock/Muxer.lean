@@ -6,12 +6,12 @@ import Libp2p.Core.Mux
 /-!
 # Muxer mock
 
-The muxer values of `libp2p/mux` (W5.4) type over that package's own
-mock of `libp2p/core`, so the req/resp suite cannot take one yet
-(issue #77). This module stands in with one value, `muxer`, of the real
-`Muxer` seam of `libp2p/core`. It runs over any `Connection`, so the
-req/resp suite runs over the sim transport (PRINCIPLES 1.4; RULES.md,
-"Working ahead of the tree").
+The muxer values of `libp2p/mux` took the real core seams while this
+branch ran (PR #84, issue #77 closed), so the swap of this mock is due
+now (issue #78). Until it lands, this module stands in with one value,
+`muxer`, of the real `Muxer` seam of `libp2p/core`. It runs over any
+`Connection`, so the req/resp suite runs over the sim transport
+(PRINCIPLES 1.4; RULES.md, "Working ahead of the tree").
 
 ## The wire of the mock
 
@@ -42,9 +42,9 @@ wakes when the writer before it sends the token back.
 
 ## Integration
 
-Delete this module, and use `Mux.test` or `Mux.yamux` (W5.4) where the
-suite takes `muxer`, once they type over `libp2p/core` (issue #77). The
-suite needs no other change: it uses the seam fields only.
+Delete this module, and use `Mux.test` or `Mux.yamux` where the suite
+takes `muxer`. The suite needs no other change: it uses the seam fields
+only.
 -/
 
 set_option autoImplicit false

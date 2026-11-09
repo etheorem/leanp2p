@@ -28,7 +28,7 @@ group is §7, row 10). The spike has no req/resp or gossipsub code.
 | `Libp2p/Protocols/ReqResp/Exchange.lean` | the shell over the core: the requester `request` and `requestPeer`, the responder `serve`, the handler value the registry stores, and the deadlines |
 | `Libp2p/Protocols/StreamError.lean` | `mapStreamError`, the one map from a stream error into `Core.Error` that the req/resp handler uses |
 | `Libp2p/Protocols/Mock/Core.lean` | the mock of W5.2 that identify and ping still type over, until their swap (issue #55) |
-| `Libp2p/Protocols/Mock/{Muxer,HostStream}.lean` | the test values that stand in for a muxer value of W5.4 and the host of W5.6, over the real core seams, until those type over `libp2p/core` (issues #77 and #70) |
+| `Libp2p/Protocols/Mock/{Muxer,HostStream}.lean` | the test values that stand in for a muxer value of W5.4 and the host of W5.6, over the real core seams; the muxer swap is due (`libp2p/mux` took the real core in PR #84, issue #77 closed, the swap owes on issue #78), and the host swap waits for the host's negotiate swap (issue #70) |
 | `Libp2p/Protocols/Gossipsub/Rpc.lean` | the RPC message with its `ProtoMessage` instance (§3.2) |
 | `Libp2p/Protocols/Gossipsub/Core.lean` | `State`, `Event`, `Action`, `ProtocolError`, and the total `step` that holds mesh, scoring, and heartbeat (§3.3) |
 | `Libp2p/Protocols/Gossipsub/Node.lean` | the loop task over the core, and the publish and subscribe surface at the seam level |
@@ -269,10 +269,11 @@ Both spike programs call `Ping.ping`.
   `Connection`, and the host stream mock fixes minimal signatures for
   the outbound stream call (go-libp2p's `NewStream`,
   `vendor/go-libp2p/p2p/host/basic/basic_host.go`, line 441) and for
-  `setHandler`. Both type over the real core. The muxer swap waits for
-  the W5.4 values to take the real core (issue #77), and the host swap
-  for the host's negotiate swap (issue #70). The suite then runs over
-  yamux and the host.
+  `setHandler`. Both type over the real core. `libp2p/mux` landed its
+  values over the real core (PR #84, issue #77 closed), so the muxer
+  swap is due (issue #78). The host swap waits for the host's
+  negotiate swap (issue #70). The suite then runs over yamux and the
+  host.
 
 ## What the package must not depend on
 
