@@ -4168,22 +4168,10 @@ private def checks (r : Runner) : Async Unit := do
   runOpenAfterClose r
   runReadFault r
 
-/-- The leftover and the public error boundary. -/
-private def boundary (r : Runner) : Async Unit := do
-  runLeftover r
-  runProtocol r
-  runOpenAfterClose r
-  runReadFault r
-
 /-- The yamux adapter boundary over the sim connection. -/
 def run (r : Runner) : IO Unit := do
   r.section "mux yamux adapter" "packages/libp2p/mux/Libp2p/Mux/Yamux.lean"
   Async.run (checks r)
-
-/-- The leftover and the public error boundary, for a focused run. -/
-def runBoundary (r : Runner) : IO Unit := do
-  r.section "mux yamux adapter errors" "packages/libp2p/mux/Libp2p/Mux/Yamux.lean"
-  Async.run (boundary r)
 
 end Tests.Mux.YamuxAdapter
 
