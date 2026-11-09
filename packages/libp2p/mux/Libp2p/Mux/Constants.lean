@@ -1,4 +1,4 @@
-import Libp2p.Core
+import Libp2p.Core.ProtocolId
 
 /-!
 # The constants of `libp2p/mux`
@@ -7,7 +7,8 @@ Each fact has one home (ARCHITECTURE §3.8). This module holds the
 three protocol ids and the mplex length cap. The production
 definitions of the ids live only here (§3.4).
 
-`ProtocolId` comes from `Libp2p.Core`.
+`ProtocolId` comes from `Libp2p.Core.ProtocolId`. This module imports
+that file alone, so the constants do not import the session seam.
 -/
 
 set_option autoImplicit false

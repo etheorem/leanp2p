@@ -1192,9 +1192,11 @@ private def hostileChecks (r : Runner) : Async Unit := do
     raw.close
   -- A peer that never answers our keepalive: after the interval the
   -- session pings, and when the pong's deadline passes, it ends with a
-  -- fault and no go-away. The ticker reads the time when it arms its
-  -- timer, so a deadline the clock has passed already fires at once,
-  -- whichever runs first.
+  -- fault and no go-away. The ticker reads the time, then arms its timer
+  -- for the time left, and the test clock counts that from its own now.
+  -- An advance between the two steps would push the timer past the
+  -- clock, so each advance waits for the timers it must fire
+  -- (`TestClock.nextTimer`).
   do
     let tc ← TestClock.new
     let (raw, s) ← pair
@@ -1205,6 +1207,12 @@ private def hostileChecks (r : Runner) : Async Unit := do
     let some (h, _, pending) ← readFrame raw .empty | throw <| IO.userError "no keepalive"
     r.check "hostile: after the interval with no bytes, the session pings"
       (h.type == .ping && h.flags.syn)
+    -- The ping arms two timers, in either order: the writer's deadline
+    -- for its write, and the ticker's for the pong.
+    let writeArmed ← tc.nextTimer
+    let pongArmed ← tc.nextTimer
+    r.check "hostile: the ping arms its two timers before the clock moves"
+      (writeArmed && pongArmed)
     tc.advance pingDeadlineMs
     let res ← try
         match ← server.join with

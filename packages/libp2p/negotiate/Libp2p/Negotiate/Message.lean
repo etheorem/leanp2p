@@ -283,16 +283,16 @@ theorem encodeMsgLength (m : Msg) :
 
 /-- One `ls` entry is an ordinary message frame: the entry's text is
 the protocol id, and the frame carries the id plus its newline. -/
-def lsEntries (ids : List Libp2p.Core.ProtocolId) : List Nat :=
+def lsEntries (ids : List Core.ProtocolId) : List Nat :=
   (ids.map (fun p => encodeText p.toString)).flatten
 
 /-- The body of an `ls` reply: one entry frame per id, then the final
 newline byte that ends the list. -/
-def lsBody (ids : List Libp2p.Core.ProtocolId) : List Nat := lsEntries ids ++ [10]
+def lsBody (ids : List Core.ProtocolId) : List Nat := lsEntries ids ++ [10]
 
 /-- The full `ls` reply: the body wrapped in one uvarint length
 prefix, exactly like a message. -/
-def encodeLs (ids : List Libp2p.Core.ProtocolId) : List Nat :=
+def encodeLs (ids : List Core.ProtocolId) : List Nat :=
   Varint.encode (boundedVarint (lsBody ids).length) ++ lsBody ids
 
 /-- Walk the entries of one complete `ls` body. The fuel counts
@@ -300,7 +300,7 @@ entries; the caller passes the body's byte length, which is at least
 the entry count because every entry carries its newline. `[10]` alone
 is the terminator, not a leading byte: a leading `0x0A` can be a
 legitimate one-byte prefix for a nine-byte id. -/
-def decodeEntries : Nat → List Nat → Except DecodeError (List Libp2p.Core.ProtocolId)
+def decodeEntries : Nat → List Nat → Except DecodeError (List Core.ProtocolId)
   | 0, _ => .error .malformed
   | fuel + 1, bs =>
     if bs = [10] then .ok []
@@ -313,7 +313,7 @@ same split and cap as a message. An entry that ends mid-body is
 malformed, because only the outer prefix and length can be completed
 by more bytes. -/
 def decodeLs? (bs : List Nat) :
-    Except DecodeError (List Libp2p.Core.ProtocolId × List Nat) :=
+    Except DecodeError (List Core.ProtocolId × List Nat) :=
   match splitFrame bs with
   | .error e => .error e
   | .ok (body, rest) => (decodeEntries body.length body).map (·, rest)
@@ -324,7 +324,7 @@ theorem encodeTextLength (s : String) : (payloadOf s).length ≤ (encodeText s).
 
 /-- The entries of an encoded list read back in order, under fuel and
 cap bounds. -/
-theorem decodeEntriesLs (ids : List Libp2p.Core.ProtocolId) (fuel : Nat)
+theorem decodeEntriesLs (ids : List Core.ProtocolId) (fuel : Nat)
     (hf : ids.length < fuel) (hb : (lsEntries ids).length ≤ maxMsg) :
     decodeEntries fuel (lsEntries ids ++ [10]) = .ok ids := by
   induction ids generalizing fuel with
@@ -354,13 +354,13 @@ theorem decodeEntriesLs (ids : List Libp2p.Core.ProtocolId) (fuel : Nat)
         simp [lsEntries]
       simp only [decodeEntries, hne, ite_false]
       rw [hsplit, decodeMsgSuffix ⟨p.toString, hfit⟩ (lsEntries ps ++ [10])]
-      change (Except.map (fun x => (⟨p.toString⟩ : Libp2p.Core.ProtocolId) :: x)
+      change (Except.map (fun x => (⟨p.toString⟩ : Core.ProtocolId) :: x)
         (decodeEntries f (lsEntries ps ++ [10])) = .ok (p :: ps))
       rw [ih f (by simp at hf; omega) (by omega)]
       rfl
 
 /-- The byte length of the entries is at least the id count. -/
-theorem lsEntriesLength (ids : List Libp2p.Core.ProtocolId) :
+theorem lsEntriesLength (ids : List Core.ProtocolId) :
     ids.length ≤ (lsEntries ids).length := by
   induction ids with
   | nil => simp [lsEntries]
@@ -371,7 +371,7 @@ theorem lsEntriesLength (ids : List Libp2p.Core.ProtocolId) :
 
 /-- The `ls` reply round trip. The length prefix alone delimits the
 entries, so no cleanliness hypothesis is needed. -/
-theorem decodeLsEncodeLs (ids : List Libp2p.Core.ProtocolId)
+theorem decodeLsEncodeLs (ids : List Core.ProtocolId)
     (hbody : (lsBody ids).length ≤ maxMsg) :
     decodeLs? (encodeLs ids) = .ok (ids, []) := by
   have hlim : (lsBody ids).length < Varint.limit := by
@@ -414,7 +414,7 @@ theorem splitFrameInv {bs body rest : List Nat} (h : splitFrame bs = .ok (body, 
     exact hbs.symm
 
 /-- Entries that read back are exactly the encoding of the list. -/
-theorem decodeEntriesInv (f : Nat) (bs : List Nat) (ids : List Libp2p.Core.ProtocolId)
+theorem decodeEntriesInv (f : Nat) (bs : List Nat) (ids : List Core.ProtocolId)
     (h : decodeEntries f bs = .ok ids) : lsEntries ids ++ [10] = bs := by
   induction f generalizing bs ids with
   | zero => simp [decodeEntries] at h
@@ -441,7 +441,7 @@ theorem decodeEntriesInv (f : Nat) (bs : List Nat) (ids : List Libp2p.Core.Proto
 
 /-- The all-input inverse of the `ls` reply: every accepted input is
 the encoding of the decoded list. -/
-theorem decodeLsInv {bs : List Nat} {ids : List Libp2p.Core.ProtocolId} {rest : List Nat}
+theorem decodeLsInv {bs : List Nat} {ids : List Core.ProtocolId} {rest : List Nat}
     (h : decodeLs? bs = .ok (ids, rest)) : encodeLs ids ++ rest = bs := by
   unfold decodeLs? at h
   split at h

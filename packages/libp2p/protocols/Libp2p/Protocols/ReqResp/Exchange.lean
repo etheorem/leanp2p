@@ -1,6 +1,7 @@
 import Conc
 import Streams
-import Libp2p.Protocols.Mock.Core
+import Libp2p.Core.Handler
+import Libp2p.Protocols.StreamError
 import Libp2p.Protocols.ReqResp.Core
 import Libp2p.Protocols.ReqResp.Limiter
 
@@ -59,6 +60,9 @@ namespace Libp2p.Protocols.ReqResp
 
 open Libp2p.Protocols
 open Conc (Async)
+
+-- Inside this namespace a bare `Core` is the reader core,
+-- `ReqResp.Core`, so the seam types keep the full `Libp2p.Core` prefix.
 
 /-- Hand out the chunks of a list of actions. -/
 def deliverAll (deliver : Chunk → Async Unit) : List Core.Action → Async Unit
@@ -130,7 +134,8 @@ def request (s : Streams.Stream) (m : Method) (clock : Conc.Clock) (timeoutMs : 
 /-- The host's call that opens a stream to one peer and negotiates one
 of the ids, as go-libp2p's `NewStream` does. The caller binds the peer. -/
 abbrev OpenStream :=
-  List Mock.Core.ProtocolId → Async (Except Mock.Core.Error (Mock.Core.ProtocolId × Streams.Stream))
+  List Libp2p.Core.ProtocolId →
+    Async (Except Libp2p.Core.Error (Libp2p.Core.ProtocolId × Streams.Stream))
 
 /-- Send one request to a peer: take a slot of the peer's `limiter`,
 open the stream for `m.id` through the host, and run `request` on it.
@@ -200,15 +205,15 @@ def serve (s : Streams.Stream) (m : Method) (clock : Conc.Clock) (timeoutMs : Na
     writeAnswer s m chunks
 
 /-- The one map from a req/resp error into the coarse core error. -/
-def mapError : Error → Mock.Core.Error
-  | .stream e => Mock.Core.mapStreamError e
+def mapError : Error → Libp2p.Core.Error
+  | .stream e => mapStreamError e
   | .timeout => .timeout "req/resp: the deadline expired"
   | .openFailed e => e
   | e => .protocol s!"req/resp: {repr e}"
 
 /-- The handler value the host registers under `m.id`. -/
 def handler (m : Method) (clock : Conc.Clock) (timeoutMs : Nat)
-    (respond : Option ByteArray → Async (List Chunk)) : Mock.Core.StreamHandler :=
+    (respond : Option ByteArray → Async (List Chunk)) : Libp2p.Core.StreamHandler :=
   ⟨m.id, fun _ s => ExceptT.mk do return (← serve s m clock timeoutMs respond).mapError mapError⟩
 
 end Libp2p.Protocols.ReqResp

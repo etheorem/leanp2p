@@ -1,4 +1,5 @@
 import Streams
+import Libp2p.Core
 import Libp2p.Security
 
 /-!

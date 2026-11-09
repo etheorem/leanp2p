@@ -19,7 +19,6 @@ and no work is planned for it.
 | `Libp2p/Security/Payload.lean` | the `NoiseHandshakePayload` protobuf, its `ProtoMessage` instance (§3.2), the signature input, and the 8 KiB gate |
 | `Libp2p/Security/Transport.lean` | the framed AEAD reads and writes over the two cipher states of `split`, wrapped as the `SecureConn` surface |
 | `Libp2p/Security/Noise.lean` | `Noise.securityProtocol`, the fixed-key test value, and the `Except.mapError` into `Core.Error` (§3.5) |
-| `Libp2p/Security/Mock/Core.lean` | the mock of the `libp2p/core` surface this package uses, until W5.2 merges ("The mock" below) |
 
 All declarations live in the `Libp2p.Security` namespace, and the root
 module re-exports the public submodules. §3.1 names the production
@@ -279,27 +278,14 @@ the spike's own recorded rule.
   (r5) defines none. Each transport cipher state runs its counter
   toward 2^64 − 1 nonces and never reaches them in a session's life.
 
-## The mock
-
-W5.2 (`libp2p/core`) has not merged, so the package builds against a
-mock of its frozen surface (RULES.md, "Working ahead of the tree").
-`Mock/Core.lean` copies the types: `ProtocolId`, `Role`, `Core.Error`
-with its four arms, `SecureConn`, and `SecurityProtocol` (the core
-pair, public surface). It lives under `Libp2p.Security.Mock`, imports
-nothing from the real package, and states no axiom. The keys and the
-peer id come from the merged `libp2p/identity`.
-
-At the integration, the modules import `Libp2p.Core`, the opens drop
-`Mock`, and the mock module goes.
-
 ## What the package must not depend on
 
 - Inside libp2p, `core` and `identity` only (§2: identity → core →
   security). The `SecureConn` inputs and the error target come from
   `core`; the payload's key checks and the `PeerId` derivation come
   from `identity`. No import of `libp2p/negotiate`, `libp2p/mux`,
-  `libp2p/host`, or `libp2p/protocols`. Until W5.2 merges, the core
-  surface comes from the mock of this package ("The mock" above).
+  `libp2p/host`, or `libp2p/protocols`. The modules import the core
+  submodules they name: `Role`, `ProtocolId`, and `Security`.
 - Crypto reaches the package through the `Crypto` facade only (§3.6):
   SHA-256, HKDF, X25519, and ChaCha20-Poly1305. No `crypto/backend` and
   no `crypto/pure` import. The signature checks go through the sign

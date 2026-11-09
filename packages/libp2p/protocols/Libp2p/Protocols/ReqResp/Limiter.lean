@@ -1,4 +1,5 @@
 import Conc
+import Libp2p.Core.ProtocolId
 import Libp2p.Protocols.Constants
 import Libp2p.Protocols.Mock.Core
 
@@ -24,7 +25,7 @@ set_option autoImplicit false
 namespace Libp2p.Protocols.ReqResp
 
 open Libp2p.Protocols
-open Libp2p.Protocols.Mock.Core (ProtocolId)
+open Libp2p.Core (ProtocolId)
 
 /-- The open requests per protocol id. An id with no entry has none. -/
 abbrev Table := List (ProtocolId × Nat)

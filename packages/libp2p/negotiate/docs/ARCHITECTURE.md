@@ -65,24 +65,11 @@ and `Streams.Stream`.
   when an accept path peeked before it handed the connection over, or
   when the transport delivers bytes together with the connection. The
   output is the pair of the `MuxSession` and the verified remote
-  `PeerId`. Errors surface as `Core.Error` (§3.5).
-- `Negotiate.upgradeWith` is the upgrade with a checkpoint after the
-  handshake and before the muxer stage: it takes `admit : PeerId →
-  BaseIO (Option ρ)` and the clock of the deadline, and answers
-  `UpgradeResult ρ`, the upgraded connection or `refused` with the
-  reason `admit` gave. The host's gater and resource manager decide
-  there, by the proved peer (the core pair, "The policy shapes"), as
-  go's upgrader calls `InterceptSecured`
-  (`vendor/go-libp2p/p2p/net/upgrader/upgrader.go`, line 176). A
-  refusal is a value, not a `Core.Error` arm (§3.5). `upgrade` is
-  `upgradeWith` with a checkpoint that admits every peer.
-- `Negotiate.negotiateStream : Role → Stream → List ProtocolId →
-  ExceptT Negotiate.Error Async (ProtocolId × Stream)` runs
-  multistream-select over one muxed stream: the responder that the
-  host's stream serving calls, and the initiator of `newStream` (the
-  host pair). The bytes it reads past the selecting message go to the
-  front of the stream (`Stream.prependBytes`, §4.7). A stream that
-  ends before a selection is `Negotiate.Error.closed`.
+  `PeerId`. Errors surface as `Core.Error` (§3.5). The upgrader owns
+  the `SecureConn` of the handshake (the core pair, contract 4): the
+  answered session's `join` waits for the session loop, then for the
+  secure connection, and every failure after the handshake closes the
+  secure connection and joins it before the upgrader answers.
 
 ## The muxer-selection decision
 
@@ -125,9 +112,13 @@ connection-level selection.
    Go's upgrade traces and §4.9's "lazy dialer" bullet both name the
    lazy write, and the target moves it into the upgrade.
 5. **Leftover hand-over between all three stages** (§4.7, §5.6). The
-   negotiation leftover seeds the handshake; the `SecureConn` leftover
-   seeds the muxer negotiation; the bytes that stage over-reads enter
-   `Muxer.open` and become the first `Event` of the session loop (§4.7).
+   negotiation leftover seeds the handshake; the bytes the handshake
+   over-read reach the muxer negotiation through the secure `read`,
+   which delivers them before any connection byte, so that negotiation
+   starts with no seed (the core pair, "The leftover hand-over": no
+   stage above `read` takes `SecureConn.leftover`); the bytes the muxer
+   negotiation over-reads enter `Muxer.open` and become the first
+   `Event` of the session loop (§4.7).
    Each stage owns one reader, and no two stages share a `BufReader`
    (§5.6).
 6. **The 30 s deadline covers the whole unauthenticated upgrade**

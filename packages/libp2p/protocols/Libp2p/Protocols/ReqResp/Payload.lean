@@ -1,5 +1,7 @@
 import Varint
 import Snappy
+import Libp2p.Core.Error
+import Libp2p.Core.ProtocolId
 import Libp2p.Protocols.ReqResp.Crc32c
 import Libp2p.Protocols.ReqResp.SnappyFrame
 import Libp2p.Protocols.Mock.Core
@@ -103,7 +105,7 @@ inductive Error where
   the peer, so the spec forbids one more. -/
   | tooManyRequests
   /-- The host could not open the stream or negotiate the id. -/
-  | openFailed (e : Mock.Core.Error)
+  | openFailed (e : Libp2p.Core.Error)
   deriving DecidableEq, Repr, BEq
 
 /-- The `result` byte of a response chunk (phase0 "Responding side"). -/
@@ -205,7 +207,7 @@ def Bounds.admits (b : Bounds) (n : Nat) : Bool :=
 package frames the bytes; the method says how many. -/
 structure Method where
   /-- The protocol id, from `Constants.reqRespId`. -/
-  id : Mock.Core.ProtocolId
+  id : Libp2p.Core.ProtocolId
   /-- The bounds of the request payload. `none` for a method with "No
   Request Content" (GetMetaData): the request stream carries no byte. -/
   request : Option Bounds

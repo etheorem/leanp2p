@@ -1,5 +1,5 @@
+import Libp2p.Core.Mux
 import Libp2p.Mux.Constants
-import Libp2p.Core
 import Libp2p.Mux.Test.Session
 
 /-!

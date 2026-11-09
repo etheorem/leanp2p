@@ -17,7 +17,8 @@ The test milestones of the negotiate package plan, unit 1b. The full
 pipeline runs both directions over an in-process pipe pair, and the
 byte-split runs use the in-memory sim transport of `Streams.Sim`. The
 fixed-key plaintext security value and the minimal muxer value replace
-the Noise and yamux milestones (#16, #17, unmerged). The deadline check
+the Noise and yamux milestones, so the suite runs no crypto and no
+session loop (the matrix check names the live gate). The deadline check
 advances the test `Clock` of `base/conc`, so the suite waits on no wall
 clock.
 
@@ -101,8 +102,27 @@ private def dialerId : Libp2p.Identity.PeerId := peerOf 1
 /-- The fixed peer id of the listening side. -/
 private def listenerId : Libp2p.Identity.PeerId := peerOf 2
 
+/-- The secure connection of a test handshake: `conn`, whose `read`
+delivers `front` before any connection byte, as the core seam asks of a
+`SecureConn` (the core pair, "The leftover hand-over"). `leftover`
+records the same bytes. The plaintext handshake starts no task, so the
+join answers at once. -/
+private def secureOf (conn : Streams.Connection) (front : ByteArray)
+    (localPeer remotePeer : Libp2p.Identity.PeerId) : BaseIO Libp2p.Core.SecureConn := do
+  let pending ← Conc.OnceRef.new front
+  return {
+    conn with
+    read := do
+      -- Hand out the front once; every later read goes to the connection.
+      let b ← (pending.updateGet fun b => (b, ByteArray.empty) : BaseIO ByteArray)
+      if b.isEmpty then conn.read else return some b
+    localPeer, remotePeer
+    leftover := front
+    join := pure () }
+
 /-- The fixed-key plaintext test security value. It replaces the Noise
-milestone (#16, unmerged). The handshake writes its marker, reads the
+milestone, since the suite needs a handshake with no crypto in the
+loop. The handshake writes its marker, reads the
 peer's marker from the seed first and then from the connection, and
 hands the unconsumed bytes to the next stage. `overread` adds one read
 whose chunk joins the leftover, so a check can force the hand-over.
@@ -131,16 +151,9 @@ private def secValue (overread : Bool) (seedRef : Conc.OnceRef (Option ByteArray
         | none => throw (.closed "test handshake over-read found the connection closed")
         | some chunk => pure chunk
       else pure ByteArray.empty
-    let pending ← Conc.OnceRef.new (rest ++ over)
-    let secureConn : Streams.Connection := { conn with
-      read := do
-        let bytes ← (pending.updateGet (fun b => (b, ByteArray.empty)) : BaseIO ByteArray)
-        if bytes.isEmpty then conn.read else pure (some bytes) }
-    return { toConnection := secureConn,
-             localPeer := if role = .initiator then dialerId else listenerId,
-             remotePeer := if role = .initiator then listenerId else dialerId,
-             leftover := rest ++ over,
-             join := pure () }
+    secureOf conn (rest ++ over)
+      (if role = .initiator then dialerId else listenerId)
+      (if role = .initiator then listenerId else dialerId)
 
 /-- The test muxer value. It replaces the yamux milestone (#17,
 unmerged). `open` records its leftover argument, the opened id, and a
@@ -203,33 +216,6 @@ private abbrev UpAnswer :=
 
 /-! ## The pipeline checks -/
 
-/-- A refused authenticated peer must not reach the muxer. -/
-private def checkAdmission (r : Runner) : Async Unit := do
-  let (dial, listen) ← newPair
-  let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
-  let seen : Conc.OnceRef (Option Libp2p.Identity.PeerId) ← Conc.OnceRef.new none
-  let opened : Conc.OnceRef Bool ← Conc.OnceRef.new false
-  let left : Conc.OnceRef (Option ByteArray) ← Conc.OnceRef.new none
-  let selected : Conc.OnceRef (Option Libp2p.Core.ProtocolId) ← Conc.OnceRef.new none
-  let result : Conc.OnceRef (Option Bool) ← Conc.OnceRef.new none
-  let tasks ← Conc.TaskSet.new
-  tasks.spawn do
-    let answer ← (upgradeAdmit Conc.Clock.system .responder (← sideConn listen) ByteArray.empty none
-      (fun peer => do seen.set (some peer); pure (some ()))
-      [secValue false (← Conc.OnceRef.new none)] [muxValue muxId opened left selected]).run
-    result.set (some (match answer with | .ok (.refused ()) => true | _ => false))
-  tasks.spawn do
-    discard <| (upgrade .initiator (← sideConn dial) ByteArray.empty (some listenerId)
-      [secValue false (← Conc.OnceRef.new none)]
-      [muxValue muxId (← Conc.OnceRef.new false) (← Conc.OnceRef.new none)
-        (← Conc.OnceRef.new none)]).run
-  tasks.joinAll
-  r.check "upgrade admission refuses before mux" ((← result.get) == some true &&
-    (← seen.get) == some dialerId && !(← opened.get))
-  (← sideConn dial).close
-  (← sideConn listen).close
-
-
 /-- The full pipeline, both directions, plus the wire-selected muxer
 assertion. The test security value carries no advertisement
 field, so the wire exchange alone selects the muxer. -/
@@ -260,8 +246,9 @@ private def checkFullPipeline (r : Runner) : Async Unit := do
   | some (.ok (ds, dp)), some (.ok (ls, lp)) => do
       ds.close
       ls.close
-      discard ds.join.run
-      discard ls.join.run
+      let dj ← ds.join.run
+      let lj ← ls.join.run
+      r.check "upgrade sessions join cleanly" (dj matches .ok () && lj matches .ok ())
       r.check "upgrade full pipeline dial and listen"
         (dp == listenerId && lp == dialerId)
       r.check "upgrade muxer selected on the wire"
@@ -313,8 +300,9 @@ private def checkNegotiationLeftover (r : Runner) : Async Unit := do
   (← sideConn iside).close
   (← sideConn rside).close
 
-/-- The secure reader delivers bytes the handshake over-read before
-the muxer stage reads the connection. -/
+/-- The handshake over-reads the muxer header chunk. The secure `read`
+delivers it first, so the muxer stage still selects, and `Muxer.open`
+gets no bytes. -/
 private def checkHandshakeLeftover (r : Runner) : Async Unit := do
   let (iside, rside) ← newPair
   let muxId : Libp2p.Core.ProtocolId := ⟨"/test/mux/1.0.0"⟩
@@ -752,7 +740,7 @@ private def readExactly (conn : Streams.Connection) (seed : ByteArray) (n : Nat)
 
 /-- The fixed-key test handshake, chunk-agnostic: it reads its marker
 with `readExactly`, so it accepts whatever chunks the transport chose.
-It replaces the Noise milestone (#16, unmerged) as `secValue` does, and
+It replaces the Noise milestone as `secValue` does, and
 it exists so the pipeline can run over the splitting sim. -/
 private def secValueExact (seedRef : Conc.OnceRef (Option ByteArray)) :
     Libp2p.Core.SecurityProtocol where
@@ -768,17 +756,9 @@ private def secValueExact (seedRef : Conc.OnceRef (Option ByteArray)) :
     match ← readExactly conn seed 4 with
     | none => throw (.closed "test handshake read ended before the marker")
     | some four =>
-      let extra := Bytes.ofNatList (four.drop 4)
-      let pending ← Conc.OnceRef.new extra
-      let secureConn : Streams.Connection := { conn with
-        read := do
-          let bytes ← (pending.updateGet (fun b => (b, ByteArray.empty)) : BaseIO ByteArray)
-          if bytes.isEmpty then conn.read else pure (some bytes) }
-      return { toConnection := secureConn,
-               localPeer := if role = .initiator then dialerId else listenerId,
-               remotePeer := if role = .initiator then listenerId else dialerId,
-               leftover := extra,
-               join := pure () }
+      secureOf conn (Bytes.ofNatList (four.drop 4))
+        (if role = .initiator then dialerId else listenerId)
+        (if role = .initiator then listenerId else dialerId)
 
 /-- The multistream exchange of both roles over a splitting sim, for a
 supported id and for the `na` retry. Each run also asserts that the
@@ -849,8 +829,9 @@ private def checkSplitPipeline (r : Runner) : Async Unit := do
   | some (.ok (ds, dp)), some (.ok (ls, lp)) => do
       ds.close
       ls.close
-      discard ds.join.run
-      discard ls.join.run
+      let dj ← ds.join.run
+      let lj ← ls.join.run
+      r.check "split sim upgrade sessions join cleanly" (dj matches .ok () && lj matches .ok ())
       r.check "split sim upgrade pipeline, dial and listen"
         (dp == listenerId && lp == dialerId)
       r.check "split sim upgrade selects the muxer on the wire"
@@ -869,7 +850,6 @@ def run (r : Runner) : IO Unit := do
     "packages/libp2p/negotiate/docs/ARCHITECTURE.md"
   let all : Conc.Async Unit := do
     checkFullPipeline r
-    checkAdmission r
     checkNegotiationLeftover r
     checkHandshakeLeftover r
     checkMuxOpenLeftover r
@@ -888,6 +868,6 @@ def run (r : Runner) : IO Unit := do
     checkSplitPipeline r
   Conc.Async.run all
   r.skip "upgrade noise yamux matrix over tcp"
-    "needs the Noise value and the yamux value, which are not merged on this base (the W5.9 live gate)"
+    "needs the Noise value on the real core (#76) and the yamux muxer value (#77) (the W5.9 live gate)"
 
 end Tests.Upgrade

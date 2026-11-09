@@ -1,5 +1,6 @@
+import Libp2p.Core.Error
+import Libp2p.Core.Role
 import Libp2p.Mux.Test.Wire
-import Libp2p.Core
 import Streams
 
 /-!

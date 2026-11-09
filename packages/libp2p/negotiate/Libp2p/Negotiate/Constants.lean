@@ -1,4 +1,4 @@
-import Libp2p.Core
+import Libp2p.Core.ProtocolId
 
 /-!
 # The constants of the negotiation
@@ -13,7 +13,7 @@ namespace Libp2p.Negotiate
 
 /-- The multistream 1.0.0 protocol id. The only protocol id literal of
 the package (root §3.4). -/
-def protocolId : Libp2p.Core.ProtocolId := ⟨"/multistream/1.0.0"⟩
+def protocolId : Core.ProtocolId := ⟨"/multistream/1.0.0"⟩
 
 /-- The 1 KiB multistream cap (root §5.1, contract 1 of the package
 docs). -/

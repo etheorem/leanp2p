@@ -15,7 +15,25 @@ namespace Cli.GossipsubSession
 
 open Conc Streams Multiformats Libp2p.Core Libp2p.Identity Libp2p.Host
 open Libp2p.Protocols Libp2p.Protocols.Constants
+open Conc Streams Multiformats Libp2p.Core Libp2p.Identity Libp2p.Host
+open Libp2p.Protocols Libp2p.Protocols.Constants
 open Libp2p.Protocols.Gossipsub Libp2p.Protocols.Gossipsub.Node
+
+/-- Map the protocols package's mock-seam error onto the core error. The identify package still
+types over the mock seam (issue #55), so the participant converts at the host boundary. -/
+def mapMockError : Libp2p.Protocols.Mock.Core.Error → Libp2p.Core.Error
+  | .protocol s => .protocol s
+  | .authentication s => .authentication s
+  | .timeout s => .timeout s
+  | .closed s => .closed s
+
+/-- Adapt a handler of the protocols package's mock seam onto the real core handler seam. -/
+def toCoreHandler (h : Libp2p.Protocols.Mock.Core.StreamHandler) : Libp2p.Core.StreamHandler where
+  id := ⟨h.id.toString⟩
+  handle := fun ctx stream => ExceptT.mk do
+    match ← (h.handle ⟨ctx.remotePeer, ctx.remoteAddr⟩ stream).run with
+    | .ok () => return .ok ()
+    | .error e => return .error (mapMockError e)
 
 /-- Use the production yamux session through the core muxer seam. -/
 def yamuxMuxer : Libp2p.Core.Muxer := Libp2p.Mux.yamux
@@ -52,7 +70,7 @@ def start (identity : PrivKey) (nodeConfig : Node.Config := {}) : IO (Except Str
     transports := [Streams.Tcp.transport]
     security := [Libp2p.Security.Noise.securityProtocol noise]
     muxers := [yamuxMuxer]
-    handlers := [Identify.respondHandler pubkey [] servedProtocols none "leanp2p"] }
+    handlers := [toCoreHandler (Identify.respondHandler pubkey [] servedProtocols none "leanp2p")] }
   let hostResult ← BaseIO.toIO (Libp2p.Host.Host.new config)
   let host ← match hostResult with
     | .error e => return .error (reprStr e)

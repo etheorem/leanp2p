@@ -33,8 +33,19 @@ wait, so the loop keeps the package's `repeat` form, the form of
 
 The three stages thread the leftover bytes by contract 5 of the
 package docs: the negotiation leftover seeds the handshake, the
-secure connection delivers the handshake leftover through its reader,
-and the muxer negotiation leftover reaches `Muxer.open`.
+`SecureConn` delivers its own leftover through its `read`, so the
+muxer negotiation starts with no bytes, and the muxer negotiation
+leftover reaches `Muxer.open`.
+
+## The secure connection has an owner
+
+The handshake answers a `SecureConn`, whose transport runs tasks, and
+the upgrader is the owner that closes it and joins it (the core pair,
+contract 4; PRINCIPLES 3.2). The frozen answer is the `MuxSession`, so
+the upgrader hands the join on inside it: the session's `join` waits
+for the session loop, then for the secure connection. Every failure
+after the handshake closes the secure connection and joins it before
+the upgrader answers.
 -/
 
 set_option autoImplicit false
@@ -58,7 +69,7 @@ open Bytes (DecodeError)
   complete frame. The caller calls `drive` again with `leftover`; it
   must not read. -/
 inductive DriveResult where
-  | selected (p : Libp2p.Core.ProtocolId) (consumed leftover : List Nat)
+  | selected (p : Core.ProtocolId) (consumed leftover : List Nat)
       (writes : List (List Nat))
   | waiting (s : State) (consumed leftover : List Nat) (writes : List (List Nat))
   | running (s : State) (consumed leftover : List Nat) (writes : List (List Nat))
@@ -87,7 +98,7 @@ def writesOf (actions : List Action) : List (List Nat) :=
     | .select .. => none
 
 /-- The protocol an action list selects, if it selects one. -/
-def selectOf : List Action → Option Libp2p.Core.ProtocolId
+def selectOf : List Action → Option Core.ProtocolId
   | [] => none
   | .write _ :: rest => selectOf rest
   | .select p _ :: _ => some p
@@ -125,7 +136,7 @@ The write holds the header and the first proposal back-to-back, the
 lazy dialer's wire shape (contract 4 of the package docs). The state
 carries the whole ordered list, so the core's `na` retry walks it.
 An empty ordered list is a protocol error before any byte moves. -/
-def initiatorStart (ids : List Libp2p.Core.ProtocolId) :
+def initiatorStart (ids : List Core.ProtocolId) :
     Except Error (State × List (List Nat)) :=
   match ids with
   | [] => .error .negotiationFailed
@@ -140,7 +151,7 @@ def initiatorStart (ids : List Libp2p.Core.ProtocolId) :
 at once. The spec lets either side send first, and the responder that waits
 for the dialer's header stalls a dialer that also waits. The state starts in
 `negotiating` because the header is already on the wire. -/
-def responderStart (ids : List Libp2p.Core.ProtocolId) :
+def responderStart (ids : List Core.ProtocolId) :
     Except Error (State × List (List Nat)) :=
   if ids.any (fun q => !fitsText q.toString) then .error .negotiationFailed
   else if maxMsg < (lsBody ids).length then .error .negotiationFailed
@@ -159,7 +170,7 @@ def renderDecodeError : Bytes.DecodeError → String
 
 /-- Contract 8's one mapping point: every negotiation error becomes
 the `protocol` arm, with the detail rendered. -/
-def mapNegotiateError : Error → Libp2p.Core.Error
+def mapNegotiateError : Error → Core.Error
   | .decode e => .protocol ("multistream decode: " ++ renderDecodeError e)
   | .negotiationFailed => .protocol "multistream negotiation failed"
 
@@ -168,7 +179,7 @@ peer. The dial path compares the derived id against the expectation
 and answers `authentication` on a difference, before any muxer byte
 moves (negotiate ARCHITECTURE, "Decisions"). -/
 def checkIdentity (expected : Option Libp2p.Identity.PeerId)
-    (remote : Libp2p.Identity.PeerId) : Except Libp2p.Core.Error Unit :=
+    (remote : Libp2p.Identity.PeerId) : Except Core.Error Unit :=
   match expected with
   | none => .ok ()
   | some e =>
@@ -179,7 +190,7 @@ def checkIdentity (expected : Option Libp2p.Identity.PeerId)
 `.error .deadlineExpired`; the `.closed` arm is required by the match
 and is unreachable from `withinDeadline`. -/
 def settleUpgrade {α : Type} :
-    Except Conc.Error (Except Libp2p.Core.Error α) → Except Libp2p.Core.Error α
+    Except Conc.Error (Except Core.Error α) → Except Core.Error α
   | .ok (.ok a) => .ok a
   | .ok (.error e) => .error e
   | .error .deadlineExpired => .error (.timeout "upgrade deadline expired")
@@ -189,7 +200,7 @@ def settleUpgrade {α : Type} :
 the stage over-read. `ByteArray` carries no `Repr` in Lean 4.34, so
 the structure derives none; the suite compares the fields it needs. -/
 structure StageResult where
-  proto : Libp2p.Core.ProtocolId
+  proto : Core.ProtocolId
   leftover : ByteArray
 
 /-! ## The driver theorems -/
@@ -244,7 +255,7 @@ theorem driveConservation {fuel : Nat} {s : State} {input : List Nat} {r : Drive
 /-- The selected arm: the bytes in equal the frames consumed plus
 the leftover handed to the next stage (contract 5). -/
 theorem driveSelectedConservation {fuel : Nat} {s : State} {input : List Nat}
-    {p : Libp2p.Core.ProtocolId} {consumed leftover : List Nat}
+    {p : Core.ProtocolId} {consumed leftover : List Nat}
     {writes : List (List Nat)}
     (h : drive fuel s input = .ok (.selected p consumed leftover writes)) :
     input = consumed ++ leftover := by
@@ -335,7 +346,7 @@ theorem handoverCompose {ε α β : Type}
 the first drive's leftover, the bytes fed in equal the bytes both
 drives consumed plus the final leftover. -/
 theorem driveTwostage {fuel₁ fuel₂ : Nat} {s₁ s₂ : State}
-    {input₁ input₂ : List Nat} {p₁ p₂ : Libp2p.Core.ProtocolId}
+    {input₁ input₂ : List Nat} {p₁ p₂ : Core.ProtocolId}
     {c₁ c₂ l₁ l₂ : List Nat} {w₁ w₂ : List (List Nat)}
     (h₁ : drive fuel₁ s₁ input₁ = .ok (.selected p₁ c₁ l₁ w₁))
     (h₂ : drive fuel₂ s₂ (l₁ ++ input₂) = .ok (.selected p₂ c₂ l₂ w₂)) :
@@ -347,7 +358,7 @@ theorem driveTwostage {fuel₁ fuel₂ : Nat} {s₁ s₂ : State}
 
 /-- The shell's manual first write equals the core's propose step for
 a singleton list. The theorem does not cover a longer list. -/
-theorem initiatorStartPropose {p : Libp2p.Core.ProtocolId}
+theorem initiatorStartPropose {p : Core.ProtocolId}
     (hfits : fitsText p.toString = true) :
     initiatorStart [p] =
       (step { role := .initiator, supported := [], proposals := [], buffer := [],
@@ -391,7 +402,7 @@ theorem checkIdentityNone {r : Libp2p.Identity.PeerId} :
 /-- The deadline wiring of contract 6: the race's expiry is the
 `timeout` arm, and the seam errors pass through untouched. The
 `.closed` arm is required by the match over `Conc.Error`. -/
-theorem settleUpgradeSpec {α : Type} {e : Libp2p.Core.Error} {a : α} :
+theorem settleUpgradeSpec {α : Type} {e : Core.Error} {a : α} :
     settleUpgrade (α := α) (.error .deadlineExpired) =
       .error (.timeout "upgrade deadline expired") ∧
     settleUpgrade (α := α) (.error .closed) =
@@ -406,7 +417,7 @@ theorem settleUpgradeSpec {α : Type} {e : Libp2p.Core.Error} {a : α} :
 `closed` arm. `Connection.write` throws `IO.Error`, which is outside
 this shell's `Core.Error` channel. -/
 private def writeFrame (conn : Streams.Connection) (b : ByteArray) :
-    ExceptT Libp2p.Core.Error Conc.Async Unit := do
+    ExceptT Core.Error Conc.Async Unit := do
   let ok ← (try
     conn.write b
     pure true
@@ -416,7 +427,7 @@ private def writeFrame (conn : Streams.Connection) (b : ByteArray) :
 /-- Write each frame payload through the connection, in order. A
 failed write is the `closed` arm: the connection is gone. -/
 private def sendWrites (conn : Streams.Connection) (ws : List (List Nat)) :
-    ExceptT Libp2p.Core.Error Conc.Async Unit := do
+    ExceptT Core.Error Conc.Async Unit := do
   for w in ws do
     writeFrame conn (Bytes.ofNatList w)
 
@@ -429,7 +440,7 @@ long as the peer stays silent, so no measure bounds the loop (root
 marker, like `Conc.TaskSet.joinAll`. -/
 private def negotiateLoop (reader : Streams.BufReader)
     (conn : Streams.Connection) (s : State) (input : List Nat) :
-    ExceptT Libp2p.Core.Error Conc.Async StageResult := do
+    ExceptT Core.Error Conc.Async StageResult := do
   let mut s := s
   let mut input := input
   let mut reader := reader
@@ -461,10 +472,10 @@ initiator writes the coalesced header plus first proposal, and the
 responder writes its header. The seed is the leftover of the previous
 stage. The end of the stream mid-negotiation is `Core.Error.closed`; a
 `Negotiate.Error` maps once through `mapNegotiateError`. -/
-def negotiate (role : Libp2p.Core.Role) (reader : Streams.BufReader)
+def negotiate (role : Core.Role) (reader : Streams.BufReader)
     (conn : Streams.Connection) (seed : ByteArray)
-    (ids : List Libp2p.Core.ProtocolId) :
-    ExceptT Libp2p.Core.Error Conc.Async StageResult := do
+    (ids : List Core.ProtocolId) :
+    ExceptT Core.Error Conc.Async StageResult := do
   match role with
   | .initiator =>
     match initiatorStart ids with
@@ -479,22 +490,34 @@ def negotiate (role : Libp2p.Core.Role) (reader : Streams.BufReader)
         sendWrites conn first
         negotiateLoop reader conn s (Bytes.toNatList seed)
 
-/-- An upgraded session and its secure connection completion. -/
-structure Upgraded where
-  session : Libp2p.Core.MuxSession
-  remotePeer : Libp2p.Identity.PeerId
-  join : ExceptT Libp2p.Core.Error Conc.Async Unit
+/-- Close a secure connection and wait for its tasks. The answer of its
+join is dropped: the caller already holds the failure it reports. -/
+private def discardSecure (sc : Core.SecureConn) : Conc.Async Unit := do
+  sc.toConnection.closeQuietly
+  discard sc.join.run
 
-/-- The result of the post-handshake admission checkpoint. -/
-inductive UpgradeResult (ρ : Type) where
-  | upgraded (value : Upgraded)
-  | refused (reason : ρ)
+/-- The session the upgrader answers: `s`, with a `join` that also
+waits for the secure connection under it. The secure connection is
+joined even when the session's join throws a fault, so none of its
+tasks outlives the join (PRINCIPLES 3.2); the first failure wins. -/
+private def ownSecure (s : Core.MuxSession) (sc : Core.SecureConn) : Core.MuxSession :=
+  { s with
+    join := ExceptT.mk do
+      let a : Except IO.Error (Except Core.Error Unit) ←
+        try pure (.ok (← s.join.run)) catch e => pure (.error e)
+      let b ← sc.join.run
+      match a with
+      | .error e => throw e
+      | .ok a => return a.bind fun () => b }
 
-private def upgradeCore {ρ : Type} (role : Libp2p.Core.Role) (conn : Streams.Connection)
+/-- The pipeline: negotiate the security protocol, run the handshake,
+check the identity, negotiate the muxer, open the session. Each lookup
+is total; a miss after a selection is `protocol`. A failure after the
+handshake closes and joins the secure connection. -/
+private def upgradeCore (role : Core.Role) (conn : Streams.Connection)
     (leftover : ByteArray) (expected : Option Libp2p.Identity.PeerId)
-    (admit : Libp2p.Identity.PeerId → BaseIO (Option ρ))
-    (secs : List Libp2p.Core.SecurityProtocol) (muxers : List Libp2p.Core.Muxer) :
-    Conc.Async (Except Libp2p.Core.Error (UpgradeResult ρ)) := do
+    (secs : List Core.SecurityProtocol) (muxers : List Core.Muxer) :
+    Conc.Async (Except Core.Error (Core.MuxSession × Libp2p.Identity.PeerId)) := do
   let reader := Streams.BufReader.new conn
   match ← negotiate role reader conn leftover (secs.map (·.id)) with
   | .error e => return .error e
@@ -506,42 +529,24 @@ private def upgradeCore {ρ : Type} (role : Libp2p.Core.Role) (conn : Streams.Co
       | .error e => return .error e
       | .ok sc =>
         match checkIdentity expected sc.remotePeer with
-        | .error e =>
-          sc.toConnection.closeQuietly
-          discard sc.join.run
-          return .error e
+        | .error e => discardSecure sc; return .error e
         | .ok () =>
-          if let some reason ← (admit sc.remotePeer : BaseIO (Option ρ)) then
-            sc.toConnection.closeQuietly
-            discard sc.join.run
-            return .ok (.refused reason)
-          let muxReader := Streams.BufReader.new sc.toConnection
-          match ← negotiate role muxReader sc.toConnection ByteArray.empty (muxers.map (·.id)) with
-          | .error e =>
-            sc.toConnection.closeQuietly
-            discard sc.join.run
-            return .error e
+          -- The secure `read` delivers the handshake's leftover, so the
+          -- muxer negotiation starts with no bytes (the core pair, "The
+          -- leftover hand-over").
+          let secure := sc.toConnection
+          let muxReader := Streams.BufReader.new secure
+          match ← negotiate role muxReader secure .empty (muxers.map (·.id)) with
+          | .error e => discardSecure sc; return .error e
           | .ok stage2 =>
             match muxers.find? (fun m => decide (m.id = stage2.proto)) with
             | none =>
-              sc.toConnection.closeQuietly
-              discard sc.join.run
+              discardSecure sc
               return .error (.protocol "selected muxer is not configured")
             | some mux =>
-              match ← mux.«open» role sc.toConnection stage2.leftover with
-              | .error e =>
-                sc.toConnection.closeQuietly
-                discard sc.join.run
-                return .error e
-              | .ok session =>
-                let join : ExceptT Libp2p.Core.Error Conc.Async Unit := ExceptT.mk do
-                  let muxResult ← session.join.run
-                  let secureResult ← sc.join.run
-                  return match muxResult, secureResult with
-                    | .error e, _ => .error e
-                    | _, .error e => .error e
-                    | .ok (), .ok () => .ok ()
-                return .ok (.upgraded { session, remotePeer := sc.remotePeer, join })
+              match ← mux.«open» role secure stage2.leftover with
+              | .error e => discardSecure sc; return .error e
+              | .ok session => return .ok (ownSecure session sc, sc.remotePeer)
 
 /-- Whether the deadline boundary already closed the connection.
 `withinDeadline` returns an error value only on expiry, after the hook
@@ -550,28 +555,33 @@ private def boundaryClosed {α : Type} : Except Conc.Error α → Bool
   | .error _ => true
   | .ok _ => false
 
-/-- Close a session that finished after the timer won. No caller
-receives that session. -/
-private def releaseLate {ρ : Type} (r : Except Libp2p.Core.Error (UpgradeResult ρ)) : BaseIO Unit :=
+/-- Close a session that finished after the timer won, and give its
+join to `late`, the task set `upgradeWith` joins. No caller receives
+that session. -/
+private def releaseLate (late : Conc.TaskSet) (r : Except Core.Error
+    (Core.MuxSession × Libp2p.Identity.PeerId)) : BaseIO Unit :=
   match r with
-  | .ok (.upgraded value) => discard value.session.close.toBaseIO
-  | _ => pure ()
+  | .ok pair => do
+    discard pair.1.close.toBaseIO
+    late.spawn (discard pair.1.join.run)
+  | .error _ => pure ()
 
 /-- The upgrade under one `Conc.withinDeadline`. The expiry closes
 the connection once at the boundary (root §3.5), and the race's
 `deadlineExpired` maps to the `timeout` arm through `settleUpgrade`.
 The clock is a seam, so the deadline test can advance it. -/
 
-def upgradeAdmit {ρ : Type} (clock : Conc.Clock) (role : Libp2p.Core.Role)
+def upgradeWith (clock : Conc.Clock) (role : Core.Role)
     (conn : Streams.Connection) (leftover : ByteArray)
     (expected : Option Libp2p.Identity.PeerId)
-    (admit : Libp2p.Identity.PeerId → BaseIO (Option ρ))
-    (secs : List Libp2p.Core.SecurityProtocol) (muxers : List Libp2p.Core.Muxer) :
-    ExceptT Libp2p.Core.Error Conc.Async (UpgradeResult ρ) := do
+    (secs : List Core.SecurityProtocol) (muxers : List Core.Muxer) :
+    ExceptT Core.Error Conc.Async (Core.MuxSession × Libp2p.Identity.PeerId) := do
+  let late ← Conc.TaskSet.new
   let answer ← Conc.withinDeadline clock Streams.unauthDeadlineMs
     (Streams.Connection.closeQuietly conn)
-    (upgradeCore role conn leftover expected admit secs muxers)
-    releaseLate
+    (upgradeCore role conn leftover expected secs muxers)
+    (releaseLate late)
+  late.joinAll
   match settleUpgrade answer with
   | .ok pair => return pair
   | .error e => do
@@ -582,58 +592,13 @@ def upgradeAdmit {ρ : Type} (clock : Conc.Clock) (role : Libp2p.Core.Role)
         Streams.Connection.closeQuietly conn
         throw e
 
-/-- Upgrade with a clock and admit every authenticated peer. -/
-def upgradeWith (clock : Conc.Clock) (role : Libp2p.Core.Role)
-    (conn : Streams.Connection) (leftover : ByteArray)
-    (expected : Option Libp2p.Identity.PeerId)
-    (secs : List Libp2p.Core.SecurityProtocol) (muxers : List Libp2p.Core.Muxer) :
-    ExceptT Libp2p.Core.Error Conc.Async (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId) := do
-  match ← upgradeAdmit clock role conn leftover expected (fun _ => pure (none : Option Empty)) secs muxers with
-  | .upgraded value => return (value.session, value.remotePeer)
-  | .refused reason => nomatch reason
-
 /-- The frozen entry of the package docs. The clock is fixed to the
 system clock here and stays a seam in `upgradeWith` for the deadline
 test. -/
-def upgrade (role : Libp2p.Core.Role) (conn : Streams.Connection)
+def upgrade (role : Core.Role) (conn : Streams.Connection)
     (leftover : ByteArray) (expected : Option Libp2p.Identity.PeerId)
-    (secs : List Libp2p.Core.SecurityProtocol) (muxers : List Libp2p.Core.Muxer) :
-    ExceptT Libp2p.Core.Error Conc.Async (Libp2p.Core.MuxSession × Libp2p.Identity.PeerId) :=
+    (secs : List Core.SecurityProtocol) (muxers : List Core.Muxer) :
+    ExceptT Core.Error Conc.Async (Core.MuxSession × Libp2p.Identity.PeerId) :=
   upgradeWith Conc.Clock.system role conn leftover expected secs muxers
-
-/-- Negotiate a protocol on a muxed stream and retain any extra bytes. -/
-def negotiateStream (role : Libp2p.Core.Role) (stream : Streams.Stream)
-    (ids : List Libp2p.Core.ProtocolId) :
-    ExceptT Libp2p.Core.Error Conc.Async (Libp2p.Core.ProtocolId × Streams.Stream) := do
-  let (initial, writes) ← match role with
-    | .initiator => (initiatorStart ids).mapError mapNegotiateError
-    | .responder => (responderStart ids).mapError mapNegotiateError
-  let mut state := initial
-  let mut input : List Nat := []
-  for bytes in writes do
-    if let .error e ← stream.write (Bytes.ofNatList bytes) then
-      throw (.closed s!"stream negotiation write failed: {repr e}")
-  repeat
-    match drive 1 state input with
-    | .error e => throw (mapNegotiateError e)
-    | .ok result =>
-      let (next, rest, writes, selected) := match result with
-        | .selected p _ rest writes => (state, rest, writes, some p)
-        | .waiting s _ rest writes => (s, rest, writes, none)
-        | .running s _ rest writes => (s, rest, writes, none)
-      for bytes in writes do
-        if let .error e ← stream.write (Bytes.ofNatList bytes) then
-          throw (.closed s!"stream negotiation write failed: {repr e}")
-      if let some p := selected then
-        let s ← Streams.Stream.prependBytes stream (Bytes.ofNatList rest)
-        return (p, s)
-      state := next
-      input := rest
-      if result matches .waiting .. then
-        match ← stream.read with
-        | .error e => throw (.closed s!"stream negotiation read failed: {repr e}")
-        | .ok none => throw (.closed "stream ended during negotiation")
-        | .ok (some bytes) => input := input ++ Bytes.toNatList bytes
-  throw (.closed "stream negotiation ended without a selection")
 
 end Libp2p.Negotiate

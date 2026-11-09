@@ -3,7 +3,7 @@ import Conc
 import Streams
 import Libp2p.Identity
 import Libp2p.Core
-import Libp2p.Negotiate
+import Libp2p.Negotiate.Legacy
 import Libp2p.Host.Error
 import Libp2p.Host.Registry
 import Libp2p.Host.Dedup
@@ -69,7 +69,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Host
 
-open Conc Streams Multiformats Libp2p.Identity Libp2p.Core Libp2p.Negotiate
+open Conc Streams Multiformats Libp2p.Identity Libp2p.Core Libp2p.Negotiate.Legacy
 
 /-- A failure of a task that no caller awaits: an inbound upgrade, a
 session that ended badly, an inbound stream. -/

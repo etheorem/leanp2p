@@ -2,6 +2,7 @@ import Tests.Support
 import Bytes
 import Proto
 import Streams
+import Libp2p.Core
 import Libp2p.Security
 
 /-!
