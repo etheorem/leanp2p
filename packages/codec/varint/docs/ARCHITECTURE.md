@@ -15,7 +15,7 @@ error boundary" below.
 | `Varint.lean` | the root module; one import line per public submodule |
 | `Varint/UVarint.lean` | the newtype `structure UVarint where val : Nat` with its proof field, the model core `encode` and `decode?`, and the `Codec UVarint` / `LawfulCodec UVarint` instances; the instances live with the type (ARCHITECTURE §3.2). The 9-byte budget constant `maxBytes` and the value bound `limit` live here, their one home (PRINCIPLES 1.5). The suffix form `decodeEncodeSuffix` and the budget lemma `lengthEncodeLe` live here too, because the proof of the instance law uses them |
 | `Varint/Theorems.lean` | the theorems over the model beyond the instance law (ARCHITECTURE §6): the accepted-input split `encodeDecode`, `encodeNonempty`, and `encodeBytes`, with the spec examples as `example` blocks |
-| `Varint/Bytes.lean` | the production `ByteArray` path, `encodeB` and `decodeB?`; it imports the 9-byte budget constant from `Varint/UVarint.lean` |
+| `Varint/Bytes.lean` | the production `ByteArray` path, `encodeB`, `decodeB?`, and the offset reader `decodeAt?`; it imports the 9-byte budget constant from `Varint/UVarint.lean` |
 
 All declarations live in the `Varint` namespace. The root module
 re-exports the public submodules.
@@ -42,6 +42,12 @@ mechanisms of §3:
   DecodeError (UVarint × Nat)` are the production forms. The `Nat`
   counts the consumed bytes, so a framing layer knows where its
   payload starts.
+- `decodeAt? : ByteArray → Nat → Except DecodeError (UVarint × Nat)`
+  reads the varint at an offset and returns the position after it.
+  It cuts a window of `maxBytes` bytes at most, so a decoder that
+  walks a buffer by position copies 9 bytes per varint. `codec/proto`
+  and `codec/multiformats` read their varints through it and map its
+  error into their own.
 - `Codec UVarint` and `LawfulCodec UVarint` are the instances of
   §3.2. One instance per type, on the wrapped type alone.
 
@@ -133,6 +139,8 @@ The `ByteArray` decoder carries no theorem of its own. The generic
 harness of `base/bytes` pins it to the model over generated inputs, in
 the `decodeB? b = decode? (toNatList b)` shape (ARCHITECTURE §4.2,
 §6; `base/bytes` docs, owned contracts 1 and 2).
+The suite pins `decodeAt? b pos` to `decode?` over the tail of `b`
+from `pos`, at every offset of the generated inputs.
 
 ## What the package must not depend on
 

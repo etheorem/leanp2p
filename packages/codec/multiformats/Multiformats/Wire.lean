@@ -83,12 +83,11 @@ theorem takeBytesOk (cap count : Nat) (input payload rest : List Nat)
         omega
     · cases h
 
-/-- The production dependency sees a budget-sized window instead of the whole tail. -/
+/-- The varint at `position`, through the offset reader of
+`codec/varint`, with its error mapped into the multiformats error. -/
 def readVarintAt (input : ByteArray) (position : Nat) :
-    Except Error (Varint.UVarint × Nat) := do
-  let window := input.extract position (min input.size (position + Varint.maxBytes))
-  let (value, used) ← (Varint.decodeB? window).mapError Error.framing
-  .ok (value, position + used)
+    Except Error (Varint.UVarint × Nat) :=
+  (Varint.decodeAt? input position).mapError Error.framing
 
 /-- The available size is checked before a variable-length extraction. -/
 def takeBytesAt (input : ByteArray) (position count cap : Nat) :

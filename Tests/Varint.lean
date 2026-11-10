@@ -63,6 +63,16 @@ private def seededInputs : List ByteArray :=
       let x := (s * 73 + j * 151 + j * j * 17) % 384
       if x < 256 then x else x - 128
 
+/-- The offset reader agrees with the model over the tail from `pos`:
+the same value or error, and a position `pos + k` where the model
+consumed `k` bytes. -/
+private def offsetPin (b : ByteArray) (pos : Nat) : Bool :=
+  let tail := (toNatList b).drop pos
+  match decodeAt? b pos, decode? tail with
+  | .ok (v, next), .ok (w, rest) => v.val == w.val && next == pos + (tail.length - rest.length)
+  | .error e, .error f => e == f
+  | _, _ => false
+
 def Varint.run (r : Runner) : IO Unit := do
   r.section "varint" "multiformats/unsigned-varint README.md"
 
@@ -124,6 +134,20 @@ def Varint.run (r : Runner) : IO Unit := do
     (checkModelPins production (values.map encodeB))
   let inputs := shortInputs ++ prefixInputs ++ seededInputs
   r.check s!"harness model pin over {inputs.length} inputs" (checkModelPins production inputs)
+  -- The offset reader: every offset of every input, one past the end
+  -- included, and a varint behind a long run of bytes, which the
+  -- 9-byte window must not read.
+  let offsetCases := (prefixInputs ++ seededInputs).flatMap fun b =>
+    (List.range (b.size + 2)).map fun pos => (b, pos)
+  r.check s!"decodeAt? agrees with decode? at {offsetCases.length} offsets"
+    (offsetCases.all fun (b, pos) => offsetPin b pos)
+  let long := ofNatList (List.replicate 100 0xFF ++ [0xAC, 0x02] ++ List.replicate 100 0x80)
+  r.check "decodeAt? reads 300 at offset 100 of a 202-byte buffer"
+    (match decodeAt? long 100 with
+      | .ok (v, next) => v.val == 300 && next == 102
+      | .error _ => false)
+  r.check "decodeAt? of a continuation run that passes the budget is malformed"
+    (failsWith .malformed (decodeAt? long 102))
   r.check "the model pin reports a wrong decoder"
     (!checkModelPins (α := UVarint) (fun _ => .error .malformed) [ofNatList [0x01]])
 
