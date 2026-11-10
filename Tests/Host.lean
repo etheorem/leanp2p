@@ -21,10 +21,11 @@ pure update functions, by value or under an `OnceRef`, with no
 connection in the loop. The session handle of a table entry is a `Nat`
 here, since the rule never reads it.
 
-Unit 1b: hosts over the sim transport, with the real
-`Noise.securityProtocol` and `Mux.yamux` values (PRINCIPLES 1.4). A
-test clock drives the upgrade deadline, so no check waits on the wall
-clock. Each host hands its failures to a channel that the check reads.
+Unit 1b: hosts over the test values of root §3.1 (PRINCIPLES 1.4): the
+sim transport, the fixed-key test value `Noise.fixedKeyProtocol`, and
+a test clock that drives the upgrade deadline, so no check waits on the
+wall clock. The muxer is `Mux.yamux`. Each host hands its failures to a
+channel that the check reads.
 -/
 
 set_option autoImplicit false
@@ -299,6 +300,12 @@ private def cfgOf (idByte : UInt8) : Async Noise.Config := do
     | throw <| IO.userError "test static key is not 32 bytes"
   return { identity, static }
 
+/-- The fixed-key Noise value of the identity byte `idByte`: its
+ephemeral keys come from an `Rng` seeded with 32 copies of
+`idByte + 50` (root §3.1). -/
+private def noiseOf (idByte : UInt8) : Async SecurityProtocol :=
+  return Noise.fixedKeyProtocol (← cfgOf idByte) (fill 32 (idByte + 50))
+
 /-- The echo protocol of the suite. The `/test/` prefix keeps it apart
 from every real id. -/
 private def echoId : ProtocolId := ⟨"/test/echo"⟩
@@ -344,7 +351,7 @@ private def mkHost (net : Sim.Net) (idByte : UInt8) (tc : TestClock)
   let config : Config := {
     identity := cfg.identity
     transports := [net.transport]
-    security := [Noise.securityProtocol cfg]
+    security := [← noiseOf idByte]
     muxers := [Libp2p.Mux.yamux]
     handlers := [echoHandler, failHandler]
     gater
@@ -606,10 +613,10 @@ private def handOverChecks (r : Runner) : Async Unit := do
   let tc ← TestClock.new
   let (a, _) ← mkHost net 11 tc
   let addrA ← listenOn a "/memory/151"
-  let cfg ← cfgOf 12
+  let noise ← noiseOf 12
   let some conn ← net.transport.dial addrA | throw <| IO.userError "dial failed"
   match ← (Libp2p.Negotiate.upgradeWith tc.clock .initiator conn .empty (some a.localPeer)
-      [Noise.securityProtocol cfg] [Libp2p.Mux.yamux]).run with
+      [noise] [Libp2p.Mux.yamux]).run with
   | .error e => r.check s!"host: a plain upgrader reaches the host ({e})" false
   | .ok (session, _) =>
     match ← (session.openStream echoId).run with

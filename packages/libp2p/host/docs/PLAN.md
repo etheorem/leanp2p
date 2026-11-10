@@ -79,8 +79,8 @@ the host's own shell, `negotiateStream`, over the pure core of
 ## Test milestones (unit 1b)
 
 - The upgrade pipeline over the sim, in both directions: dial and
-  listen through the real `Noise.securityProtocol` value, or the
-  fixed-key test value, and `Mux.yamux` (PRINCIPLES 1.4). An
+  listen through the fixed-key test value `Noise.fixedKeyProtocol` and
+  `Mux.yamux`, on a test clock (root §3.1, PRINCIPLES 1.4). An
   identity-check mismatch fails with the `Host.Error` arm that wraps
   `Core.Error.authentication` (§4.9; the negotiate pair).
 - The silent-peer regression at host level (PRINCIPLES 5.4): a raw
