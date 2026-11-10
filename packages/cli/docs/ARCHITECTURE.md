@@ -22,7 +22,6 @@ row 18).
 | `Interop/Config.lean` | the test plan's environment variables, read into a `Config`, and the timing record |
 | `Interop/Resp.lean` | RESP2, pure: the reply header parse with its caps, and the command encoding |
 | `Interop/Redis.lean` | the harness coordination client, private to the `interop` executable: `PING`, `RPUSH`, and `BLPOP` over one connection; the spike's `LeanP2P/Interop/Redis.lean` mapped here |
-| `Interop/Mock/Stack.lean` | the mock of the unmerged stack under the harness (RULES.md, "Working ahead of the tree"), until W5.2 to W5.7 merge |
 
 The package is executables only, with no library root (see
 Decisions). The W0.1 scaffold gives every leaf a nominal `lean_lib`;
@@ -62,7 +61,9 @@ three CLI contracts.
   environment variables, in the shape of the libp2p
   transport-interop test plan: `transport` (`tcp`), `muxer` (`yamux`
   or `mplex`), `security` (`noise`), `is_dialer`, `ip`, `redis_addr`,
-  and `test_timeout_seconds`. The listener publishes its dialable
+  and `test_timeout_seconds`. `libp2p/mux` holds no mplex value yet
+  (P2, the mux PLAN, unit 2), so a run with `muxer=mplex` exits
+  nonzero at the host start. The listener publishes its dialable
   multiaddr with the `/p2p/<id>` suffix through Redis, and the dialer
   fetches it, dials, pings once, and prints the timing JSON with the
   test plan's keys verbatim, `handshakePlusOneRTTMillis` and
@@ -150,19 +151,12 @@ three CLI contracts.
   (root §2: "shows, as running code, how to compose the stack"). A
   reader who wants to compose the stack reads `Main.lean`.
 
-## The mock
+## The stack
 
-W5.2, W5.3, W5.4, W5.6, and W5.7 are open, so the harness builds
-against `Interop/Mock/Stack.lean`, a mock of their frozen surfaces
-(RULES.md, "Working ahead of the tree"). A type is a copy of the frozen
-shape, reduced to the fields the harness touches. An operation is
-`opaque`, and its body fails with the name of the missing package: no
-body fakes a connection or a handshake. The mock states no axiom.
-W5.1 has merged, so the identity key and the peer id come from the
-real `Libp2p.Identity`, and the harness generates its key through it.
-Until the integration, a live run stops at the first host call, and
-the gate cannot pass. At the integration, `Interop.lean` imports the
-real packages, and the module goes.
+The harness composes the real packages: an Ed25519 identity from
+`Libp2p.Identity`, the TCP transport, `Noise.securityProtocol` with a
+static key from `Noise.Config.generate`, `Mux.yamux`, `Libp2p.Host`,
+and ping's handler and initiator from `Libp2p.Protocols.Ping`.
 
 ## What the package must not depend on
 
