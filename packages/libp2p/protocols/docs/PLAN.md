@@ -94,11 +94,14 @@ in the codec group wrapping upstream `google/snappy`.
 - The concurrency limit: two requests with one id take a slot each, a
   third is refused, another id has its own slots, and a request gives
   its slot back when it ends (the bound of `Table.take` is a theorem).
-- Over the sim transport, through the mock muxer and the host stream
-  mock (PRINCIPLES 1.4): a request through the host gets its chunks,
-  with whole and with split writes; an id the peer does not serve
-  resets the stream; a silent peer fails the request at its deadline;
-  a connection closed under a parked read ends the request.
+- Between two hosts over the sim transport, with Noise and yamux
+  (PRINCIPLES 1.4):
+  - a request through the host gets its chunks, with whole and with
+    split writes;
+  - an id the peer does not serve fails the open, since
+    multistream-select answers `na`;
+  - a silent peer fails the request at its deadline;
+  - a connection closed under a parked read ends the request.
 - The error/EOF distinction: a framing failure returns the protocol
   error, and a clean stream end returns `finished`, through different
   channels (§5.2). An end inside a chunk is an early EOF.
