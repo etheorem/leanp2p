@@ -27,7 +27,6 @@ group is §7, row 10). The spike has no req/resp or gossipsub code.
 | `Libp2p/Protocols/ReqResp/Limiter.lean` | `MAX_CONCURRENT_REQUESTS`: the pure table rule with its bound theorem, and the per-peer `Limiter` over `OnceRef` |
 | `Libp2p/Protocols/ReqResp/Exchange.lean` | the shell over the core: the requester `request` and `requestPeer`, the responder `serve`, the handler value the registry stores, and the deadlines |
 | `Libp2p/Protocols/StreamError.lean` | `mapStreamError`, the one map from a stream error into `Core.Error` that the req/resp handler uses |
-| `Libp2p/Protocols/Mock/Core.lean` | the mock of W5.2 that identify and ping still type over, until their swap (issue #55) |
 | `Libp2p/Protocols/Gossipsub/Rpc.lean` | the RPC message with its `ProtoMessage` instance (§3.2) |
 | `Libp2p/Protocols/Gossipsub/Core.lean` | `State`, `Event`, `Action`, `ProtocolError`, and the total `step` that holds mesh, scoring, and heartbeat (§3.3) |
 | `Libp2p/Protocols/Gossipsub/Node.lean` | the loop task over the core, and the publish and subscribe surface at the seam level |
@@ -63,17 +62,20 @@ package; §4.9 names no echo, so no module line covers it.
   one frame and caps at 64 KiB. The
   two handler values serve inbound streams and register under their
   ids. The responder builds the message from the host's identity,
-  addresses, protocol list, observed address, and agent version, as the
-  spike's `respond` does. `Identify.pushTo` announces the same record
+  addresses, protocol list, and agent version, as the spike's `respond`
+  does. The observed address is the `remoteAddr` of the stream's
+  `StreamContext`, as go-libp2p reads it from `s.Conn()`
+  (`vendor/go-libp2p/p2p/protocol/identify/id.go`). The push handler
+  checks the pushed key against the context's `remotePeer`. `Identify.pushTo` announces the same record
   on the stream that the host opened under `pushId`, and then
   half-closes. The host calls the sender after the local address set or
   the local protocol set changes. Go's identify service skips a push
   when the snapshot did not change, merges pending pushes into one
   round, and skips a connection that already carries the current record
-  (the spike's `vendor/go-libp2p/p2p/protocol/identify/id.go`, the
-  `loop` and `sendPushes` functions). This package sends one record per
+  (`vendor/go-libp2p/p2p/protocol/identify/id.go`, the `loop` and
+  `sendPushes` functions). This package sends one record per
   call and starts no timer. A received push updates the peerstore
-  through the host. The push stores the addresses. The
+  through the host (`Host.addAddrs`). The push stores the addresses. The
   peerstore surface of the host doc holds addresses only, so a push's
   protocols list has no store yet. Go's push handler stores both. A
   push frame must carry the public key. The spec says to ignore missing

@@ -1,4 +1,5 @@
 import Tests.Support
+import Tests.HostPair
 import Proto
 import Bytes
 import Varint
@@ -6,10 +7,11 @@ import Conc
 import Streams.Error
 import Streams.Framing
 import Streams.Stream
+import Multiformats.Multiaddr
+import Libp2p.Core
+import Libp2p.Host
 import Libp2p.Protocols
 import Libp2p.Protocols.Identity
-import Libp2p.Protocols.Mock.Core
-import Libp2p.Protocols.Mock.Host
 
 /-!
 # Identify and ping suite
@@ -18,17 +20,18 @@ Mirrors `vendor/specs/ping/ping.md` (32-byte echo, protocol id
 `/ipfs/ping/1.0.0`) and the captured go-libp2p Identify protobuf
 (`identify-go.json`). The suite replays the vector and drives the
 pure `Identify.validate` and `Ping.checkEcho` checks. The real key
-fixtures and the host stand-in run here, and the address checks run the
-real Multiformats decoder, so every validate outcome appears in a
-check.
+fixtures run here, and the address checks run the real Multiformats
+decoder, so every validate outcome appears in a check.
 
 The exchange cases cover the identify client against the responder
-handler, the push handler against the in-memory peerstore double, the
-client deadline on the test clock, and the ping echo, with the
-initiator on end `a` and the handler on end `b`. The pings of one read
-come back in one write. The exchanges run over
-a private pair of `Conc.Pipe` values, wired as two `Streams.Stream`
-ends.
+handler, the push handler against a real host's peerstore, the client
+deadline on the test clock, and the ping echo, with the initiator on
+end `a` and the handler on end `b`. The pings of one read come back in
+one write. Those exchanges run over a private pair of `Conc.Pipe`
+values, wired as two `Streams.Stream` ends, with a fixed
+`StreamContext`. Identify and push then run once more between two real
+hosts (`Tests.HostPair`), so each handler reads the context of a real
+connection and serves through the host's registry.
 -/
 
 set_option autoImplicit false
@@ -37,6 +40,7 @@ namespace Tests.Protocols
 
 open Libp2p.Protocols
 open Libp2p.Identity
+open Tests.HostPair (hostPair)
 
 /-- A real Ed25519 public key for the suite. A 32-byte key needs no
 native call, and the key round trips through the wire form. -/
@@ -48,12 +52,35 @@ private def testPeer (tag : UInt8) : PeerId :=
   PeerId.inline (ByteArray.mk #[tag]) (by
     simp [ByteArray.size, Libp2p.Identity.maxInlineKeyBytes])
 
-/-- A placeholder served-stream context. The identify and ping
-handlers read no context field, so the empty address never reaches a
-check. -/
-private def testContext : Libp2p.Protocols.Mock.Core.StreamContext :=
-  { remotePeer := testPeer 0,
-    remoteAddr := ⟨{ frames := [], valid := by decide }⟩ }
+/-- A multiaddr from its text form. -/
+private def ma (s : String) : IO Multiformats.Multiaddr :=
+  match Multiformats.Multiaddr.parse? s with
+  | .ok a => return a
+  | .error _ => throw (IO.userError s!"test address {s} does not parse")
+
+/-- The context of a pipe-pair exchange: the peer `p`, and a memory
+address. The pipe pair has no connection under it. -/
+private def ctxOf (p : PeerId) : IO Libp2p.Core.StreamContext :=
+  return { remotePeer := p, remoteAddr := ← ma "/memory/9" }
+
+/-- The binary form of `/ip4/127.0.0.1/tcp/35371`, the vector's listen
+address, and its parsed form. -/
+private def vectorAddr : List Nat := [4, 127, 0, 0, 1, 6, 138, 43]
+private def vectorMultiaddr : IO Multiformats.Multiaddr := ma "/ip4/127.0.0.1/tcp/35371"
+
+/-- A host that serves no connection, over a new sim net and `clock`:
+the peerstore of the push checks. -/
+private def storeHost (clock : Conc.Clock) : Conc.Async Libp2p.Host.Host := do
+  Tests.HostPair.mkHost (← Streams.Sim.Net.new) clock 3 (← Conc.OnceRef.new [])
+
+/-- The Ed25519 public key of 32 copies of `v`, the key a host of
+`Tests.HostPair` derives from the seed `v` (client 1, server 2). -/
+private def hostKey (v : UInt8) : IO PubKey := do
+  let .ok k := PrivKey.ofData? .ed25519 ⟨Array.replicate 32 v⟩
+    | throw (IO.userError s!"test key {v} does not build")
+  match k.toPublic with
+  | .ok pk => return pk
+  | .error _ => throw (IO.userError s!"test key {v} has no public half")
 
 /-- The model decode over the byte list. -/
 private def decodeModel (bs : List Nat) : Except Pb.Error (Identify × List Nat) :=
@@ -120,40 +147,45 @@ private def isOkNone {ε α : Type} (x : Except ε (Option α)) : Bool :=
   | _ => false
 
 /-- True when the handler answer is a protocol error. -/
-private def isProtocolError (x : Except Libp2p.Protocols.Mock.Core.Error Unit) : Bool :=
+private def isProtocolError (x : Except Libp2p.Core.Error Unit) : Bool :=
   match x with
   | .error (.protocol _) => true
   | _ => false
 
-/-- Run the handler on `s`, and fail the task when the handler
-answers an error. -/
-private def runHandler (h : Libp2p.Protocols.Mock.Core.StreamHandler)
+/-- Run the handler on `s` with the context `ctx`, and fail the task
+when the handler answers an error. -/
+private def runHandler (h : Libp2p.Core.StreamHandler) (ctx : Libp2p.Core.StreamContext)
     (s : Streams.Stream) : Conc.Async Unit := do
-  let res : Except Libp2p.Protocols.Mock.Core.Error Unit ← h.handle testContext s
+  let res : Except Libp2p.Core.Error Unit ← h.handle ctx s
   match res with
   | .error e => throw (IO.userError s!"the handler answered {repr e}")
   | .ok () => pure ()
 
 /-- The exchange cases, on the test clock and the private pair. -/
 private def asyncChecks (r : Runner) : Conc.Async Unit := do
-  -- identify: the responder round trip
+  -- identify: the responder round trip; the observed address is the
+  -- context's remote address
   do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
     let key := testKey 1
     let pid : PeerId := peerIdOfPubKey key
-    let addr := [4, 127, 0, 0, 1, 6, 138, 43]
+    let ctx ← ctxOf (testPeer 0)
     let agent := "leanp2p"
     let protocols := ["/ipfs/id/1.0.0"]
     let ts ← Conc.TaskSet.new
     ts.spawn do
-      runHandler (Identify.respondHandler key [addr] protocols none agent none) pair.b
+      runHandler (Identify.respondHandler key [vectorAddr] protocols agent none) ctx pair.b
     let res ← Identify.client pair.a tc.clock 1000 (some pid)
     ts.joinAll
     r.check "identify e2e responder round trip accepted"
       (match res with
        | .ok (some (m, got)) =>
            decide (got = pid) && m.agentVersion == some agent && m.protocols == protocols
+       | _ => false)
+    r.check "identify e2e responder writes the context's address as observed"
+      (match res with
+       | .ok (some (m, _)) => m.observedAddr == some ctx.remoteAddr.toBytes
        | _ => false)
     tc.close
 
@@ -163,92 +195,125 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     let tc ← Conc.TestClock.new
     let key := testKey 3
     let pid : PeerId := peerIdOfPubKey key
+    let ctx ← ctxOf (testPeer 0)
     let agent := "leanp2p"
     let ts ← Conc.TaskSet.new
     ts.spawn do
-      runHandler (Identify.respondHandler key [] [] none agent none) pair.b
+      runHandler (Identify.respondHandler key [] [] agent none) ctx pair.b
     let first ← Identify.client pair.a tc.clock 1000 (some pid)
     ts.joinAll
     ts.spawn do
-      runHandler (Identify.respondHandler key [] [] none agent none) pair.a
+      runHandler (Identify.respondHandler key [] [] agent none) ctx pair.a
     let second ← Identify.client pair.b tc.clock 1000 (some pid)
     ts.joinAll
     r.check "identify e2e round trip both directions"
       (isOkSome first && isOkSome second)
     tc.close
 
-  -- identify: the push handler updates the peerstore
+  -- identify: the push handler updates the host's peerstore, under the
+  -- context's peer
   do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
-    let store ← Mock.Host.inMemory
+    let store ← storeHost tc.clock
     let key := testKey 1
     let pid : PeerId := peerIdOfPubKey key
-    let addr := [4, 127, 0, 0, 1, 6, 138, 43]
-    let msg := Identify.respond key [addr] [] none "" none
+    let ctx ← ctxOf pid
+    let want ← vectorMultiaddr
+    let msg := Identify.respond key [vectorAddr] [] none "" none
     match Streams.Framing.encodeB? .uvarint Constants.identifyCap
         (Pb.encodeMessageB msg) with
     | none => r.check "identify e2e push updates the peerstore and reads back" false
     | some frame =>
         let ts ← Conc.TaskSet.new
         ts.spawn do
-          runHandler (Identify.pushHandler store pid tc.clock 1000) pair.b
+          runHandler (Identify.pushHandler store tc.clock 1000) ctx pair.b
         discard <| pair.a.write frame
         ts.joinAll
-        let stored ← store.addrsOf pid
+        let stored ← (store.addrsOf pid : BaseIO (List Multiformats.Multiaddr))
         r.check "identify e2e push updates the peerstore and reads back"
-          (stored == [addr])
+          (stored == [want])
+    store.close
     tc.close
 
   -- identify: a second push of the same addresses grows nothing
   do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
-    let store ← Mock.Host.inMemory
+    let store ← storeHost tc.clock
     let key := testKey 1
     let pid : PeerId := peerIdOfPubKey key
-    let addr := [4, 127, 0, 0, 1, 6, 138, 43]
-    let msg := Identify.respond key [addr] [] none "" none
+    let ctx ← ctxOf pid
+    let want ← vectorMultiaddr
+    let msg := Identify.respond key [vectorAddr] [] none "" none
     match Streams.Framing.encodeB? .uvarint Constants.identifyCap
         (Pb.encodeMessageB msg) with
     | none => r.check "identify e2e push redial adds no duplicate address" false
     | some frame =>
         let ts ← Conc.TaskSet.new
         ts.spawn do
-          runHandler (Identify.pushHandler store pid tc.clock 1000) pair.b
+          runHandler (Identify.pushHandler store tc.clock 1000) ctx pair.b
         discard <| pair.a.write frame
         ts.joinAll
         let ts2 ← Conc.TaskSet.new
         ts2.spawn do
-          runHandler (Identify.pushHandler store pid tc.clock 1000) pair.b
+          runHandler (Identify.pushHandler store tc.clock 1000) ctx pair.b
         discard <| pair.a.write frame
         ts2.joinAll
-        let stored ← store.addrsOf pid
+        let stored ← (store.addrsOf pid : BaseIO (List Multiformats.Multiaddr))
         r.check "identify e2e push redial adds no duplicate address"
-          (stored == [addr])
+          (stored == [want])
+    store.close
     tc.close
 
   -- identify: the push sender announces the record and the receiver stores it
   do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
-    let store ← Mock.Host.inMemory
+    let store ← storeHost tc.clock
     let key := testKey 7
     let pid : PeerId := peerIdOfPubKey key
-    let addr := [4, 127, 0, 0, 1, 6, 138, 43]
+    let ctx ← ctxOf pid
+    let want ← vectorMultiaddr
     let ts ← Conc.TaskSet.new
     ts.spawn do
-      runHandler (Identify.pushHandler store pid tc.clock 1000) pair.b
-    let sent ← Identify.pushTo key [addr] [] none "" none
+      runHandler (Identify.pushHandler store tc.clock 1000) ctx pair.b
+    let sent ← Identify.pushTo key [vectorAddr] [] none "" none
       { pair.a with close := pair.ab.close }
     ts.joinAll
     let ended ← pair.b.read
-    let stored ← store.addrsOf pid
+    let stored ← (store.addrsOf pid : BaseIO (List Multiformats.Multiaddr))
     r.check "identify e2e push sender announces the record"
       ((match sent with
         | Except.ok _ => true
-        | Except.error _ => false) && stored == [addr])
+        | Except.error _ => false) && stored == [want])
     r.check "identify e2e push sender half-closes the stream" (isOkNone ended)
+    store.close
+    tc.close
+
+  -- identify: a push whose key is not the context's peer fails, and
+  -- the peerstore stores nothing for either peer
+  do
+    let pair ← mkPair
+    let tc ← Conc.TestClock.new
+    let store ← storeHost tc.clock
+    let key := testKey 7
+    let pid : PeerId := peerIdOfPubKey key
+    let other := testPeer 8
+    let ctx ← ctxOf other
+    let msg := Identify.respond key [vectorAddr] [] none "" none
+    match Streams.Framing.encodeB? .uvarint Constants.identifyCap
+        (Pb.encodeMessageB msg) with
+    | none => r.check "identify e2e push with another peer's key stores nothing" false
+    | some frame =>
+        discard <| pair.a.write frame
+        let res : Except Libp2p.Core.Error Unit ←
+          (Identify.pushHandler store tc.clock 1000).handle ctx pair.b
+        let forKey ← (store.addrsOf pid : BaseIO (List Multiformats.Multiaddr))
+        let forCtx ← (store.addrsOf other : BaseIO (List Multiformats.Multiaddr))
+        r.check "identify e2e push with another peer's key stores nothing"
+          (isProtocolError res && forKey.isEmpty && forCtx.isEmpty)
+    store.close
     tc.close
 
   -- identify: the client rejects an over-cap frame before the body
@@ -305,9 +370,10 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
     let payload := Bytes.ofNatList (List.replicate 32 7)
+    let ctx ← ctxOf (testPeer 0)
     let ts ← Conc.TaskSet.new
     ts.spawn do
-      runHandler Ping.pingHandler pair.b
+      runHandler Ping.pingHandler ctx pair.b
     let res ← Ping.ping pair.a tc.clock payload
     pair.ab.close
     ts.joinAll
@@ -394,9 +460,10 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     let tc ← Conc.TestClock.new
     let payload := List.replicate 32 7
     let half := List.replicate 16 7
+    let ctx ← ctxOf (testPeer 0)
     let ts ← Conc.TaskSet.new
     ts.spawn do
-      runHandler Ping.pingHandler pair.b
+      runHandler Ping.pingHandler ctx pair.b
     discard <| pair.a.write (Bytes.ofNatList half)
     discard <| pair.a.write (Bytes.ofNatList half)
     let echo ← pair.a.read
@@ -414,9 +481,10 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
   do
     let pair ← mkPair
     let pings := [List.replicate 32 1, List.replicate 32 2, List.replicate 32 3]
+    let ctx ← ctxOf (testPeer 0)
     let ts ← Conc.TaskSet.new
     ts.spawn do
-      runHandler Ping.pingHandler pair.b
+      runHandler Ping.pingHandler ctx pair.b
     discard <| pair.a.write (Bytes.ofNatList pings.flatten)
     let echo ← pair.a.read
     let ok := match echo with
@@ -430,11 +498,12 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
   do
     let pair ← mkPair
     let tc ← Conc.TestClock.new
-    let answer : Conc.OnceRef (Option (Except Libp2p.Protocols.Mock.Core.Error Unit)) ←
+    let ctx ← ctxOf (testPeer 0)
+    let answer : Conc.OnceRef (Option (Except Libp2p.Core.Error Unit)) ←
       Conc.OnceRef.new none
     let ts ← Conc.TaskSet.new
     ts.spawn do
-      answer.set (some (← Ping.pingHandler.handle testContext pair.b))
+      answer.set (some (← Ping.pingHandler.handle ctx pair.b))
     discard <| pair.a.write (Bytes.ofNatList (List.replicate 20 7))
     pair.ab.close
     ts.joinAll
@@ -451,6 +520,82 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     r.check "ping e2e wrong outgoing size rejected"
       (failsWith (Ping.Error.wrongSize 31) res)
     tc.close
+
+/-! ## Identify and push between two hosts -/
+
+/-- `h` with the handler `sh` registered under its id, wrapped so that
+the end of each served stream sends on `done`. -/
+private def setSignalling (h : Libp2p.Host.Host) (sh : Libp2p.Core.StreamHandler)
+    (done : Conc.Chan Unit) : BaseIO Unit :=
+  h.setHandler { sh with handle := fun ctx s => ExceptT.mk do
+    let res ← (sh.handle ctx s).run
+    discard (done.trySend () : BaseIO Bool)
+    return res }
+
+/-- The handlers over real connections: the context comes from the
+host, and the handlers serve through its registry. -/
+private def hostChecks (r : Runner) : Conc.Async Unit := do
+  let clientPeer ← match PeerId.ofPubKey (← hostKey 1) with
+    | .ok p => pure p
+    | .error _ => throw (IO.userError "the client key derives no peer id")
+  let serverKey ← hostKey 2
+
+  -- The client identifies the server through the host. The answer
+  -- proves the server's peer id. The observed address is the one the
+  -- server's connection reports for the client.
+  do
+    let p ← hostPair
+    p.server.setHandler
+      (Identify.respondHandler serverKey [p.serverAddr.toBytes] ["/ipfs/id/1.0.0"] "leanp2p")
+    match ← p.client.newStream p.serverPeer [Identify.protocolId] with
+    | .error e => r.check s!"host identify: the stream opens ({e})" false
+    | .ok (_, s) =>
+      match ← Identify.client s p.clock.clock 5000 (some p.serverPeer) with
+      | .ok (some (m, got)) =>
+        r.check "host identify: the answer proves the server's peer id" (got == p.serverPeer)
+        r.check "host identify: the listen address reads back"
+          (m.listenAddrs == [p.serverAddr.toBytes])
+        r.check "host identify: the observed address is the client's sim address"
+          (m.observedAddr.any fun o => Identify.validAddress o && o != p.serverAddr.toBytes)
+      | _ => r.check "host identify: the client accepts the answer" false
+    r.check "host identify: the hosts close with no fault" (← p.close).isNone
+
+  -- A push from the client lands in the server's peerstore, under the
+  -- peer id that the connection proved.
+  do
+    let p ← hostPair
+    let done : Conc.Chan Unit ← Conc.Chan.new 1
+    setSignalling p.server (Identify.pushHandler p.server p.clock.clock 5000) done
+    let pushed ← ma "/ip4/10.0.0.1/tcp/4001"
+    match ← p.client.newStream p.serverPeer [Identify.pushId] with
+    | .error e => r.check s!"host push: the stream opens ({e})" false
+    | .ok (_, s) =>
+      let sent ← Identify.pushTo (← hostKey 1) [pushed.toBytes] [] none "leanp2p" none s
+      discard done.recv
+      let stored ← (p.server.addrsOf clientPeer : BaseIO (List Multiformats.Multiaddr))
+      r.check "host push: the sender writes the record" (sent matches .ok ())
+      r.check "host push: the server stores the address under the client's peer id"
+        (stored.contains pushed)
+    r.check "host push: the hosts close with no fault" (← p.close).isNone
+
+  -- A push that carries another peer's key fails, and the peerstore
+  -- holds nothing for either peer.
+  do
+    let p ← hostPair
+    let done : Conc.Chan Unit ← Conc.Chan.new 1
+    setSignalling p.server (Identify.pushHandler p.server p.clock.clock 5000) done
+    let pushed ← ma "/ip4/10.0.0.9/tcp/4001"
+    let spoofKey := testKey 9
+    match ← p.client.newStream p.serverPeer [Identify.pushId] with
+    | .error e => r.check s!"host push spoof: the stream opens ({e})" false
+    | .ok (_, s) =>
+      discard <| Identify.pushTo spoofKey [pushed.toBytes] [] none "leanp2p" none s
+      discard done.recv
+      let forClient ← (p.server.addrsOf clientPeer : BaseIO (List Multiformats.Multiaddr))
+      let forSpoof ← (p.server.addrsOf (peerIdOfPubKey spoofKey) : BaseIO (List Multiformats.Multiaddr))
+      r.check "host push spoof: a push with another peer's key stores nothing"
+        (!forClient.contains pushed && forSpoof.isEmpty)
+    r.check "host push spoof: the hosts close with no fault" (← p.close).isNone
 
 def run (r : Runner) : IO Unit := do
   r.section "protocols"
@@ -588,5 +733,6 @@ def run (r : Runner) : IO Unit := do
     (failsWith .mismatch (Ping.checkEcho sent altered))
 
   Conc.Async.run (asyncChecks r)
+  Conc.Async.run (hostChecks r)
 
 end Tests.Protocols

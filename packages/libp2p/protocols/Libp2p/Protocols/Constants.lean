@@ -1,5 +1,4 @@
 import Libp2p.Core.ProtocolId
-import Libp2p.Protocols.Mock.Core
 
 /-!
 # Protocol constants
@@ -41,13 +40,13 @@ def floodsubId : Libp2p.Core.ProtocolId := ⟨"/floodsub/1.0.0"⟩
 def rpcCap : Nat := 1048576
 
 /-- The identify protocol id, `/ipfs/id/1.0.0`. -/
-def identifyId : Mock.Core.ProtocolId := ⟨"/ipfs/id/1.0.0"⟩
+def identifyId : Libp2p.Core.ProtocolId := ⟨"/ipfs/id/1.0.0"⟩
 
 /-- The identify push protocol id, `/ipfs/id/push/1.0.0`. -/
-def identifyPushId : Mock.Core.ProtocolId := ⟨"/ipfs/id/push/1.0.0"⟩
+def identifyPushId : Libp2p.Core.ProtocolId := ⟨"/ipfs/id/push/1.0.0"⟩
 
 /-- The ping protocol id, `/ipfs/ping/1.0.0`. -/
-def pingId : Mock.Core.ProtocolId := ⟨"/ipfs/ping/1.0.0"⟩
+def pingId : Libp2p.Core.ProtocolId := ⟨"/ipfs/ping/1.0.0"⟩
 
 /-- The identify message cap, inherited from the spike: 65536 bytes. -/
 def identifyCap : Nat := 65536
@@ -58,8 +57,6 @@ def pingSize : Nat := 32
 /-- The protocol version the responder writes, the spike's constant. -/
 def identifyProtocolVersion : String := "/ipfs/1.0.0"
 
--- Req/resp takes its ids from `libp2p/core`. The identify and ping ids
--- above stay on the mock until their swap (issue #55).
 open Libp2p.Core (ProtocolId)
 
 /-! ## Req/resp: the protocol id -/

@@ -1,5 +1,6 @@
 import Varint
 import Snappy
+import Streams.Error
 import Libp2p.Core.Error
 import Libp2p.Core.ProtocolId
 import Libp2p.Protocols.ReqResp.Crc32c
