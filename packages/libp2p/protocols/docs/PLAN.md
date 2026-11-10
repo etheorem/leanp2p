@@ -94,7 +94,8 @@ in the codec group wrapping upstream `google/snappy`.
 - The concurrency limit: two requests with one id take a slot each, a
   third is refused, another id has its own slots, and a request gives
   its slot back when it ends (the bound of `Table.take` is a theorem).
-- Between two hosts over the sim transport, with Noise and yamux
+- Between two hosts over the sim transport, with the fixed-key Noise
+  value and yamux
   (PRINCIPLES 1.4):
   - a request through the host gets its chunks, with whole and with
     split writes;

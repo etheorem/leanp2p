@@ -19,7 +19,7 @@ The sections follow the layers: the checksum, the chunk codec, the
 length prefix, the reader core as transcripts with no clock and no
 task, the writer, the concurrency limit, the exchange over a stream
 pair with the test clock, and the exchange between two hosts over the
-sim transport, with Noise and yamux.
+sim transport, with the fixed-key Noise value and yamux.
 -/
 
 set_option autoImplicit false

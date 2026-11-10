@@ -262,7 +262,8 @@ Both spike programs call `Ping.ping`.
   deadline. The slot goes back on every path. The responder's side of
   the rule, "MAY penalise", is scoring, and stays with the client.
 - **The suite runs between two hosts over the sim.** `Tests/HostPair.lean`
-  builds two real hosts with Noise, yamux, and the sim transport. The
+  builds two real hosts on the test values of root §3.1: the sim
+  transport, the fixed-key Noise value, and a test clock, with yamux. The
   requester opens its stream through the host's `newStream` (go-libp2p's
   `NewStream`, `vendor/go-libp2p/p2p/host/basic/basic_host.go`, line
   441). The responder registers through `setHandler`. A host failure
