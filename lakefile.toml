@@ -191,7 +191,7 @@ globs = ["Libp2p.Protocols.*"]
 name = "Cli"
 srcDir = "packages/cli"
 roots = ["Cli", "Interop", "GossipsubInterop", "GossipsubSession"]
-globs = ["Cli", "Interop.*"]
+globs = ["Cli", "Interop.*", "GossipsubInterop", "GossipsubSession"]
 
 # The transport-interop harness of root PLAN W5.9.
 [[lean_exe]]
