@@ -1,6 +1,14 @@
 import Cli
+import Conc
+import Crypto
+import Streams
 import Multiformats
-import Libp2p.Host.Swarm
+import Libp2p.Identity
+import Libp2p.Security
+import Libp2p.Mux
+import Libp2p.Host
+import Libp2p.Protocols.Ping
+import Libp2p.Protocols.Identify
 
 /-!
 # PingNode
@@ -10,7 +18,11 @@ The `pingnode` executable. `Cmd.parse` accepts `serve <port>` or
 of the command. A usage error exits 2, before any host exists.
 `splitPeer` drops the trailing peer. A `p2p` component left in the
 transport prefix is a usage error. A line break in an operand is
-escaped in the usage line. A valid argument list reaches the
+escaped in the usage line.
+
+`serve` builds one host after that check. It listens, registers
+identify, prints `ADDR`, and flushes. It then reads stdin in `IO`.
+EOF calls `Host.close` and exits 0. `dial` still reaches the
 unfinished node and exits 1.
 -/
 
@@ -19,7 +31,8 @@ set_option autoImplicit false
 namespace Cli.PingNode
 
 open Cli
-open Libp2p.Host (Host)
+open Libp2p.Host (Host Failure)
+open Libp2p.Identity (PeerId PrivKey)
 
 /-- One string operand. -/
 private def operand (name description : String) : Arg :=
@@ -61,10 +74,132 @@ private def usage (line : String) : IO UInt32 := do
   IO.eprintln (oneLine line)
   return 2
 
-/-- The node is not built in this slice. -/
+/-- The dial path is not built in this slice. -/
 private def unfinished : IO UInt32 := do
   IO.eprintln "pingnode: not implemented"
   return 1
+
+/-- The agent string identify advertises. -/
+private def agent : String := "leanp2p"
+
+/-- The stderr line for one inbound failure. -/
+private def failureLine (f : Failure) : String := Id.run do
+  let mut line := f.error.render
+  if let some peer := f.peer then
+    line := s!"{line} peer {peer}"
+  if let some protocol := f.protocol then
+    line := s!"{line} protocol {protocol}"
+  return line
+
+/-- Keep the first diagnostic write that threw. `modify` holds the cell
+for the whole update, so the first stored fault stays. -/
+private def keepFault (faults : IO.Ref (Option IO.Error)) (e : IO.Error) : BaseIO Unit :=
+  faults.modify fun old => if old.isNone then some e else old
+
+/-- Write the failure from the host task that saw it. `Host.close`
+joins that task, so the write has finished when `close` returns. A
+thrown write stays in `faults` and the accept loop continues. -/
+private def reportFailure (faults : IO.Ref (Option IO.Error)) (f : Failure) : BaseIO Unit :=
+  EIO.catchExceptions (IO.eprintln (failureLine f)) (keepFault faults)
+
+/-- A fresh Ed25519 host: TCP, Noise, yamux, then mplex, and ping. -/
+private def openHost (faults : IO.Ref (Option IO.Error)) : IO (Except String Host) := do
+  let seed ← match ← Crypto.ed25519Generate.run with
+    | .error e => return .error (reprStr e)
+    | .ok seed => pure seed
+  let key ← match PrivKey.ofData? .ed25519 seed.bytes with
+    | .error e => return .error (reprStr e)
+    | .ok key => pure key
+  let noise ← match ← (Libp2p.Security.Noise.Config.generate key).run with
+    | .error e => return .error (reprStr e)
+    | .ok noise => pure noise
+  match ← (Host.new {
+    identity := key
+    transports := [Streams.Tcp.transport]
+    security := [Libp2p.Security.Noise.securityProtocol noise]
+    muxers := [Libp2p.Mux.yamux, Libp2p.Mux.mplex]
+    handlers := [Libp2p.Protocols.Ping.pingHandler]
+    onFailure := reportFailure faults
+  } : BaseIO _) with
+  | .error e => return .error (reprStr e)
+  | .ok host => return .ok host
+
+/-- Run `body`, then `Host.close`. A fault of either path exits 1.
+The first fault is the line on stderr. A diagnostic write that threw
+during the run exits 1 after `close` joins the host task. -/
+private def guarding (host : Host) (faults : IO.Ref (Option IO.Error))
+    (body : IO UInt32) : IO UInt32 := do
+  let mut code : UInt32 := 0
+  try
+    code ← body
+  catch e =>
+    code := 1
+    try IO.eprintln s!"{e}" catch _ => pure ()
+  try
+    Conc.Async.run host.close
+  catch e =>
+    if code == 0 then
+      try IO.eprintln s!"{e}" catch _ => pure ()
+    code := 1
+  match ← faults.get with
+  | some e =>
+    if code == 0 then
+      try IO.eprintln s!"{e}" catch _ => pure ()
+    return 1
+  | none =>
+    return code
+
+/-- The address `serve` asks the kernel to bind. -/
+private def listenAddr (port : Nat) : IO Multiformats.Multiaddr := do
+  match Multiformats.Multiaddr.parse? s!"/ip4/127.0.0.1/tcp/{port}" with
+  | .ok addr => return addr
+  | .error e => throw <| IO.userError (reprStr e)
+
+/-- Print `ADDR` and flush before the stdin read. -/
+private def publishReady (bound : Multiformats.Multiaddr) (peer : PeerId) : IO Unit := do
+  let out ← IO.getStdout
+  out.putStr s!"ADDR {bound} {peer}\n"
+  out.flush
+
+/-- Read stdin until EOF. A line that is not EOF is discarded. -/
+private def waitStdin : IO Unit := do
+  let stdin ← IO.getStdin
+  repeat
+    let line ← stdin.getLine
+    if line.isEmpty then return
+
+/-- Listen, serve ping and identify, and stop on stdin EOF. -/
+private def serve (portText : String) : IO UInt32 := do
+  let some port := portText.toNat?
+    | do
+      IO.eprintln s!"invalid port: {oneLine portText}"
+      return 1
+  let faults ← IO.mkRef (none : Option IO.Error)
+  match ← openHost faults with
+  | .error line =>
+    IO.eprintln line
+    return 1
+  | .ok host =>
+    guarding host faults do
+      match ← Conc.Async.run (host.startListening (← listenAddr port)) with
+      | .error e =>
+        IO.eprintln e.render
+        return 1
+      | .ok bound =>
+        let key ← match host.config.identity.toPublic with
+          | .error e =>
+            IO.eprintln (reprStr e)
+            return 1
+          | .ok key => pure key
+        let protocols := [
+          Libp2p.Protocols.Ping.protocolId.toString,
+          Libp2p.Protocols.Identify.protocolId.toString
+        ]
+        host.setHandler (Libp2p.Protocols.Identify.respondHandler key [bound.toBytes]
+          protocols agent)
+        publishReady bound host.localPeer
+        waitStdin
+        return 0
 
 /-- `0`, or a decimal from 1 to 65535 with no leading zero. -/
 private def validPort (text : String) : Bool :=
@@ -97,7 +232,7 @@ private def validDial (text : String) : Except String Unit := do
   | .ok (_, none) => throw s!"dial address has no final /p2p peer: {text}"
   | .error err => throw s!"{err} {text}"
 
-/-- Check `args`, then report that the node is not implemented. -/
+/-- Check `args`. `serve` runs the host. `dial` is still unfinished. -/
 def main (args : List String) : IO UInt32 := do
   match command.parse args with
   | .error err => usage err.kind.msg
@@ -106,7 +241,7 @@ def main (args : List String) : IO UInt32 := do
     | "serve" =>
       match operandValue parsed "port" with
       | some port =>
-        if validPort port then unfinished else usage s!"invalid port: {port}"
+        if validPort port then serve port else usage s!"invalid port: {port}"
       | none => usage "missing port"
     | "dial" =>
       match operandValue parsed "multiaddr" with

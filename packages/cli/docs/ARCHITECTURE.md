@@ -28,7 +28,8 @@ row 18).
 
 `Demo.lean` and `PingNode.lean` are the executable roots. Each
 `main` checks its arguments with `Cmd.parse`. A usage error exits 2.
-A valid list prints `not implemented` to stderr and exits 1.
+`demo` and `pingnode dial` then print `not implemented` to stderr
+and exit 1. `pingnode serve` listens.
 `Main.lean`
 stays the gossipsub participant. The Lake lib is `CliHarness`.
 `CliHarness.lean` declares no API, and the lib exists so the suite
@@ -145,8 +146,9 @@ Both files sit in `packages/cli`. The namespaces are `Cli.Demo` and
 `Cli.PingNode`, the shape `Cli.GossipsubSession` already uses.
 `gossipsub-interop` keeps the root `Main`. `interop` keeps the root
 `Interop.Main`. `lakefile.toml` names `demo` and `pingnode`. The
-argument table below is in force. A valid list then prints
-`not implemented` to stderr and exits 1.
+argument table below is in force. `demo` and `pingnode dial` then
+print `not implemented` to stderr and exit 1. `pingnode serve`
+listens.
 
 ### Arguments
 
@@ -242,11 +244,14 @@ Both binaries build one `Host.Config`.
   architecture and root §8.
 - The gater, the resource manager, the ranker, and the clock keep
   the defaults on `Host.Config`.
-- `onFailure` prints `Host.Error.render` to stderr, and it includes
-  the peer and the protocol when the failure carries them. A policy
-  refusal stays inside the host (the host architecture, Decisions).
-  One inbound failure leaves the accept loop running. A fault of a
-  host task surfaces when `Host.close` joins the task.
+- `onFailure` writes `Host.Error.render` to stderr in the host task
+  that saw the failure, and it includes the peer and the protocol
+  when the failure carries them. The write finishes before that task
+  ends. `Host.close` joins the task. A write that throws is kept, and
+  the process exits 1 after `close`. A policy refusal stays inside
+  the host (the host architecture, Decisions). One inbound failure
+  leaves the accept loop running. A fault of a host task surfaces
+  when `Host.close` joins the task.
 
 The demo and the ping node register ping and identify. Echo
 registration waits on the open question.
@@ -388,35 +393,36 @@ These rules bind `pingnode serve`.
 The mode registers identify with the bound address, prints `ADDR`,
 and flushes stdout. The flush follows a successful listen and that
 registration. While stdin stays open, the process accepts a dial and
-serves it. The unit 1 check covers that dial with
-`LEAN_NUM_THREADS=1`, and again under `+RTS -N1`.
+serves it. `Tests/CliLive.lean` covers that dial with
+`LEAN_NUM_THREADS=1`.
 
-Stdin EOF is the shutdown signal. `Handle.lines` in the v4.34
-`Init/System/IO.lean` stops when `getLine` returns an empty string,
-and the spike's serve loop treats that empty result as EOF. The loop
-discards each line. The bytes belong to the operator, so the §5.1
-caps stay on the peer frames. After EOF the mode calls `Host.close`
-and exits.
+Stdin EOF is the shutdown signal. The mode calls `Handle.getLine` on
+stdin in `IO`, after the flush, and outside `Async`. An empty string
+is EOF. Any other line is discarded. The bytes belong to the
+operator, so the §5.1 caps stay on the peer frames. After EOF the
+mode calls `Host.close` and exits 0, unless that close throws. A
+thrown `IO.Error` from the read or from the flush exits 1, and that
+path calls `Host.close` too.
 
-An inbound peer failure reaches stderr through `onFailure`. The
-accept loop keeps running. A host-task fault reaches stderr when
-`close` throws it, and the process then exits 1.
+An inbound peer failure reaches stderr through `onFailure`, on the
+host task that saw it. The accept loop keeps running. A write that
+throws is kept until `close` returns, and the process then exits 1.
+A host-task fault reaches stderr when `close` throws it, and the
+process then exits 1.
 
-The read's scheduling is an implementation choice, and this slice has
-not run it. `IO.asTask` defaults to `Task.Priority.default`
-(`Init/Core.lean`). Priorities through `Task.Priority.max` run on the
-shared worker pool. `Task.Priority.dedicated` asks for a separate
-thread. The unit 1 dial check is what shows whether the chosen
-priority keeps the accept loop moving under one pool worker.
-`scripts/park-threads.lean` measures `IO.wait`.
-
-A task that runs the read ends when `getLine` returns or throws. The
-owner joins the task after that return, and then calls `Host.close`.
-`Host.close` closes listeners, pending connections, and sessions
-(`Shutdown.lean`). The sequence leaves stdin open. A cleanup path
-joins the reader after that return. The read stays an `IO` action. A
-blocking call inside `Async` holds a pool worker (the conc
-architecture, Decisions).
+The read has no reader task. The calling thread blocks in `getLine`.
+The accept loop is the host task that `startListening` started.
+`Tests/CliLive.lean` reads `ADDR` while stdin stays open, completes
+ping and identify, and then closes stdin. The server exits inside
+the test timeout. `Host.close` leaves stdin open. A blocking call
+inside `Async` holds a pool worker (the conc architecture,
+Decisions), so this read stays in `IO`. The focused command
+`LEANP2P_SUITE=cli LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1 -RTS`
+passed 121 checks, with 0 failed, 0 todo, and 0 skipped. That
+command runs the CLI suites alone. The full `lake test` was not
+rerun for this slice. Its recorded baseline still has one failure
+in `Tests/Streams.lean`: `the teardown aborted the stuck write:
+the peer meets a reset`.
 
 ### Demo lifetime
 

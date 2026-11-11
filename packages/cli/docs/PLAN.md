@@ -32,7 +32,8 @@ The executable roots are `Demo` and `PingNode`, in `packages/cli`.
 `Main` stays the root of `gossipsub-interop`. The lib is
 `CliHarness`. Its globs include `Demo` and `PingNode`, and the
 lakefile names the `demo` and `pingnode` executables. A usage
-error exits 2. A valid list prints `not implemented` and exits 1.
+error exits 2. `demo` and `pingnode dial` print `not implemented`
+and exit 1. `pingnode serve` listens.
 The W5.8 behavior section
 of the package architecture is the contract those binaries implement,
 including the argument table, the exit codes, the ping and identify
@@ -55,9 +56,21 @@ an answer.
   `Tests/Node.lean` drives two hosts over loopback TCP through ping,
   identify, and echo).
 - `pingnode serve` prints the bound address, flushes it, and stays up
-  until stdin EOF while an inbound dial still completes. This check
-  runs with `LEAN_NUM_THREADS=1` and under `+RTS -N1`. The server
-  lifetime section names the read as an implementation choice.
+  until stdin EOF while an inbound dial still completes.
+  `Tests/CliLive.lean` runs that check with `LEAN_NUM_THREADS=1`.
+  The server reads stdin with `Handle.getLine` in `IO`, outside
+  `Async`. The same file checks immediate EOF, a busy port, a failed
+  `ADDR` write, an inbound failure followed by a live exchange, and
+  a sleeper that misses its deadline, and a registered task that
+  returns an error. Each of those process checks reaps the child and
+  joins the readers it started. A task error from one of those joins
+  fails the check after the remaining joins. The focused command
+  `LEANP2P_SUITE=cli LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1 -RTS`
+  passed 121 checks, with 0 failed, 0 todo, and 0 skipped. That
+  command runs the CLI suites alone. The full `lake test` was not
+  rerun for this slice. Its recorded baseline still has one failure
+  in `Tests/Streams.lean`: `the teardown aborted the stuck write:
+  the peer meets a reset`.
   `scripts/park-threads.lean` measures `IO.wait`.
 - A usage error exits 2 before a host exists: a `demo` argument, a
   missing or unknown `pingnode` subcommand, an extra operand, a port
@@ -66,7 +79,8 @@ an answer.
   whose transport prefix still contains a `p2p` component. A line
   break in an operand stays inside that one stderr line.
   `Tests/Cli.lean` runs the built binaries for these cases. A valid
-  list still exits 1 with the unfinished diagnostic.
+  `demo` or `pingnode dial` list still exits 1 with the unfinished
+  diagnostic. A valid `pingnode serve` port is not a usage error.
 - `pingnode dial` against `pingnode serve` prints `PING OK`, and both
   processes close their hosts on the failure paths of the behavior
   section. The run uses the exchange deadline after `newStream`
