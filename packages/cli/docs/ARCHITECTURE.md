@@ -524,9 +524,15 @@ handler. The spike demo still echoes on `/demo/echo/1.0.0`.
   path is the secure connection's own closed error. Treating that
   error as the peer's end would change the yamux sentence that throws
   a failed write when the session ends at the connection. The
-  question stands: after the peer's RST has ended the secure
-  connection, should join still throw `resourceVanished` code 0 with
-  that Noise detail, and should `pingnode serve` still exit 1?
+  reproducer is commit `416bc8e33bd99502799ae3a924f34188ee9a8246`.
+  The question is
+  https://github.com/etheorem/leanp2p/issues/22#issuecomment-6807493655.
+  It asks whether join throws `resourceVanished` code 0 with that
+  Noise detail after the peer's RST has ended the secure connection,
+  and whether `pingnode serve` exits 1. The question stays unresolved.
+  It is separate from the outbound-deadline question and the
+  echo-home question at
+  https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
   `finish_child` in `scripts/ping-go-interop.sh` sends SIGTERM, waits
   at most 2 seconds, sends SIGKILL if the child is alive, and reaps
   it. The ping deadline, the stdin holder, and the EXIT trap share

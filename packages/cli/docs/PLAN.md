@@ -108,7 +108,10 @@ home blocks the demo echo leg. `pingnode serve` is implemented.
   `stream failed: closed: the stream closed peer 12D3KooWPDx7LZXLcXg8CgvnLimnKnQeM9rXKPeS9jJgNgmfLAGs protocol /ipfs/ping/1.0.0`,
   then `resource vanished (error code: 0, noise: the secure connection is closed)`.
   The architecture decision records the cause. The yamux rule that
-  throws this write stays in place. The shutdown fault stays open.
+  throws this write stays in place. The shutdown fault stays open, at
+  https://github.com/etheorem/leanp2p/issues/22#issuecomment-6807493655.
+  That question stays unresolved. It is separate from the
+  outbound-deadline question and the echo-home question.
   `PING_GO_BIN=/usr/bin/false scripts/ping-go-interop.sh` exited 1
   with `FAIL go-to-lean: go exit 1`. The `pingnode` process, the
   stdin holder, and the Go command were gone. A test-only peer that
