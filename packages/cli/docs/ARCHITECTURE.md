@@ -28,7 +28,7 @@ row 18).
 
 `Demo.lean` and `PingNode.lean` are the executable roots. Each
 `main` checks its arguments with `Cmd.parse`. A usage error exits 2.
-`demo` then prints `not implemented` to stderr and exits 1.
+An empty `demo` list runs the loopback exchange and exits 0.
 `pingnode serve` listens. `pingnode dial` dials the expected peer
 and prints one ping.
 `Main.lean`
@@ -97,7 +97,7 @@ work.
    `libp2p/protocols`: the handler values, `Ping.ping`, and
    `Identify.client`. The demo echo home is
    `Libp2p.Protocols.TestSupport.Echo`, recorded below. That module
-   provides the handler and the client. The demo executable still
+   provides the handler and the client. The demo executable
    wires them. Every seam
    value comes from its implementation
    package: the TCP transport from `net/streams`, which alone binds
@@ -135,8 +135,8 @@ work.
 ## W5.8 behavior
 
 This section binds the demo and the ping node. Unit 1 implements it.
-The echo home at the end is the working decision. This slice does
-not add that module. The interop contract above stays in force.
+The echo home at the end is the working decision. The interop
+contract above stays in force.
 
 ### Executables
 
@@ -149,8 +149,8 @@ Both files sit in `packages/cli`. The namespaces are `Cli.Demo` and
 `Cli.PingNode`, the shape `Cli.GossipsubSession` already uses.
 `gossipsub-interop` keeps the root `Main`. `interop` keeps the root
 `Interop.Main`. `lakefile.toml` names `demo` and `pingnode`. The
-argument table below is in force. `demo` then prints `not
-implemented` to stderr and exits 1. `pingnode serve` listens.
+argument table below is in force. An empty `demo` list runs the
+loopback exchange. `pingnode serve` listens.
 `pingnode dial` dials the expected peer and prints one ping.
 
 ### Arguments
@@ -254,15 +254,17 @@ Both binaries build one `Host.Config`.
 - `onFailure` writes `Host.Error.render` to stderr in the host task
   that saw the failure, and it includes the peer and the protocol
   when the failure carries them. The write finishes before that task
-  ends. `Host.close` joins the task. A write that throws is kept, and
-  the process exits 1 after `close`. A policy refusal stays inside
+  ends. `Host.close` joins the task. A write that throws is kept
+  as an `IO.Error`, and the process exits 1 after `close`. The demo
+  also records that the callback ran. That flag is not an
+  `IO.Error`. The Demo lifetime section reads it after both closes.
+  `pingnode serve` does not keep that flag. A policy refusal stays inside
   the host (the host architecture, Decisions). One inbound failure
   leaves the accept loop running. A fault of a host task surfaces
   when `Host.close` joins the task.
 
 The demo and the ping node register ping and identify. The demo
-registers `Libp2p.Protocols.TestSupport.Echo.handler` when the demo
-slice wires it.
+also registers `Libp2p.Protocols.TestSupport.Echo.handler`.
 
 `Identify.respondHandler` is registered after `startListening`
 returns. Its listen-address list is that bound address, as
@@ -272,10 +274,9 @@ The observed address stays the `StreamContext` value inside
 `respondHandler`. The protocol version stays
 `Constants.identifyProtocolVersion`, which `respond` writes.
 
-The demo's identify client requires three facts in the record. The
-derived peer hash equals the dialed peer hash. The bound address is
-present. Every registered protocol id is present. A missing fact
-exits 1.
+`Identify.client` receives `some peer` and validates that peer. The
+demo then requires the bound address and every registered protocol
+id. A missing fact exits 1.
 
 ### Deadlines
 
@@ -374,7 +375,9 @@ its cleanup tasks. A result that arrives after the timer goes to
 The policy adds no library idle timeout. `Host` keeps its interface.
 An authenticated idle connection stays open under §5.4.
 `pingnode serve` opens no outbound stream. `pingnode dial`
-implements the timer. `demo` still waits for its slice.
+implements the timer. `demo` applies the same budget to each
+`newStream`, and to the ping and echo exchanges. Identify passes
+the same duration to `Identify.client`.
 
 ### Dial
 
@@ -437,10 +440,8 @@ The serve slice's focused command passed 121 checks. The full
 failure in `Tests/Streams.lean`: `the teardown aborted the stuck
 write: the peer meets a reset`.
 
-`demo` still prints `not implemented` and exits 1.
-`Libp2p.Protocols.TestSupport.Echo` provides the handler and the
-client. The demo executable is unfinished. The Lean-to-Go
-ping check is recorded in the Go-helper decision. The bidirectional
+`demo` runs the two-host loop and exits 0. The Lean-to-Go ping
+check is recorded in the Go-helper decision. The bidirectional
 gate stays unfinished. The abrupt Go-first close stays the historical
 case in the Go-helper decision.
 
@@ -506,25 +507,56 @@ The demo runs these steps in order.
 
 1. Generate two Ed25519 identities.
 2. Build two hosts.
-3. Register ping on the listener.
+3. Register ping and `Libp2p.Protocols.TestSupport.Echo.handler`
+   on the listener.
 4. Listen on `/ip4/127.0.0.1/tcp/0`.
-5. Register identify with the bound address and the ids registered
-   so far.
+5. Register identify with the bound address and the three ids:
+   ping, `/demo/echo/1.0.0`, and identify.
 6. Store that address with `addAddrs`, then `dialPeer`.
-7. Open a `newStream` for ping, then identify, then the echo id
-   from `Libp2p.Protocols.TestSupport.Echo`. The handler and the
-   client are available. The demo executable wires them in its
-   slice. Each `newStream` uses the 30 second budget above.
+7. Open a `newStream` for ping, then identify, then the echo id.
+   Each open uses the 30 second budget above. Expiry closes the
+   dialer. The command still closes the listener.
 8. Close the dialer, then the listener.
 
-Every exit closes each host that `Host.new` returned. The call is
-`Host.close`. A fault from the first close still runs the second
-close. The process exits 1 with the first fault. A demo that
-received `onFailure` also exits 1, after both closes.
+The listener is owned as soon as its `Host.new` returns. A failure
+while the dialer is built closes that listener, and the dialer's
+fault stays the stderr line. Every later exit closes the dialer,
+then the listener. The call is `Host.close`. A fault from the first
+close still runs the second close. The process exits 1 with the
+first fault.
 
-On success, stdout carries the dial line, the ping rtt, and the
-identify summary. The spike's `Main.lean` is the shape of those
-lines. The echo line waits for the demo executable.
+`reportFailure` sets `reported` before it writes the line. The flag
+stays set when the write succeeds. A thrown write is stored in
+`writeFault` and does not clear the flag. The command does not build
+an `IO.Error` from the `Host.Error`. `guarding` reads both fields
+after `closeBoth`. That close joins the tasks that called the
+callback, so the read sees the finished callback. `exitAfterCleanup`
+returns 1 when `reported` is set, when `writeFault` is set, or when
+the body or a close already failed. A stored write fault is printed
+only when that earlier code is still 0. A line already printed stays
+the stderr line.
+
+`reportFailure`, `closeBoth`, and `guarding` are private. The
+executable has no injection flag, so the process checks cannot
+deliver a `Failure` through `onFailure`. The examples on
+`exitAfterCleanup` cover a reported callback after a successful body,
+a stored write fault, both together, a failed body, and a clean
+success. The trace above is the path from the callback through both
+closes to that status.
+
+On success, stdout carries four lines. The spike's `Main.lean` is
+the shape. The peer id text is `PeerId.toString`.
+
+```
+dialed <peer id> (noise + yamux, remote verified)
+ping rtt: <ms> ms
+identified: <peer id>, 1 addr(s), 3 protocol(s)
+echo: echo-me
+```
+
+The identify line counts the one bound address and the three
+registered protocol ids. The echo line follows a reply equal to the
+bytes of `echo-me`. Stderr is empty. The process exits 0.
 
 ### Working decision: the demo echo home
 
@@ -549,8 +581,9 @@ half-closes and returns. A `Streams.Error` maps through
 `mapStreamError`. A thrown `IO.Error` stays thrown. The caller owns
 the stream. `serve` half-closes on an orderly read. `exchange` leaves
 the stream open. One chunk is the whole exchange. The demo chooses
-the payload and prints the result. The demo executable is unfinished.
-The ping node registers ping and identify.
+the payload and prints the result. The demo sends the bytes of
+`echo-me`, requires the same bytes back, and prints `echo: echo-me`.
+A later chunk stays unread. The ping node registers ping and identify.
 
 `lake build tests` completed. `LEANP2P_SUITE=protocols
 .lake/build/bin/tests` passed 80 checks, with 0 failed, 0 todo, and
@@ -559,10 +592,27 @@ The ping node registers ping and identify.
 0 todo, and 0 skipped. That command runs `Tests.Protocols`.
 `scripts/lint-imports.sh` checked 190 module files, with 0
 violations. `git diff --check` reported no whitespace errors. The
-138-check CLI result stays the dial slice's record. The full
-`lake test` was not rerun. Its recorded baseline still has one
-failure in `Tests/Streams.lean`: `the teardown aborted the stuck
-write: the peer meets a reset`.
+138-check CLI result stays the dial slice's record.
+
+`lake build demo pingnode tests` completed. `LEANP2P_SUITE=cli
+.lake/build/bin/tests` passed 140 checks, with 0 failed, 0 todo, and
+0 skipped. `LEANP2P_SUITE=cli LEAN_NUM_THREADS=1 .lake/build/bin/tests
++RTS -N1 -RTS` passed 140 checks, with 0 failed, 0 todo, and 0
+skipped. That command runs `Tests.Cli` and `Tests.CliLive`. The
+success check requires the four lines above, empty stderr, and exit
+0. A closed stdout exits 1 inside 30 seconds, with a nonempty stderr.
+`scripts/lint-imports.sh` checked 190 module files, with 0
+violations. `git diff --check` reported no whitespace errors. The
+reviewer independently reproduced that 140-check result. After the
+callback correction, `lake build demo pingnode tests` completed.
+`LEANP2P_SUITE=cli LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1
+-RTS` passed 140 checks, with 0 failed, 0 todo, and 0 skipped. The
+success check and the closed-stdout check stay in that run. The
+callback examples are checked when `demo` builds. The 80-check
+result stays the echo suite's record. The full `lake test` was not
+rerun. Its recorded baseline still has one failure in
+`Tests/Streams.lean`: `the teardown aborted the stuck write: the
+peer meets a reset`. The W5.9 gate and issue #22 stay open.
 
 ## Decisions
 
@@ -648,9 +698,10 @@ write: the peer meets a reset`.
   `gofmt -l scripts/ping-go/main.go` printed nothing. `CGO_ENABLED=0
   go build` from `scripts/ping-go` completed. `bash -n
   scripts/ping-go-interop.sh` completed. Lean sources are unchanged
-  in this slice, so the 138-check result above stands. The
-  bidirectional gate and the demo executable stay unfinished. Echo
-  support is `Libp2p.Protocols.TestSupport.Echo`. The
+  in this slice, so the 138-check result above stands. That slice
+  left the demo executable unfinished. The bidirectional gate stays
+  unfinished. Echo support is `Libp2p.Protocols.TestSupport.Echo`.
+  The demo command is the Demo lifetime section. The
   spike also kept a
   test-plans runner image, `interop/leanp2p/{Makefile,Dockerfile}`.
   The target drops the image, and `scripts/interop-matrix.sh` is the

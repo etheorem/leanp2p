@@ -875,7 +875,8 @@ Everything with libp2p semantics, in subpackages:
   places the demo echo handler and client at
   `Libp2p.Protocols.TestSupport.Echo`. That module sits beside the
   four protocols. It reads one chunk, echoes those bytes, and
-  half-closes. The demo executable wires it.
+  half-closes. The empty `demo` command registers the handler and
+  calls `exchange` with the bytes of `echo-me`.
 - **Policy seams**: connection gater, resource manager, address ranker.
   The interfaces exist now, and the implementations come later.
 

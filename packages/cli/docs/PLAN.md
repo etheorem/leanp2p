@@ -32,9 +32,9 @@ The executable roots are `Demo` and `PingNode`, in `packages/cli`.
 `Main` stays the root of `gossipsub-interop`. The lib is
 `CliHarness`. Its globs include `Demo` and `PingNode`, and the
 lakefile names the `demo` and `pingnode` executables. A usage
-error exits 2. `demo` prints `not implemented` and exits 1.
-`pingnode serve` listens. `pingnode dial` dials the expected peer
-and prints one ping.
+error exits 2. An empty `demo` list runs the loopback exchange and
+exits 0. `pingnode serve` listens. `pingnode dial` dials the expected
+peer and prints one ping.
 The W5.8 behavior section
 of the package architecture is the contract those binaries implement,
 including the argument table, the exit codes, the ping and identify
@@ -47,20 +47,44 @@ One-shot `pingnode dial` and `demo` apply a 30 second budget around
 `Host.newStream`. Expiry fails the command and closes the owned
 host. `pingnode dial` implements that timer. The demo echo handler
 and client are `Libp2p.Protocols.TestSupport.Echo`. That module
-reads one chunk, echoes those bytes, and half-closes. The demo
-executable still prints `not implemented`. `pingnode serve` and
-`pingnode dial` are implemented.
+reads one chunk, echoes those bytes, and half-closes. An empty
+`demo` list runs ping, identify, and that echo, then closes both
+hosts. `pingnode serve` and `pingnode dial` are implemented.
 
 - The demo runs end to end over loopback: two hosts dial, complete the
   upgrade, identify, and exchange pings. The listener's identify
   record carries the bound address and the registered protocol ids.
-  The echo leg uses `Libp2p.Protocols.TestSupport.Echo`. The demo
-  executable wires that leg. Each `newStream` uses
-  the exchange deadline after the call returns, and the 30 second
-  budget around the call.
+  The echo leg uses `Libp2p.Protocols.TestSupport.Echo`. The payload
+  is the bytes of `echo-me`, and the reply must match. Stdout is the
+  dial line, `ping rtt: <ms> ms`, the identify summary
+  `1 addr(s), 3 protocol(s)`, and `echo: echo-me`. Stderr is empty.
+  Each `newStream` uses the exchange deadline after the call returns,
+  and the 30 second budget around the call. Identify passes that
+  duration to `Identify.client`, which validates the expected peer.
+  The demo then requires the bound address and the registered
+  protocol ids. A callback that runs, including one whose stderr
+  write succeeds, exits 1 after both closes. A thrown diagnostic
+  write is a separate `IO.Error` and also exits 1 after those closes.
+  `pingnode serve` does not keep the callback flag.
   The spike's node-suite legs are the carried tests (the spike's
   `Tests/Node.lean` drives two hosts over loopback TCP through ping,
-  identify, and echo).
+  identify, and echo). `lake build demo pingnode tests` completed.
+  `LEANP2P_SUITE=cli .lake/build/bin/tests` passed 140 checks, with
+  0 failed, 0 todo, and 0 skipped. `LEANP2P_SUITE=cli
+  LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1 -RTS` passed 140
+  checks, with 0 failed, 0 todo, and 0 skipped. A closed stdout exits
+  1 inside 30 seconds. `scripts/lint-imports.sh` checked 190 module
+  files, with 0 violations. `git diff --check` reported no whitespace
+  errors. The reviewer independently reproduced that 140-check
+  result. After the callback correction, `lake build demo pingnode
+  tests` completed. `LEANP2P_SUITE=cli LEAN_NUM_THREADS=1
+  .lake/build/bin/tests +RTS -N1 -RTS` passed 140 checks, with 0
+  failed, 0 todo, and 0 skipped. The 138-check result stays the dial
+  slice's record. The 80-check result stays the echo suite's record.
+  The full `lake test` was not rerun. Its recorded baseline still has
+  one failure in `Tests/Streams.lean`: `the teardown aborted the stuck
+  write: the peer meets a reset`. The W5.9 gate and issue #22 stay
+  open.
 - `pingnode serve` prints the bound address, flushes it, and stays up
   until stdin EOF while an inbound dial still completes.
   `Tests/CliLive.lean` runs that check with `LEAN_NUM_THREADS=1`.
@@ -84,8 +108,9 @@ executable still prints `not implemented`. `pingnode serve` and
   dial address that `Host.splitPeer` rejects, and a dial address
   whose transport prefix still contains a `p2p` component. A line
   break in an operand stays inside that one stderr line.
-  `Tests/Cli.lean` runs the built binaries for these cases. A valid
-  `demo` list exits 1 with the unfinished diagnostic. A dial to
+  `Tests/Cli.lean` runs the built binaries for these cases. The
+  successful `demo` run lives in `Tests/CliLive.lean` and uses
+  `capture` with a 30 second deadline. A dial to
   port 0 uses `capture` with a 10 second deadline. The child exits
   inside that deadline with code 1, empty stdout, and a nonempty
   runtime diagnostic. A valid `pingnode serve` port reaches
@@ -116,9 +141,9 @@ executable still prints `not implemented`. `pingnode serve` and
   whitespace errors. The 121-check command above is the serve
   slice. The full `lake test` was not rerun. Its recorded baseline
   still has one failure in `Tests/Streams.lean`: `the teardown
-  aborted the stuck write: the peer meets a reset`. The demo
-  executable and the bidirectional gate remain unfinished. Echo
-  support is `Libp2p.Protocols.TestSupport.Echo`.
+  aborted the stuck write: the peer meets a reset`. That slice left
+  the demo executable unfinished. The bidirectional gate remains
+  unfinished. Echo support is `Libp2p.Protocols.TestSupport.Echo`.
 - Go-to-Lean ping is in this slice. The Go peer dials `pingnode
   serve`. `scripts/ping-go/main.go` dials one multiaddr over TCP,
   Noise, and yamux, prints `PING OK rtt=<duration>`, and waits for
@@ -181,8 +206,10 @@ executable still prints `not implemented`. `pingnode serve` and
   go build` from `scripts/ping-go` completed. `bash -n
   scripts/ping-go-interop.sh` completed. `git diff --check` reported
   no whitespace errors. Lean sources are unchanged, so the 138-check
-  result above stands. The demo executable and the bidirectional gate
-  remain unfinished. Echo support is `Libp2p.Protocols.TestSupport.Echo`.
+  result above stands. That slice left the demo executable unfinished.
+  The bidirectional gate remains unfinished. Echo support is
+  `Libp2p.Protocols.TestSupport.Echo`. The demo command is recorded
+  in the unit 1 demo bullet.
   This check stays outside `lake test`.
 - The in-suite legs pass under `+RTS -N1` (§6; PRINCIPLES 5.3).
 

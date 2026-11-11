@@ -60,7 +60,9 @@ through `mapStreamError`, and that path does not half-close. A thrown
 writes one payload and reads one reply. `.ok none` is EOF before a
 reply. `exchange` does not close the stream. One chunk is the whole
 exchange. A later chunk stays unread. The demo chooses the payload
-and prints the result. The demo executable is unfinished.
+and prints the result. The `demo` command registers `handler`, writes
+the bytes of `echo-me` through `exchange`, and requires those bytes
+back.
 
 ## Public surface
 

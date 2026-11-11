@@ -167,7 +167,6 @@ private def expect (runner : Runner) (name exe : String) (args : Array String)
 /-- The argument table of the demo and the ping node. -/
 def run (runner : Runner) : IO Unit := do
   runner.section "cli arguments" "packages/cli/Demo.lean, packages/cli/PingNode.lean"
-  expect runner "demo empty" "demo" #[] 1 "demo: not implemented"
   expect runner "demo one argument" "demo" #["foo"] 2
     "Redundant positional argument `foo`."
   expect runner "demo two arguments" "demo" #["foo", "bar"] 2

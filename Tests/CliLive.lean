@@ -23,7 +23,9 @@ failure, a deadline that kills a sleeper, and a registered task that
 returns an error. The dial checks run the built `pingnode dial` against
 this server, a closed port, a different peer id, a peer that accepts
 the stream and stays silent, and a peer that reads the payload and
-does not echo it.
+does not echo it. The demo checks run the built `demo`. One check
+requires the four success lines. The other closes stdout and requires
+exit 1 inside 30 seconds.
 
 Each reader task belongs to the check that started it. The check wakes
 the task by closing the pipe it reads, and then joins it.
@@ -38,6 +40,9 @@ open Libp2p.Identity (PeerId PrivKey)
 
 /-- The built server. -/
 private def bin : String := ".lake/build/bin/pingnode"
+
+/-- The built demo. -/
+private def demoBin : String := ".lake/build/bin/demo"
 
 /-- One worker in the server process. -/
 private def oneWorker : Array (String × Option String) :=
@@ -607,6 +612,73 @@ private def dialNoEcho (runner : Runner) : IO Unit := do
   fault ← closeHost host fault
   if let some e := fault then throw e
 
+/-- The text between `head` and `tail`, when both ends match. -/
+private def between (text head tail : String) : Option String :=
+  if text.startsWith head && text.endsWith tail then
+    some (((text.drop head.length).dropEnd tail.length).copy)
+  else none
+
+/-- True when `text` is `ping rtt: <digits> ms`. -/
+private def pingRtt (text : String) : Bool :=
+  match between text "ping rtt: " " ms" with
+  | some digits => digits != "" && digits.all Char.isDigit
+  | none => false
+
+/-- The four stdout lines of a successful demo, in order. -/
+private def demoStdout (stdout : String) : Bool :=
+  if !stdout.endsWith "\n" then false
+  else
+    match ((stdout.dropEnd 1).copy).splitOn "\n" with
+    | [dial, ping, identified, echo] =>
+      match between dial "dialed " " (noise + yamux, remote verified)",
+          between identified "identified: " ", 1 addr(s), 3 protocol(s)" with
+      | some dialed, some named =>
+        dialed != "" && dialed == named && pingRtt ping && echo == "echo: echo-me"
+      | _, _ => false
+    | _ => false
+
+/-- The demo completes ping, identify, and echo, and exits 0. -/
+private def demoOk (runner : Runner) : IO Unit := do
+  let out ← Tests.Cli.capture demoBin #[] 30000 oneWorker
+  runner.check "demo exits" (!out.timedOut && out.exitCode == 0)
+  runner.check "demo stdout" (demoStdout out.stdout)
+  runner.check "demo stderr empty" (out.stderr == "")
+
+/-- A closed stdout fails the first contract line, and the process still
+exits. The stderr reader is joined after the child is reaped. -/
+private def demoClosedStdout (runner : Runner) : IO Unit := do
+  let child ← IO.Process.spawn {
+    cmd := "/bin/sh"
+    args := #["-c", "exec \"$1\" >&-", "sh", demoBin]
+    stdin := .null
+    stdout := .null
+    stderr := .piped
+    env := oneWorker
+  }
+  let mut errTask : Option (Task (Except IO.Error String)) := none
+  let mut code : Option UInt32 := none
+  let mut fault : Option IO.Error := none
+  try
+    errTask := some (← IO.asTask child.stderr.readToEnd Task.Priority.dedicated)
+    let (got, killed) ← Tests.Cli.waitChild child 30000
+    code := if killed then none else some got
+  catch e =>
+    fault := some e
+  Tests.Cli.reap child
+  let err ← match errTask with
+    | none => pure ""
+    | some task =>
+      try
+        IO.ofExcept (← IO.wait task)
+      catch e =>
+        if fault.isNone then fault := some e
+        pure ""
+  if let some e := fault then
+    runner.check s!"demo closed stdout: {e}" false
+    return
+  runner.check "demo closed stdout exits" (code == some 1)
+  runner.check "demo closed stdout stderr" (err != "")
+
 /-- The server checks. -/
 def run (runner : Runner) : IO Unit := do
   runner.section "pingnode serve" "packages/cli/PingNode.lean"
@@ -623,5 +695,8 @@ def run (runner : Runner) : IO Unit := do
   dialMismatch runner
   dialStall runner
   dialNoEcho runner
+  runner.section "demo" "packages/cli/Demo.lean"
+  demoOk runner
+  demoClosedStdout runner
 
 end Tests.CliLive
