@@ -102,7 +102,9 @@ in the codec group wrapping upstream `google/snappy`.
   - an id the peer does not serve fails the open, since
     multistream-select answers `na`;
   - a silent peer fails the request at its deadline;
-  - a connection closed under a parked read ends the request.
+  - a connection closed under a parked read ends the request;
+  - after each check the hosts close with no fault, and a fault fails
+    that check while the later suites still run.
 - The error/EOF distinction: a framing failure returns the protocol
   error, and a clean stream end returns `finished`, through different
   channels (§5.2). An end inside a chunk is an early EOF.

@@ -73,11 +73,22 @@ def hostPair (split : Bool := false) : Async Pair := do
   let .ok serverPeer ← client.dial bound | throw (IO.userError "dial failed")
   return { client, server, serverPeer, serverAddr := bound, failures, clock := tc }
 
-/-- Close both hosts, then the clock. Each close joins its own tasks
-(§5.5). -/
-def Pair.close (p : Pair) : Async Unit := do
-  p.client.close
-  p.server.close
+/-- Run `act`, and answer its fault instead of throwing it. -/
+private def capture (act : Async Unit) : Async (Option IO.Error) := do
+  try
+    act
+    return none
+  catch e => return some e
+
+/-- Close both hosts, then the clock, and answer the first fault.
+Each close joins its own tasks (§5.5). `Host.close` throws the fault of
+a joined session, and the suite checks the answer: a fault fails one
+check, and the suites after it still run. The clock closes after a
+fault too. -/
+def Pair.close (p : Pair) : Async (Option IO.Error) := do
+  let client ← capture p.client.close
+  let server ← capture p.server.close
   p.clock.close
+  return client <|> server
 
 end Tests.HostPair

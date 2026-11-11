@@ -636,7 +636,7 @@ def simChecks (r : Runner) : Async Unit := do
       (succeedsWith () res && (← got.get).map (·.payload) == answer.map (·.payload))
     r.check s!"sim (split {split}): the handler saw no failure" ((← p.failures.get).isEmpty)
     r.check s!"sim (split {split}): the limiter slot came back" ((← limiter.take m.id) && (← limiter.take m.id))
-    p.close
+    r.check s!"sim (split {split}): the hosts close with no fault" (← p.close).isNone
     tc.close
   -- An id the peer does not serve: multistream-select answers `na`, so
   -- the stream never opens for it.
@@ -647,7 +647,7 @@ def simChecks (r : Runner) : Async Unit := do
       fun _ => pure ()
     r.check "sim: an id with no handler fails the open"
       (match res with | .error (.openFailed _) => true | _ => false)
-    p.close
+    r.check "sim: an id with no handler, the hosts close with no fault" (← p.close).isNone
     tc.close
   -- A silent peer over the sim: the deadline resets the stream, and the
   -- connection stays for the next exchange.
@@ -668,7 +668,7 @@ def simChecks (r : Runner) : Async Unit := do
     owner.joinAll
     r.check "sim: a silent peer fails the request at its deadline" ((← res.get).any (failsWith .timeout))
     tc.close
-    p.close
+    r.check "sim: a silent peer, the hosts close with no fault" (← p.close).isNone
   -- The connection closes under a parked read: the request ends.
   do
     let tc ← TestClock.new
@@ -688,7 +688,9 @@ def simChecks (r : Runner) : Async Unit := do
     owner.joinAll
     r.check "sim: a connection closed under a parked read ends the request"
       ((← res.get).any fun e => match e with | .error _ => true | .ok _ => false)
-    p.server.close
+    -- The second close of the client does nothing, and the pair closes
+    -- the server and the clock.
+    r.check "sim: a closed connection, the hosts close with no fault" (← p.close).isNone
     tc.close
 
 def run (r : Runner) : IO Unit := do
