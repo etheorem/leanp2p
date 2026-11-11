@@ -25,7 +25,8 @@ check.
 The exchange cases cover the identify client against the responder
 handler, the push handler against the in-memory peerstore double, the
 client deadline on the test clock, and the ping echo, with the
-initiator on end `a` and the handler on end `b`. The exchanges run over
+initiator on end `a` and the handler on end `b`. The pings of one read
+come back in one write. The exchanges run over
 a private pair of `Conc.Pipe` values, wired as two `Streams.Stream`
 ends.
 -/
@@ -406,6 +407,24 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
     ts.joinAll
     r.check "ping e2e handler echoes a split write" ok
     tc.close
+
+  -- ping: the pings of one read come back in one write, in order. The
+  -- pipe keeps write boundaries, so the first read shows the handler's
+  -- first write.
+  do
+    let pair ← mkPair
+    let pings := [List.replicate 32 1, List.replicate 32 2, List.replicate 32 3]
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      runHandler Ping.pingHandler pair.b
+    discard <| pair.a.write (Bytes.ofNatList pings.flatten)
+    let echo ← pair.a.read
+    let ok := match echo with
+      | .ok (some chunk) => Bytes.toNatList chunk == pings.flatten
+      | _ => false
+    pair.ab.close
+    ts.joinAll
+    r.check "ping e2e handler echoes the pings of one read in one write" ok
 
   -- ping: a partial payload at the end of the stream is a protocol error
   do

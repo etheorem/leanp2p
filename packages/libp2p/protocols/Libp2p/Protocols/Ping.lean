@@ -108,15 +108,18 @@ theorem splitPayloadsWhole (sent tail : List Nat)
   rw [ite_eq_left hcond, List.take_left' h, List.drop_left' h,
       splitPayloadsShort tail ht]
 
-/-- Write every whole payload, in order. Structural: the list
-shrinks. -/
-private def writeAll (s : Streams.Stream) :
-    List (List Nat) → Conc.Async (Except Error Unit)
-  | [] => return .ok ()
-  | p :: ps => do
-      match ← s.write (Bytes.ofNatList p) with
-      | .error e => return .error (.stream e)
-      | .ok () => writeAll s ps
+/-- Write every whole payload, in order, as one stream write. A write
+waits until the muxer has sent its frame, so a write per payload would
+cost one round trip through the muxer and the secure connection per
+32 bytes. The echoes are a byte stream, and the initiator reads them as
+one (the module doc), so one write changes nothing on the wire but the
+framing. -/
+private def writeAll (s : Streams.Stream) (whole : List (List Nat)) :
+    Conc.Async (Except Error Unit) := do
+  if whole.isEmpty then return .ok ()
+  match ← s.write (Bytes.ofNatList whole.flatten) with
+  | .error e => return .error (.stream e)
+  | .ok () => return .ok ()
 
 /-- The echo loop. The module doc gives the reason for `partial`. -/
 private partial def echoLoop (s : Streams.Stream) (acc : List Nat) :
