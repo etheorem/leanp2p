@@ -36,7 +36,9 @@ in the codec group wrapping upstream `google/snappy`.
 
 - `cli/` (W5.8) wires identify and ping into the demo node and the ping
   node (root PLAN W5.8; the spike's `Main.lean` and `PingNode.lean`
-  show the wiring).
+  show the wiring). A contributor working decision places the demo
+  echo handler and client at `Libp2p.Protocols.TestSupport.Echo`.
+  That module is not in this plan's units yet.
 - The consensus client consumes req/resp and gossipsub through the
   handler values and the client side (§8). SSZ payload types stay with
   the client.

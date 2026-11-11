@@ -871,7 +871,10 @@ Everything with libp2p semantics, in subpackages:
   (`HashMap ProtocolId StreamHandler`), the peerstore, and
   `Host.Error`, which wraps `Core.Error` with arms of its own.
 - **`protocols/`**: identify (with push), ping, req/resp, and
-  gossipsub (§8).
+  gossipsub (§8). A contributor working decision on the CLI branch
+  places the future demo echo handler and client at
+  `Libp2p.Protocols.TestSupport.Echo`. That module sits beside the
+  four protocols, and this tree does not implement it yet.
 - **Policy seams**: connection gater, resource manager, address ranker.
   The interfaces exist now, and the implementations come later.
 

@@ -64,7 +64,8 @@ work.
 
 - **`demo`** (the spike's `Main.lean`, the file `Demo.lean` here).
   The executable takes no arguments. The behavior section below is
-  the contract. The echo home is the open question in that section.
+  the contract. The echo home is the working decision in that
+  section. This slice does not add the module.
 - **`pingnode`** (the spike's `PingNode.lean`).
   `pingnode serve <port>` hosts `127.0.0.1:<port>`, serves
   `/ipfs/ping/1.0.0` and identify, prints
@@ -94,8 +95,9 @@ work.
 
 1. **No protocol logic.** Ping and identify come from
    `libp2p/protocols`: the handler values, `Ping.ping`, and
-   `Identify.client`. The demo echo has no assigned home. The open
-   question records the two documents that leave it open. Every seam
+   `Identify.client`. The demo echo home is
+   `Libp2p.Protocols.TestSupport.Echo`, recorded below. This slice
+   does not add that module. Every seam
    value comes from its implementation
    package: the TCP transport from `net/streams`, which alone binds
    `Std.Async.TCP` (§9, delta 7), the security value from
@@ -132,8 +134,8 @@ work.
 ## W5.8 behavior
 
 This section binds the demo and the ping node. Unit 1 implements it.
-The open question at the end has no home yet. The interop contract
-above stays in force.
+The echo home at the end is the working decision. This slice does
+not add that module. The interop contract above stays in force.
 
 ### Executables
 
@@ -254,7 +256,7 @@ Both binaries build one `Host.Config`.
   when `Host.close` joins the task.
 
 The demo and the ping node register ping and identify. Echo
-registration waits on the open question.
+registration waits for `Libp2p.Protocols.TestSupport.Echo`.
 
 `Identify.respondHandler` is registered after `startListening`
 returns. Its listen-address list is that bound address, as
@@ -345,39 +347,28 @@ take `newStream` as its work. `onExpiry` has type `BaseIO Unit`, and
 hold the stream. `release` frees a value the caller never sees, and
 the default `release` drops the value (`Conc/Deadline.lean`).
 
-### Open question: the deadline around `Host.newStream`
+### Working decision: the deadline around `Host.newStream`
 
-Which close may a timer around `Host.newStream` run, and which
-duration does it use? During negotiation the caller holds no stream.
-The exchange reset runs on the stream the call has returned. The
-upgrade deadline covers the dial that runs when no session is live.
-`Host.close` wakes a read parked in the session through the session
-close, and the same call ends the host. No current contract assigns
-this timer. An answer has to name the close and the duration before
-the dial or the demo adds one.
-
-The question blocks a negotiation bound on `pingnode dial` and on
-each `newStream` of the demo. `pingnode serve` opens no outbound
-stream.
-
-The pending proposal is
+This branch selects a contributor working decision. The review
+context is
 https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
-It asks whether `pingnode dial` and the demo may apply
-`Streams.unauthDeadlineMs` to `Host.newStream`, treat expiry as a
-command failure, and close the host they own. The proposal stays
-pending. It blocks the dial implementation and each outbound
-`newStream` of the demo. The server path stays as implemented.
 
-The question for the issue:
+During negotiation the caller holds no stream. The stream returns
+only after `negotiateStream` finishes, and that read parks while an
+authenticated peer stays silent
+(`Libp2p/Host/StreamSelect.lean`). `Host.close` closes the session
+and wakes parked stream reads.
 
-What bounds protocol negotiation inside `Host.newStream`? The stream
-returns only after `negotiateStream` finishes, and that read parks
-while an authenticated peer stays silent on the stream
-(`Libp2p/Host/StreamSelect.lean`). The CLI holds no stream to reset
-until the call returns. `Host.close` closes the session and wakes
-parked stream reads, and it also ends the host. May `pingnode dial`
-and the demo start that close from a timer around `newStream`, and
-what duration applies?
+One-shot `pingnode dial` and `demo` apply `Streams.unauthDeadlineMs`
+(30 seconds) around `Host.newStream`. Expiry fails the command and
+closes the host that command owns. The command joins its work and
+its cleanup tasks. A result that arrives after the timer goes to
+`release`.
+
+The policy adds no library idle timeout. `Host` keeps its interface.
+An authenticated idle connection stays open under §5.4.
+`pingnode serve` opens no outbound stream. The dial slice implements
+the timer. This slice records the policy.
 
 ### Stream retirement
 
@@ -416,9 +407,10 @@ An inbound peer failure reaches stderr through `onFailure`, on the
 host task that saw it. The accept loop keeps running. A write that
 throws is kept until `close` returns, and the process then exits 1.
 A host-task fault reaches stderr when `close` throws it, and the
-process then exits 1. A Go dialer that closes the TCP connection
-after a successful ping can take this path. The Go-helper decision
-records the runs and the open question.
+process then exits 1. An abrupt Go close after a successful ping
+can take this path. The coordinated Go-to-Lean check closes this
+stdin first, while the Go host is still up. The Go-helper decision
+records both lifecycles.
 
 The read has no reader task. The calling thread blocks in `getLine`.
 The accept loop is the host task that `startListening` started.
@@ -445,8 +437,9 @@ The demo runs these steps in order.
 5. Register identify with the bound address and the ids registered
    so far.
 6. Store that address with `addAddrs`, then `dialPeer`.
-7. Open a `newStream` for ping, then identify. The echo stream waits
-   on the open question.
+7. Open a `newStream` for ping, then identify, then the echo id
+   from `Libp2p.Protocols.TestSupport.Echo`. The echo module waits
+   for its slice. Each `newStream` uses the 30 second budget above.
 8. Close the dialer, then the listener.
 
 Every exit closes each host that `Host.new` returned. The call is
@@ -456,40 +449,28 @@ received `onFailure` also exits 1, after both closes.
 
 On success, stdout carries the dial line, the ping rtt, and the
 identify summary. The spike's `Main.lean` is the shape of those
-lines. The echo line waits on the open question.
+lines. The echo line waits for `Libp2p.Protocols.TestSupport.Echo`.
 
-### Open question: the demo echo home
+### Working decision: the demo echo home
 
-The demo exchange includes an echo. The spike's `Main.lean` registers
-`/demo/echo/1.0.0` on the listener, reads one chunk, writes those
-bytes, and half-closes. The client writes `echo-me` and reads the
-reply.
+This branch selects a contributor working decision. The review
+context is
+https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
 
-§2 keeps protocol logic out of `cli/`. §4.9 names identify, ping,
-req/resp, and gossipsub. The protocols architecture follows that
-list, and the package exports no echo handler. `Tests/Host.lean`
-keeps a private handler for `/test/echo`.
+The handler and the client live at
+`Libp2p.Protocols.TestSupport.Echo`, below `cli/`. The protocol id
+is `/demo/echo/1.0.0`, in that one module. The value is a
+`StreamHandler`. The executable imports the value and holds no echo
+logic.
 
-Issue #22 and PR #50 assign no home. The review of PR #50 on 6
-November 2026 records the CLI sentence "echo must come from protocol
-test support" under "Checked, no change needed." The merged protocols
-package has no such support.
-
-The implementation slice places the handler and the client after a
-maintainer assigns the home. The ping node registers ping and
+§2 keeps protocol logic out of `cli/`. The review of PR #50 on 6
+November 2026 records "echo must come from protocol test support."
+§4.9 still names identify, ping, req/resp, and gossipsub. Test
+support sits beside that list. The spike handler reads one chunk,
+writes those bytes, and half-closes. The client writes `echo-me`
+and reads the reply. This slice does not add the module. The demo
+echo leg waits for that slice. The ping node registers ping and
 identify.
-
-The same comment,
-https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244,
-asks where the handler and the client for `/demo/echo/1.0.0` live.
-That home stays pending. It blocks the demo echo leg.
-
-The question for the issue:
-
-Where does the W5.8 demo echo handler live, and where does its client
-live? `cli/` holds no protocol logic (§2). `protocols/` lists
-identify, ping, req/resp, and gossipsub (§4.9) and exports no echo
-handler. The spike demo still echoes on `/demo/echo/1.0.0`.
 
 ## Decisions
 
@@ -505,41 +486,52 @@ handler. The spike demo still echoes on `/demo/echo/1.0.0`.
   `interop-matrix.sh` and `interop-slowreader/` under the root
   `scripts/`, beside the W0.3 vector tooling (§7 row 11's note).
   The Go-to-Lean ping check is `scripts/ping-go/` and
-  `scripts/ping-go-interop.sh`. The Go peer dials `pingnode serve`,
-  so this leg stands while the outbound `newStream` proposal is
-  pending. The module requires go-libp2p v0.50.0. The host Go
-  toolchain builds the helper with `CGO_ENABLED=0`. That module asks
-  for Go 1.26. The helper runs on the host loopback.
-  Shutdown after a successful Go ping is still open. Go closes the
-  TCP connection with RST (linger 0). A TCP read of that RST answers
-  EOF, and the Noise session ends. A later write throws `closedError`
-  in `Libp2p/Security/Transport.lean`: `resourceVanished` code 0,
-  `noise: the secure connection is closed`. Yamux records the write.
-  The session ended because the connection ended, so `Session.join`
-  throws the write (`packages/net/yamux/docs/ARCHITECTURE.md`). The
-  ping handler also answers `.closed`. `serveStream` reports that as
-  `stream failed: closed: the stream closed`. `Host.close` throws the
-  write fault, and `guarding` returns 1.
-  A nonzero `resourceVanished` code stays a fault. Code 0 on this
-  path is the secure connection's own closed error. Treating that
-  error as the peer's end would change the yamux sentence that throws
-  a failed write when the session ends at the connection. The
-  reproducer is commit `416bc8e33bd99502799ae3a924f34188ee9a8246`.
-  The question is
+  `scripts/ping-go-interop.sh`. The Go peer dials `pingnode serve`.
+  The module requires go-libp2p v0.50.0. The host Go toolchain builds
+  the helper with `CGO_ENABLED=0`. That module asks for Go 1.26. The
+  helper runs on the host loopback.
+  This branch selects a contributor working decision for shutdown.
+  The review context is
   https://github.com/etheorem/leanp2p/issues/22#issuecomment-6807493655.
-  It asks whether join throws `resourceVanished` code 0 with that
-  Noise detail after the peer's RST has ended the secure connection,
-  and whether `pingnode serve` exits 1. The question stays unresolved.
-  It is separate from the outbound-deadline question and the
-  echo-home question at
-  https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
-  `finish_child` in `scripts/ping-go-interop.sh` sends SIGTERM, waits
-  at most 2 seconds, sends SIGKILL if the child is alive, and reaps
-  it. The ping deadline, the stdin holder, and the EXIT trap share
-  that helper. The trap keeps the original status. A child that has
-  already exited is reaped. The Go module pin and the Lean
-  toolchain stay as they are. Lean-to-Go and the bidirectional gate
-  stay unfinished. The spike also kept a
+  Noise, yamux, the host, and the CLI keep their fault propagation.
+  An abrupt Go close still uses TCP RST (linger 0). A TCP read of
+  that RST answers EOF, and the Noise session ends. A later write
+  throws `closedError` in `Libp2p/Security/Transport.lean`:
+  `resourceVanished` code 0, `noise: the secure connection is closed`.
+  Yamux records the write. The session ended because the connection
+  ended, so `Session.join` throws the write
+  (`packages/net/yamux/docs/ARCHITECTURE.md`). `Host.close` throws
+  that fault, and `guarding` returns 1. A nonzero
+  `resourceVanished` code stays a fault. Commit
+  `416bc8e33bd99502799ae3a924f34188ee9a8246` is the abrupt-close
+  reproducer. Its three runs were exit 0
+  (`PASS go-to-lean PING OK rtt=532.916µs`), exit 0
+  (`PASS go-to-lean PING OK rtt=778.708µs`), and exit 1 with
+  `stream failed: closed: the stream closed` and
+  `resource vanished (error code: 0, noise: the secure connection is closed)`.
+  The coordinated check keeps the Go host up after the ping. The
+  helper cancels `ping.Ping`, reads the result channel until it
+  closes, prints the result, and waits for stdin EOF. The driver
+  reads `ADDR`, starts Go, requires `PING OK` while Go stays alive,
+  closes the server stdin, requires server exit 0, closes the Go
+  stdin, and requires Go exit 0. Three runs of
+  `scripts/ping-go-interop.sh` with `LEAN_NUM_THREADS=1` exited 0 and
+  printed `PASS go-to-lean PING OK rtt=834.084µs`,
+  `PASS go-to-lean PING OK rtt=549.5µs`, and
+  `PASS go-to-lean PING OK rtt=669.667µs`. Each stderr was empty.
+  `finish_child` sends SIGTERM, waits at most 2 seconds, sends
+  SIGKILL, and reaps the child. The owned children are the Go
+  process, the Go stdin holder, the server stdin holder, and the
+  server. The trap keeps the original status. A child that has
+  already exited is reaped. `PING_GO_BIN=/usr/bin/false` exited 1
+  with `FAIL go-to-lean: go exit 1`. A test-only peer that ignores
+  SIGTERM exited 1 after 28.3 seconds, including its build, with
+  `FAIL go-to-lean: go ping missed 25 s`. The cleanup bound on that
+  miss is 33 seconds: the 25 second ping deadline, then 2 seconds
+  for each of the four children. Those processes were gone after
+  each check. The Go module pin and the Lean toolchain stay as they
+  are. Lean-to-Go and the bidirectional gate stay unfinished. The
+  spike also kept a
   test-plans runner image, `interop/leanp2p/{Makefile,Dockerfile}`.
   The target drops the image, and `scripts/interop-matrix.sh` is the
   gate's only form, so docker appears only inside the scripts.

@@ -1,14 +1,20 @@
-// Dial one peer and complete one ping.
+// Dial one peer, complete one ping, and close on stdin EOF.
 //
 // The argument is a multiaddr whose last component is the expected
 // peer id. The host is TCP, Noise, and yamux. A failed setup,
 // connection, deadline, or ping exits 1. A bad argument count exits 2.
-// The host closes on every return after it exists.
+//
+// ping.Ping runs until its context ends. After the first successful
+// result the helper cancels that context, reads the result channel
+// until it closes, prints the result, and waits for stdin EOF. The
+// host stays open through that wait. The host closes on every return
+// after it exists.
 package main
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -59,6 +65,7 @@ func run(target string) (err error) {
 		return fmt.Errorf("connect: %s", err)
 	}
 	results := ping.Ping(ctx, host, info.ID)
+	var rtt time.Duration
 	select {
 	case result, ok := <-results:
 		if !ok {
@@ -67,9 +74,49 @@ func run(target string) (err error) {
 		if result.Error != nil {
 			return fmt.Errorf("ping: %s", result.Error)
 		}
-		fmt.Printf("PING OK rtt=%s\n", result.RTT)
-		return nil
+		rtt = result.RTT
 	case <-ctx.Done():
 		return fmt.Errorf("ping deadline: %s", ctx.Err())
+	}
+	if err := stopPing(cancel, results); err != nil {
+		return err
+	}
+	fmt.Printf("PING OK rtt=%s\n", rtt)
+	if err := os.Stdout.Sync(); err != nil {
+		return fmt.Errorf("stdout: %s", err)
+	}
+	return waitStdin()
+}
+
+// stopPing ends ping.Ping and waits until its result channel closes.
+// The library resets the ping stream when the context ends. The bound
+// is pingBudget.
+func stopPing(cancel context.CancelFunc, results <-chan ping.Result) error {
+	cancel()
+	timer := time.NewTimer(pingBudget)
+	defer timer.Stop()
+	for {
+		select {
+		case _, ok := <-results:
+			if !ok {
+				return nil
+			}
+		case <-timer.C:
+			return fmt.Errorf("ping stop deadline")
+		}
+	}
+}
+
+// waitStdin reads until EOF. Bytes before EOF are discarded.
+func waitStdin() error {
+	buf := make([]byte, 256)
+	for {
+		_, err := os.Stdin.Read(buf)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("teardown: %s", err)
+		}
 	}
 }

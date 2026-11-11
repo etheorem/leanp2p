@@ -4,10 +4,11 @@
 # Readiness is `ADDR <multiaddr> <peerid>`. The dial address joins
 # those fields with `/p2p/`. The address field has no peer suffix.
 #
-# The server runs with LEAN_NUM_THREADS=1. Its stdin stays open until
-# the ping returns, then the holder exits and the server sees EOF.
-# A failed Go command takes the same cleanup and the script exits 1.
-# Set PING_GO_BIN to replace the helper for that failure check.
+# The server runs with LEAN_NUM_THREADS=1. Go prints one ping result
+# and stays up. The driver then closes the server's stdin and waits
+# for the server to exit 0. It then closes Go's stdin and waits for
+# Go to exit 0. PASS follows both exits. A peer that exits early
+# fails the script. Set PING_GO_BIN to replace the helper.
 #
 # The helper builds with the host Go toolchain, CGO off, from
 # scripts/ping-go. go-libp2p v0.50.0 asks for Go 1.26. An older go
@@ -16,9 +17,10 @@
 # `finish_child` ends one owned child. It sends SIGTERM, waits at most
 # `term_grace` seconds, sends SIGKILL if the child is still alive, and
 # reaps it. A child that has already exited is reaped. The ping
-# deadline, the stdin holder, and the EXIT cleanup use this helper.
-# The server's own shutdown wait stays a poll: stdin EOF is the wake,
-# and the helper runs only if that wait is abandoned.
+# deadline, both stdin holders, the Go teardown deadline, and the
+# EXIT cleanup use this helper. The server shutdown wait and the Go
+# exit wait are polls. EOF is the wake. The helper runs for a child
+# that misses its wait, and for each holder when its EOF is due.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -27,6 +29,7 @@ bin="$root/.tmp/ping-go/ping-go"
 server_pid=
 hold_pid=
 go_pid=
+go_hold_pid=
 server_status=
 term_grace=2
 
@@ -56,6 +59,10 @@ reap() {
   if [[ -n ${go_pid:-} ]]; then
     finish_child "$go_pid"
     go_pid=
+  fi
+  if [[ -n ${go_hold_pid:-} ]]; then
+    finish_child "$go_hold_pid"
+    go_hold_pid=
   fi
   if [[ -n ${hold_pid:-} ]]; then
     finish_child "$hold_pid"
@@ -134,10 +141,32 @@ fi
 dial="${addr}/p2p/${peer}"
 
 go_bin=${PING_GO_BIN:-$bin}
-"$go_bin" "$dial" >"$work/go.out" 2>"$work/go.err" &
+mkfifo "$work/go.in"
+sleep 3600 >"$work/go.in" &
+go_hold_pid=$!
+"$go_bin" "$dial" <"$work/go.in" >"$work/go.out" 2>"$work/go.err" &
 go_pid=$!
 start=$(date +%s)
-while kill -0 "$go_pid" 2>/dev/null; do
+while true; do
+  if [[ -s "$work/go.out" ]] && grep -q '^PING OK rtt=.' "$work/go.out"; then
+    if ! kill -0 "$go_pid" 2>/dev/null; then
+      set +e
+      wait "$go_pid"
+      go_status=$?
+      set -e
+      go_pid=
+      fail "go exited after the ping result: $go_status"
+    fi
+    break
+  fi
+  if ! kill -0 "$go_pid" 2>/dev/null; then
+    set +e
+    wait "$go_pid"
+    go_status=$?
+    set -e
+    go_pid=
+    fail "go exit $go_status"
+  fi
   now=$(date +%s)
   if (( now - start >= 25 )); then
     finish_child "$go_pid"
@@ -146,22 +175,17 @@ while kill -0 "$go_pid" 2>/dev/null; do
   fi
   sleep 0.2
 done
-set +e
-wait "$go_pid"
-go_status=$?
-set -e
-go_pid=
-if [[ "$go_status" -ne 0 ]]; then
-  fail "go exit $go_status"
-fi
-if ! grep -q '^PING OK rtt=.' "$work/go.out"; then
-  fail "go printed no ping result"
-fi
 
+if ! kill -0 "$go_pid" 2>/dev/null; then
+  fail "go exited before the server shutdown"
+fi
 finish_child "$hold_pid"
 hold_pid=
 start=$(date +%s)
 while kill -0 "$server_pid" 2>/dev/null; do
+  if ! kill -0 "$go_pid" 2>/dev/null; then
+    fail "go exited during the server shutdown"
+  fi
   now=$(date +%s)
   if (( now - start >= 15 )); then
     fail "server missed the shutdown deadline"
@@ -175,5 +199,28 @@ set -e
 server_pid=
 if [[ "$server_status" -ne 0 ]]; then
   fail "server exit $server_status"
+fi
+if ! kill -0 "$go_pid" 2>/dev/null; then
+  fail "go exited before its teardown"
+fi
+finish_child "$go_hold_pid"
+go_hold_pid=
+start=$(date +%s)
+while kill -0 "$go_pid" 2>/dev/null; do
+  now=$(date +%s)
+  if (( now - start >= 15 )); then
+    finish_child "$go_pid"
+    go_pid=
+    fail "go missed the teardown deadline"
+  fi
+  sleep 0.2
+done
+set +e
+wait "$go_pid"
+go_status=$?
+set -e
+go_pid=
+if [[ "$go_status" -ne 0 ]]; then
+  fail "go teardown exit $go_status"
 fi
 echo "PASS go-to-lean $(head -n 1 "$work/go.out")"

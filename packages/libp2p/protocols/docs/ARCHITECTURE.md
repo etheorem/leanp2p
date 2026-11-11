@@ -43,7 +43,14 @@ to `libp2p/security` beside the handshake it serves. The `Envelope` and
 module line keeps the responsibility split of PRINCIPLES 1.2; this
 package holds four protocols, and no module holds two. §4.9 names
 identify, ping, req/resp, and gossipsub, and the module list follows
-that sentence. The package exports no echo handler.
+that sentence. The package exports no echo handler. A contributor
+working decision on the CLI branch places the future demo echo
+handler and client at `Libp2p.Protocols.TestSupport.Echo`. The
+protocol id is `/demo/echo/1.0.0`, in that one module, as a
+`StreamHandler`. Test support sits beside the four protocols. The
+review context is
+https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
+This package does not implement that module yet.
 
 ## Public surface
 

@@ -39,21 +39,22 @@ of the package architecture is the contract those binaries implement,
 including the argument table, the exit codes, the ping and identify
 deadlines, the
 stream retirement, and the two-host close. Those deadlines start
-after `newStream` returns. The demo echo home and the deadline around
-`Host.newStream` are the open questions in that architecture. Both
-are pending on
+after `newStream` returns. This branch selects two contributor
+working decisions. The review context is
 https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
-The 30 s `newStream` proposal in that comment stays pending. It
-blocks `pingnode dial` and the demo's outbound streams. The echo
-home blocks the demo echo leg. `pingnode serve` is implemented.
+One-shot `pingnode dial` and `demo` apply a 30 second budget around
+`Host.newStream`. Expiry fails the command and closes the owned
+host. The dial slice implements that timer. The demo echo handler
+and client belong at `Libp2p.Protocols.TestSupport.Echo`. This slice
+does not add that module. `pingnode serve` is implemented.
 
 - The demo runs end to end over loopback: two hosts dial, complete the
   upgrade, identify, and exchange pings. The listener's identify
   record carries the bound address and the registered protocol ids.
-  The echo leg joins this run after the echo question has a home.
-  Each `newStream` uses the exchange deadline after the call returns.
-  A bound on the negotiation inside the call waits on the stream-open
-  question.
+  The echo leg joins this run when
+  `Libp2p.Protocols.TestSupport.Echo` exists. Each `newStream` uses
+  the exchange deadline after the call returns, and the 30 second
+  budget around the call.
   The spike's node-suite legs are the carried tests (the spike's
   `Tests/Node.lean` drives two hosts over loopback TCP through ping,
   identify, and echo).
@@ -86,48 +87,43 @@ home blocks the demo echo leg. `pingnode serve` is implemented.
 - `pingnode dial` against `pingnode serve` prints `PING OK`, and both
   processes close their hosts on the failure paths of the behavior
   section. The run uses the exchange deadline after `newStream`
-  returns. A bound on the negotiation inside that call waits on the
-  pending proposal in the comment linked above.
+  returns, and the 30 second budget around that call. The dial slice
+  implements the budget.
 - Go-to-Lean ping is in this slice. The Go peer dials `pingnode
-  serve`, while the outbound `newStream` proposal stays pending.
-  `scripts/ping-go/main.go` dials one multiaddr over TCP, Noise, and
-  yamux, and prints `PING OK rtt=<duration>`. The module requires
+  serve`. `scripts/ping-go/main.go` dials one multiaddr over TCP,
+  Noise, and yamux, prints `PING OK rtt=<duration>`, and waits for
+  stdin EOF before it closes the host. The module requires
   `github.com/libp2p/go-libp2p v0.50.0`. The host Go toolchain builds
   it with `CGO_ENABLED=0`. The module asks for Go 1.26.
   `scripts/ping-go-interop.sh` starts `pingnode serve 0` with
-  `LEAN_NUM_THREADS=1`, joins the `ADDR` multiaddr and the peer id,
-  and requires one ping result. Stdin EOF then waits for server exit
-  0. `finish_child` ends an owned child that misses its wait: SIGTERM,
-  at most 2 seconds (`term_grace`), SIGKILL, then `wait`. A child
-  that has already exited is reaped. The trap keeps the script's
-  status. Three runs of `scripts/ping-go-interop.sh` used
-  `LEAN_NUM_THREADS=1` on the server. Run 1 exited 0 and printed
-  `PASS go-to-lean PING OK rtt=532.916µs`. Run 2 exited 0 and printed
-  `PASS go-to-lean PING OK rtt=778.708µs`. Both had empty stderr.
-  Run 3 exited 1. Stderr was `FAIL go-to-lean: server exit 1`, then
-  `stream failed: closed: the stream closed peer 12D3KooWPDx7LZXLcXg8CgvnLimnKnQeM9rXKPeS9jJgNgmfLAGs protocol /ipfs/ping/1.0.0`,
-  then `resource vanished (error code: 0, noise: the secure connection is closed)`.
-  The architecture decision records the cause. The yamux rule that
-  throws this write stays in place. The shutdown fault stays open, at
+  `LEAN_NUM_THREADS=1`, joins the `ADDR` fields, and requires the
+  ping line while Go stays alive. It then closes the server stdin,
+  requires server exit 0, closes the Go stdin, and requires Go exit
+  0. `finish_child` ends an owned child that misses its wait:
+  SIGTERM, at most 2 seconds (`term_grace`), SIGKILL, then `wait`.
+  The owned children are the Go process, the Go stdin holder, the
+  server stdin holder, and the server. A child that has already
+  exited is reaped. The trap keeps the script's status. The abrupt
+  Go-first close remains the historical case in the architecture
+  decision, at commit `416bc8e33bd99502799ae3a924f34188ee9a8246` and
   https://github.com/etheorem/leanp2p/issues/22#issuecomment-6807493655.
-  That question stays unresolved. It is separate from the
-  outbound-deadline question and the echo-home question.
+  That close can still surface the failed write. The library fault
+  rules stay in place. Three coordinated runs exited 0 and printed
+  `PASS go-to-lean PING OK rtt=834.084µs`,
+  `PASS go-to-lean PING OK rtt=549.5µs`, and
+  `PASS go-to-lean PING OK rtt=669.667µs`, each with empty stderr.
   `PING_GO_BIN=/usr/bin/false scripts/ping-go-interop.sh` exited 1
-  with `FAIL go-to-lean: go exit 1`. The `pingnode` process, the
-  stdin holder, and the Go command were gone. A test-only peer that
-  ignores SIGTERM, passed as `PING_GO_BIN`, made the script exit 1
-  after 28 seconds, including its build, with
-  `FAIL go-to-lean: go ping missed 25 s`. The Go peer, the Lean
-  server, and the stdin holder were gone. The cleanup bound is 31
-  seconds: the 25 second ping deadline, then 2 seconds for the peer,
-  2 seconds for the holder, and 2 seconds for the server. The check
-  stays outside `lake test`.
-  Lean-to-Go, the demo, and the bidirectional gate remain unfinished.
-  The two questions at
-  https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244
-  remain pending. The spike selected its muxer from the Noise
-  handshake extension. This stack negotiates the muxer on the wire
-  (the negotiate pair's decision).
+  with `FAIL go-to-lean: go exit 1`. A test-only peer that ignores
+  SIGTERM, passed as `PING_GO_BIN`, made the script exit 1 after 28.3
+  seconds, including its build, with
+  `FAIL go-to-lean: go ping missed 25 s`. The Go process, both stdin
+  holders, and the server were gone. The cleanup bound on that miss
+  is 33 seconds: the 25 second ping deadline, then 2 seconds for
+  each of the four children. The check stays outside `lake test`.
+  Lean-to-Go, the demo, echo, and the bidirectional gate remain
+  unfinished. The spike selected its muxer from the Noise handshake
+  extension. This stack negotiates the muxer on the wire (the
+  negotiate pair's decision).
 - The in-suite legs pass under `+RTS -N1` (§6; PRINCIPLES 5.3).
 
 ## Test milestones (unit 2)
