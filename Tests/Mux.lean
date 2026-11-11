@@ -438,13 +438,13 @@ example (s : MuxSession) : Conc.Async (Except Error Unit) :=
   s.join
 
 example (m : Muxer) :
-    Role → Streams.Connection → ByteArray → ExceptT Error Conc.Async MuxSession :=
+    Role → Streams.Connection → ByteArray → Conc.Clock → ExceptT Error Conc.Async MuxSession :=
   m.open
 
 /-- A value with `Mux.testId` and the seam fields. It runs no session. -/
 example : Muxer := {
   id := testId
-  «open» := fun _ _ _ =>
+  «open» := fun _ _ _ _ =>
     pure {
       openStream := fun _ => throw (Error.closed "unused")
       accept := pure none
@@ -2857,7 +2857,7 @@ private def ends (n : Nat) : Async Ends := do
 /-- The session `Mux.test.open` returns. -/
 private def openSession (role : Role) (conn : Connection)
     (leftover : ByteArray := .empty) : Async MuxSession := do
-  match ← (test.open role conn leftover).run with
+  match ← (test.open role conn leftover Conc.Clock.system).run with
   | .ok sess => return sess
   | .error e => throw <| IO.userError s!"public open failed: {repr e}"
 
@@ -3117,7 +3117,7 @@ private def runReaderFault (r : Runner) : Async Unit := do
       match ← gate.recv with
       | none => throw boom
       | some _ => pair.dialer.read }
-  match ← (test.open .initiator conn .empty).run with
+  match ← (test.open .initiator conn .empty Conc.Clock.system).run with
   | .error _ =>
     gate.close
     pair.dialer.close
@@ -3151,7 +3151,7 @@ private def runReaderFault (r : Runner) : Async Unit := do
 Both joins return the same protocol error. -/
 private def runMalformed (r : Runner) : Async Unit := do
   let pair ← ends 51
-  match ← (test.open .initiator pair.dialer .empty).run with
+  match ← (test.open .initiator pair.dialer .empty Conc.Clock.system).run with
   | .error _ =>
     pair.dialer.close
     pair.peer.close
@@ -3197,7 +3197,7 @@ private def runAcceptBacklog (r : Runner) : Async Unit := do
   let mut opened : Option MuxSession := none
   let outcome : Except IO.Error Unit ←
     try
-      match ← (test.open .initiator pair.dialer .empty).run with
+      match ← (test.open .initiator pair.dialer .empty Conc.Clock.system).run with
       | .error _ =>
         r.check "a full accept backlog resets the overflow open" false
         r.check "the first accepted stream carries the first remote id" false
@@ -3330,7 +3330,7 @@ private def runPeerReset (r : Runner) : Async Unit := do
       let mut siblingRead := false
       let mut outboundOk := false
       let mut healthy := false
-      match ← (test.open .initiator pair.dialer .empty).run with
+      match ← (test.open .initiator pair.dialer .empty Conc.Clock.system).run with
       | .error _ => pure ()
       | .ok sess =>
         opened := some sess
@@ -3437,7 +3437,7 @@ private def runHalfClose (r : Runner) : Async Unit := do
       let mut eofStable := false
       let mut siblingRead := false
       let mut healthy := false
-      match ← (test.open .initiator pair.dialer .empty).run with
+      match ← (test.open .initiator pair.dialer .empty Conc.Clock.system).run with
       | .error _ => pure ()
       | .ok sess =>
         opened := some sess
@@ -3575,7 +3575,7 @@ private def runLocalReset (r : Runner) : Async Unit := do
       let mut siblingRead := false
       let mut retiredSilent := false
       let mut healthy := false
-      match ← (test.open .initiator pair.dialer .empty).run with
+      match ← (test.open .initiator pair.dialer .empty Conc.Clock.system).run with
       | .error _ => pure ()
       | .ok sess =>
         opened := some sess
@@ -3893,7 +3893,7 @@ private def runRole (r : Runner) (n : Nat) (role : Role) (streamId : Nat)
   let pair ← ends n
   let mut opened : Option MuxSession := none
   let outcome : Except IO.Error Unit ← try
-    match ← (yamux.open role pair.dialer .empty).run with
+    match ← (yamux.open role pair.dialer .empty Conc.Clock.system).run with
     | .error e =>
       r.check s!"{title} ({e})" false
       pure (.ok ())
@@ -3925,13 +3925,13 @@ private def runExchange (r : Runner) : Async Unit := do
   let mut dialSess : Option MuxSession := none
   let mut peerSess : Option MuxSession := none
   let outcome : Except IO.Error Unit ← try
-    match ← (yamux.open .initiator pair.dialer .empty).run with
+    match ← (yamux.open .initiator pair.dialer .empty Conc.Clock.system).run with
     | .error e =>
       r.check s!"the initiator session opens ({e})" false
       pure (.ok ())
     | .ok dial =>
       dialSess := some dial
-      match ← (yamux.open .responder pair.peer .empty).run with
+      match ← (yamux.open .responder pair.peer .empty Conc.Clock.system).run with
       | .error e =>
         r.check s!"the responder session opens ({e})" false
         pure (.ok ())
@@ -4014,7 +4014,7 @@ private def runLeftover (r : Runner) : Async Unit := do
   let pair ← ends 4190
   let mut opened : Option MuxSession := none
   let outcome : Except IO.Error Unit ← try
-    match ← (yamux.open .responder pair.dialer leftoverBytes).run with
+    match ← (yamux.open .responder pair.dialer leftoverBytes Conc.Clock.system).run with
     | .error e =>
       r.check s!"the leftover stream is accepted ({e})" false
       pure (.ok ())
@@ -4050,7 +4050,7 @@ private def runProtocol (r : Runner) : Async Unit := do
   let pair ← ends 4191
   let mut opened : Option MuxSession := none
   let outcome : Except IO.Error Unit ← try
-    match ← (yamux.open .initiator pair.dialer .empty).run with
+    match ← (yamux.open .initiator pair.dialer .empty Conc.Clock.system).run with
     | .error e =>
       r.check s!"a malformed header joins as the yamux protocol error ({e})" false
       pure (.ok ())
@@ -4087,7 +4087,7 @@ private def runOpenAfterClose (r : Runner) : Async Unit := do
   let pair ← ends 4192
   let mut opened : Option MuxSession := none
   let outcome : Except IO.Error Unit ← try
-    match ← (yamux.open .initiator pair.dialer .empty).run with
+    match ← (yamux.open .initiator pair.dialer .empty Conc.Clock.system).run with
     | .error e =>
       r.check s!"a closed session joins cleanly ({e})" false
       pure (.ok ())
@@ -4128,7 +4128,7 @@ private def runReadFault (r : Runner) : Async Unit := do
       throw readFault }
   let mut opened : Option MuxSession := none
   let outcome : Except IO.Error Unit ← try
-    match ← (yamux.open .initiator dialer .empty).run with
+    match ← (yamux.open .initiator dialer .empty Conc.Clock.system).run with
     | .error e =>
       r.check s!"a connection read fault escapes the first join ({e})" false
       pure (.ok ())

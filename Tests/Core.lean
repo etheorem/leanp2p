@@ -54,7 +54,7 @@ private def plaintext (peer : PeerId) : SecurityProtocol where
 `closed`, and an accept answers `none`, as after a close. -/
 private def emptyMuxer : Muxer where
   id := ⟨"/test/empty-mux"⟩
-  «open» := fun _ _ _ => return {
+  «open» := fun _ _ _ _ => return {
     openStream := fun _ => throw (.closed "the empty session opens no stream")
     accept := pure none
     close := pure ()
@@ -83,8 +83,9 @@ example : ToString ProtocolId := inferInstance
 
 -- A `SecureConn` runs a muxer through its parent projection, the path
 -- the upgrader takes from the handshake to the muxer stage.
-example (m : Muxer) (r : Role) (sc : SecureConn) : ExceptT Libp2p.Core.Error Async MuxSession :=
-  m.open r sc.toConnection .empty
+example (m : Muxer) (r : Role) (sc : SecureConn) (clock : Clock) :
+    ExceptT Libp2p.Core.Error Async MuxSession :=
+  m.open r sc.toConnection .empty clock
 
 -- The policy seams admit their doubles: a permissive gater, a manager
 -- that admits everything and counts nothing, and a ranker that keeps
@@ -129,7 +130,7 @@ private def seamChecks (r : Runner) : Async Unit := do
     -- The muxer stage runs over the parent projection. Its leftover is
     -- what the muxer negotiation over-read, and this test runs no
     -- negotiation, so it is empty. `sc.leftover` never goes here.
-    match ← emptyMuxer.open .initiator sc.toConnection .empty with
+    match ← emptyMuxer.open .initiator sc.toConnection .empty Clock.system with
     | .error e => r.check s!"the muxer opens a session ({e})" false
     | .ok session =>
       r.check "an ended session accepts nothing" ((← session.accept).isNone)

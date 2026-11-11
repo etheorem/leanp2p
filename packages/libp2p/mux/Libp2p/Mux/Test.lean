@@ -8,7 +8,8 @@ import Libp2p.Mux.Test.Session
 `Mux.test` is the `Muxer` for the private test session. `open` passes
 the role, the connection, and the negotiation leftover to
 `Session.start`. `ExceptT.lift` returns that session on the seam.
-The lift adds no error arm.
+The lift adds no error arm. The test session runs no timer, so it
+drops the clock.
 -/
 
 set_option autoImplicit false
@@ -21,7 +22,7 @@ open Libp2p.Core
 private session. The leftover bytes are the reader's first input. -/
 def test : Muxer where
   id := testId
-  «open» := fun role connection leftover =>
+  «open» := fun role connection leftover _ =>
     ExceptT.lift (Test.Session.start role connection leftover)
 
 end Libp2p.Mux

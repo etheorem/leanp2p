@@ -6,9 +6,9 @@ import Yamux.Session
 # The yamux muxer
 
 `Mux.yamux` is the thin libp2p value over the landed session of
-`net/yamux`. It moves the role, the connection, and the negotiation
-leftover into `Session.new`. It maps errors returned by `openStream`
-and `join` into `Core.Error` at this boundary. The frames, the window,
+`net/yamux`. It moves the role, the connection, the negotiation
+leftover, and the upgrader's clock into `Session.new`. It maps errors
+returned by `openStream` and `join` into `Core.Error` at this boundary. The frames, the window,
 and the tasks stay in `net/yamux`.
 -/
 
@@ -47,8 +47,8 @@ landed session. The adapter maps its returned open and join errors
 into `Core.Error`. -/
 def yamux : Muxer where
   id := yamuxId
-  «open» := fun role connection leftover => ExceptT.mk do
-    let session ← Yamux.Session.new (yamuxRole role) connection leftover
+  «open» := fun role connection leftover clock => ExceptT.mk do
+    let session ← Yamux.Session.new (yamuxRole role) connection leftover clock
     return .ok {
       openStream := fun _ =>
         ExceptT.mk ((Except.mapError mapOpenError) <$> session.openStream)
