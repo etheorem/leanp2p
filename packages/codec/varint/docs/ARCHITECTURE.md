@@ -140,7 +140,7 @@ harness of `base/bytes` pins it to the model over generated inputs, in
 the `decodeB? b = decode? (toNatList b)` shape (ARCHITECTURE §4.2,
 §6; `base/bytes` docs, owned contracts 1 and 2).
 The suite pins `decodeAt? b pos` to `decode?` over the tail of `b`
-from `pos`, at every offset of the generated inputs.
+from `pos`, at every offset of the prefix and seeded inputs.
 
 ## What the package must not depend on
 
