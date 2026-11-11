@@ -8,9 +8,7 @@ A handler of this package reads and writes one negotiated `Stream`, and
 a failed read or write answers a `Streams.Error`. The handler seam of
 `libp2p/core` fails with the coarse `Core.Error` (ARCHITECTURE §3.5),
 so each handler maps the stream error once, through this function.
-
-Identify and ping still type over `Libp2p.Protocols.Mock.Core`, which
-keeps its own copy of this map until their swap (issue #55).
+Identify, ping, and req/resp share it.
 -/
 
 set_option autoImplicit false

@@ -6,8 +6,10 @@ import Streams.Framing
 import Streams.Stream
 import Multiformats.Multiaddr.Binary
 import Libp2p.Protocols.Identity
-import Libp2p.Protocols.Mock.Host
+import Libp2p.Core
+import Libp2p.Host
 import Libp2p.Protocols.Constants
+import Libp2p.Protocols.StreamError
 
 /-!
 # Identify
@@ -29,18 +31,24 @@ UTF-8 entries are dropped, as the Proto accessors already do.
 
 The strings read back through `Bytes.toString?`.
 
+The handlers read the connection from their `StreamContext`. The push
+handler checks the pushed key against `remotePeer`, and it stores the
+addresses under that peer in the host's peerstore. The responder writes
+`remoteAddr` as the observed address. go-libp2p reads both from
+`s.Conn()` (`vendor/go-libp2p/p2p/protocol/identify/id.go`).
+
 The private read loop `readFrameFrom` is a `partial def`: a silent
 peer never ends the loop, and the deadline of `client` or `push` ends
-it. `client` and `push` read one frame per stream and drop the bytes
-after it. Go merges chunked identify messages; this client reads one.
-The read rejects a zero-length frame, the spike's rule.
+it. On expiry, the reset runs in a `TaskSet` that the call owns and
+joins after the race (PRINCIPLES 3.2). `client` and `push` read one
+frame per stream and drop the bytes after it. Go merges chunked
+identify messages; this client reads one. The read rejects a
+zero-length frame, the spike's rule.
 -/
 
 set_option autoImplicit false
 
 namespace Libp2p.Protocols
-
-open Mock
 
 /-- One identify response. The field numbers are the ones of the
 go-libp2p v0.50.0 identify protobuf. -/
@@ -56,12 +64,11 @@ structure Identify where
 
 namespace Identify
 
-
 /-- The identify protocol id. -/
-def protocolId : Mock.Core.ProtocolId := Constants.identifyId
+def protocolId : Libp2p.Core.ProtocolId := Constants.identifyId
 
 /-- The identify push protocol id. -/
-def pushId : Mock.Core.ProtocolId := Constants.identifyPushId
+def pushId : Libp2p.Core.ProtocolId := Constants.identifyPushId
 
 /-- The wire view: one entry per present singular field and per
 element of a repeated field, in the ascending order 1, 2, 3, 4, 5, 6,
@@ -459,64 +466,70 @@ private partial def readFrameFrom (s : Streams.Stream) (buf : List Nat) :
           else return .error (.badMessage (.framing .truncated))
       | .ok (some chunk) => readFrameFrom s (buf ++ Bytes.toNatList chunk)
 
-/-- One frame from the stream, over the private loop. -/
-private def readFrame (s : Streams.Stream) :
-    Conc.Async (Except Error (Option (List Nat))) :=
-  readFrameFrom s []
-
-/-- `withinDeadline` needs a `BaseIO` expiry. The stream's `close` is
-the write half-close, so it does not wake a parked `read`. `reset` stops
-both directions, so it wakes the read. The body starts the reset with
-`asTask`, as `Conc.Wrap.spawn` does. Nothing joins this task and the
-code ignores its result, an exception to §4.1 rule 2. -/
-private def resetQuietly (s : Streams.Stream) : BaseIO Unit :=
-  discard (s.reset.asTask.toBaseIO)
+/-- One frame from the stream under the deadline. `withinDeadline`
+takes a `BaseIO` expiry, and `Stream.reset` is `Async`, so the expiry
+spawns the reset into a `TaskSet` that this call owns. The call joins
+it after the race (the module doc). The stream's `close` is the write
+half-close and does not wake a parked `read`. `reset` stops both
+directions, so it ends the parked read. -/
+private def readFrame (s : Streams.Stream) (clock : Conc.Clock) (timeoutMs : Nat) :
+    Conc.Async (Except Error (Option (List Nat))) := do
+  let owner ← Conc.TaskSet.new
+  let r ← Conc.withinDeadline clock timeoutMs (owner.spawn s.reset) (readFrameFrom s [])
+  owner.joinAll
+  match r with
+  | .error .deadlineExpired => return .error .timeout
+  | .error .closed => return .error (.stream .closed)
+  | .ok a => return a
 
 /-- Read one response under the cap and the deadline, then validate
 it. `.ok none` means that the stream ended before any byte arrived. -/
 def client (s : Streams.Stream) (clock : Conc.Clock) (timeoutMs : Nat)
     (expected : Option Libp2p.Identity.PeerId) :
     Conc.Async (Except Error (Option (Identify × Libp2p.Identity.PeerId))) := do
-  match ← Conc.withinDeadline clock timeoutMs (resetQuietly s) (readFrame s) with
-  | .error .deadlineExpired => return .error .timeout
-  | .error .closed => return .error (.stream .closed)
-  | .ok (.error e) => return .error e
-  | .ok (.ok none) => return .ok none
-  | .ok (.ok (some payload)) => return (some <$> validate payload expected)
+  match ← readFrame s clock timeoutMs with
+  | .error e => return .error e
+  | .ok none => return .ok none
+  | .ok (some payload) => return (some <$> validate payload expected)
 
 /-- The one map from this protocol's error into the coarse core error.
 `pushHandler` and `writeRecord` call it at the seam. -/
-def mapIdentifyError : Error → Mock.Core.Error
-  | .stream e => Mock.Core.mapStreamError e
+def mapIdentifyError : Error → Libp2p.Core.Error
+  | .stream e => mapStreamError e
   | .timeout => .timeout "identify: the deadline expired"
   | .emptyFrame => .protocol "identify: a zero-length frame"
   | e => .protocol (toString (repr e))
 
-/-- Handle one pushed message: validate it, then update the peerstore.
-An empty read leaves the peerstore unchanged. This is a delta from go,
-whose `consumeMessage` runs on the empty message and clears the peer's
+/-- The listen addresses of a validated message as multiaddrs.
+`validate` already decoded each one, so `filterMap` drops none. -/
+private def listenMultiaddrs (m : Identify) : List Multiformats.Multiaddr :=
+  m.listenAddrs.filterMap fun a => (Multiformats.Multiaddr.ofBytes? a).toOption
+
+/-- Handle one pushed message from `peer`: validate it against `peer`,
+then add its listen addresses to the host's peerstore. An empty read
+leaves the peerstore unchanged. This is a delta from go, whose
+`consumeMessage` runs on the empty message and clears the peer's
 protocols. -/
-def push (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
+def push (h : Libp2p.Host.Host) (peer : Libp2p.Identity.PeerId)
     (clock : Conc.Clock) (timeoutMs : Nat) (s : Streams.Stream) :
     Conc.Async (Except Error Unit) := do
-  match ← Conc.withinDeadline clock timeoutMs (resetQuietly s) (readFrame s) with
-  | .error .deadlineExpired => return .error .timeout
-  | .error .closed => return .error (.stream .closed)
-  | .ok (.error e) => return .error e
-  | .ok (.ok none) => return .ok ()
-  | .ok (.ok (some payload)) =>
-      match validate payload (some expected) with
+  match ← readFrame s clock timeoutMs with
+  | .error e => return .error e
+  | .ok none => return .ok ()
+  | .ok (some payload) =>
+      match validate payload (some peer) with
       | .error e => return .error e
       | .ok (m, pid) =>
-          store.addAddrs pid m.listenAddrs
+          h.addAddrs pid (listenMultiaddrs m)
           return .ok ()
 
-/-- The push handler value. -/
-def pushHandler (store : Mock.Host.Peerstore) (expected : Libp2p.Identity.PeerId)
-    (clock : Conc.Clock) (timeoutMs : Nat) : Mock.Core.StreamHandler :=
+/-- The push handler value. Each stream checks the push against the
+peer of its own connection, from the `StreamContext`. -/
+def pushHandler (h : Libp2p.Host.Host) (clock : Conc.Clock) (timeoutMs : Nat) :
+    Libp2p.Core.StreamHandler :=
   { id := pushId,
-    handle := fun _ctx s => ExceptT.mk ((Except.mapError mapIdentifyError) <$>
-      push store expected clock timeoutMs s) }
+    handle := fun ctx s => ExceptT.mk ((Except.mapError mapIdentifyError) <$>
+      push h ctx.remotePeer clock timeoutMs s) }
 
 /-- Write one length-delimited message and half-close. The
 responder and the push sender share this body: both announce the same
@@ -524,7 +537,7 @@ record, and only the protocol id of the stream differs. -/
 private def writeRecord (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat)) (s : Streams.Stream) :
-    Conc.Async (Except Mock.Core.Error Unit) := do
+    Conc.Async (Except Libp2p.Core.Error Unit) := do
   match respond? key addrs protocols observed agent spr with
   | .error e => return .error (mapIdentifyError e)
   | .ok msg =>
@@ -533,7 +546,7 @@ private def writeRecord (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
       | none => return .error (.protocol "the identify record exceeds the cap")
       | some frame =>
           match ← s.write frame with
-          | .error e => return .error (Mock.Core.mapStreamError e)
+          | .error e => return .error (mapStreamError e)
           | .ok () =>
               discard s.close
               return .ok ()
@@ -543,7 +556,7 @@ half-close. -/
 def respondTo (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat) := none) (s : Streams.Stream) :
-    Conc.Async (Except Mock.Core.Error Unit) :=
+    Conc.Async (Except Libp2p.Core.Error Unit) :=
   writeRecord key addrs protocols observed agent spr s
 
 /-- The push sender: announce this peer's record on the stream that the
@@ -552,31 +565,32 @@ host opened under `pushId`, then half-close.
 The host calls the sender after the local address set or the local
 protocol set changes. Go's identify service skips a push when the
 snapshot did not change, merges pending pushes into one round, and
-skips a connection that already carries the current record (the
-spike's `vendor/go-libp2p/p2p/protocol/identify/id.go`, the `loop` and
+skips a connection that already carries the current record
+(`vendor/go-libp2p/p2p/protocol/identify/id.go`, the `loop` and
 `sendPushes` functions). This package sends one record per call and
 starts no timer. -/
 def pushTo (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
     (protocols : List String) (observed : Option (List Nat)) (agent : String)
     (spr : Option (List Nat) := none) (s : Streams.Stream) :
-    Conc.Async (Except Mock.Core.Error Unit) :=
+    Conc.Async (Except Libp2p.Core.Error Unit) :=
   writeRecord key addrs protocols observed agent spr s
 
-/-- The responder handler value. -/
+/-- The responder handler value. The observed address of each answer
+is the remote address of the stream's connection, from the
+`StreamContext`. -/
 def respondHandler (key : Libp2p.Identity.PubKey) (addrs : List (List Nat))
-    (protocols : List String) (observed : Option (List Nat)) (agent : String)
-    (spr : Option (List Nat) := none) : Mock.Core.StreamHandler :=
+    (protocols : List String) (agent : String)
+    (spr : Option (List Nat) := none) : Libp2p.Core.StreamHandler :=
   { id := protocolId,
-    handle := fun _ctx s => respondTo key addrs protocols observed agent spr s }
+    handle := fun ctx s => ExceptT.mk <|
+      respondTo key addrs protocols (some ctx.remoteAddr.toBytes) agent spr s }
 
 /-! ## The client-core theorems
 
 `clientCoreFrame` pins the frame that `clientCore` validates.
 `clientCoreOverCap` pins the cap check before the body.
 `clientCoreEmptyFrame` pins the zero-length rule. Each consumes a law of
-`Streams.Framing`, and the laws rest on no mock axiom: the base
-replaced the streams mocks with the real encoders. None takes a result
-of this package's mocks as a premise. -/
+`Streams.Framing`. -/
 
 /-- The frame step reads a whole frame back from its encoding, with
 any rest after it. -/
