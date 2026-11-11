@@ -24,15 +24,14 @@ so unit 1a lands while the upgrader finishes. W5.2 sits outside the
 root row and reaches this unit through the root chain, which finishes
 it before W5.5.
 
-Units 0 and 1a are done. Unit 1b's code builds over `libp2p/core`
-and `libp2p/identity`, and against a mock of W5.5 (the package
-ARCHITECTURE, "The mock"). The suite is `Tests/Host.lean`; the dedup
-rule also carries theorems in `Libp2p/Host/Dedup.lean`. A host
-upgrades through `libp2p/negotiate`, so the unit 1b milestones run at
-the integration, and the suite names each one as a skip until then. Unit 1b needs two
-calls from `libp2p/negotiate` beside `upgrade`: the post-handshake
-checkpoint (`upgradeWith`) and the stream negotiation
-(`negotiateStream`). The negotiate pair records both.
+Units 0 and 1a are done. Unit 1b's code builds over `libp2p/core`,
+`libp2p/identity`, and `libp2p/negotiate`. The suite is
+`Tests/Host.lean`. The dedup rule also carries theorems in
+`Libp2p/Host/Dedup.lean`. The host composes the upgrade from the
+public stages of `libp2p/negotiate`, with the peer checkpoint after
+the handshake (`Libp2p/Host/Upgrade.lean`). The stream negotiation is
+the host's own shell, `negotiateStream`, over the pure core of
+`libp2p/negotiate` (the package ARCHITECTURE, "Stream serving").
 
 ## Consumers
 
@@ -80,8 +79,8 @@ checkpoint (`upgradeWith`) and the stream negotiation
 ## Test milestones (unit 1b)
 
 - The upgrade pipeline over the sim, in both directions: dial and
-  listen through the real `Noise.securityProtocol` value, or the
-  fixed-key test value, and `Mux.yamux` (PRINCIPLES 1.4). An
+  listen through the fixed-key test value `Noise.fixedKeyProtocol` and
+  `Mux.yamux`, on a test clock (root §3.1, PRINCIPLES 1.4). An
   identity-check mismatch fails with the `Host.Error` arm that wraps
   `Core.Error.authentication` (§4.9; the negotiate pair).
 - The silent-peer regression at host level (PRINCIPLES 5.4): a raw

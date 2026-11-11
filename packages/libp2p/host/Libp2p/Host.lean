@@ -5,6 +5,8 @@ import Libp2p.Host.Dedup
 import Libp2p.Host.Peerstore
 import Libp2p.Host.Policy
 import Libp2p.Host.Gate
+import Libp2p.Host.Upgrade
+import Libp2p.Host.StreamSelect
 import Libp2p.Host.Swarm
 import Libp2p.Host.Shutdown
 

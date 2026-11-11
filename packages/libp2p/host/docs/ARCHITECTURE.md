@@ -24,7 +24,8 @@ libp2p group is §7, row 10).
 | `Libp2p/Host/Swarm.lean` | `Config`, the `Host` state, `dial`, `dialPeer`, `startListening`, `newStream`, the accept loop, the upgrade pipeline, and stream serving |
 | `Libp2p/Host/Shutdown.lean` | `Host.close`, the §5.5 sequence |
 | `Libp2p/Host/Policy.lean` | the permissive default gater, and the permissive and denying test doubles the core pair assigned here; the default resource manager (admits everything) and the default ranker (keeps the order, no delay) |
-| `Libp2p/Host/Mock/Negotiate.lean` | the mock of the W5.5 surface the host calls, until the host swap of issue #70 (see "The mock") |
+| `Libp2p/Host/Upgrade.lean` | `upgrade` and `Upgraded`: the stages of `libp2p/negotiate`, with the peer checkpoint between the handshake and the muxer stage, under one deadline |
+| `Libp2p/Host/StreamSelect.lean` | `negotiateStream`, multistream-select on a muxed stream, a shell over the pure core of `libp2p/negotiate` |
 
 All declarations live in the `Libp2p.Host` namespace, and the root
 module re-exports the public submodules.
@@ -237,9 +238,16 @@ fixes them as follows.
   `allowInbound`, then `openConnection`, after an accept
   (`vendor/go-libp2p/p2p/net/upgrader/listener.go`, lines 183 and
   193); and `allowSecured`, then `ConnectionScope.setPeer`, inside the
-  upgrade, through `Negotiate.upgradeWith`
-  (`vendor/go-libp2p/p2p/net/upgrader/upgrader.go`, line 176). A
-  refusal is `gated` with the checkpoint, and the scope is released.
+  upgrade, after the handshake and before the muxer stage
+  (`vendor/go-libp2p/p2p/net/upgrader/upgrader.go`, line 176, and the
+  core seam `ConnectionGater.allowSecured`). A refusal is `gated` with
+  the checkpoint, and the host releases the scope.
+- **The host composes the upgrade.** `Negotiate.upgradeWith` takes no
+  checkpoint. `Libp2p/Host/Upgrade.lean` runs the stages from the
+  public functions of `libp2p/negotiate`: `negotiate`, `checkIdentity`,
+  and `settleUpgrade`. The stages keep the order of the upgrader, and
+  the checkpoint sits between the handshake and the muxer stage. One
+  `withinDeadline` bounds the whole upgrade, as in `upgradeWith`.
   The policy shapes are this unit's refinement of the core seams (the
   core ARCHITECTURE, "The policy shapes").
 - **The answers of the dial path.** `dial` and `dialPeer` answer the
@@ -265,9 +273,13 @@ fixes them as follows.
 - **Stream serving.** The serve task of a session accepts the peer's
   streams, and each stream runs in a task that the serve task owns and
   joins when the session ends. The stream negotiates against the
-  handler ids through `Negotiate.negotiateStream`, which puts the
-  bytes it read past the selecting message at the front of the stream
-  (§4.7). A failed negotiation, an id whose handler left the table,
+  handler ids through `negotiateStream`, which puts the bytes it read
+  past the selecting message at the front of the stream (§4.7). The
+  upgrader's `Negotiate.negotiate` runs over a `Connection`, and a
+  muxed stream is a `Stream`, so the host holds this shell
+  (`Libp2p/Host/StreamSelect.lean`). It drives the same pure core:
+  `initiatorStart`, `responderStart`, and `drive`. A failed
+  negotiation, an id whose handler left the table,
   and a handler failure reset the stream; the session stays. go-libp2p
   resets a stream whose negotiation fails in the same place
   (`vendor/go-libp2p/p2p/host/basic/basic_host.go`, line 347). A
@@ -298,29 +310,13 @@ fixes them as follows.
   1b milestone. A fault of a joined task does not stop the sequence,
   and `close` throws the first fault at the end.
 
-## The mock
-
-The seam types come from `libp2p/core`. `libp2p/negotiate` takes the
-real core too (issue #53), so its upgrader takes the values the host
-holds. The host keeps a mock of the negotiate surface,
-`Libp2p/Host/Mock/Negotiate.lean`, until the host swap of issue #70.
-Its operations are `opaque`, and each body fails with the name of the
-package; it states no axiom. Swarm opens `Libp2p.Host.Mock`, so
-`Negotiate.upgradeWith` resolves as it will against the real package.
-The swap (issue #70) is a retype: the merged upgrader takes no `admit`
-checkpoint and exports no `negotiateStream`.
-
-Every upgrade runs through the negotiate mock and fails there, so the
-unit 1b milestones run after the host swap of issue #70. The Noise and
-yamux values are on the real core (issues #76 and #77). Unit 1a runs
-in full.
-
 ## What the package must not depend on
 
 - Inside libp2p, the chain puts everything below the host at its
   disposal (§2, §7 row 10). The host imports `identity` for the id and
   key types, `core` for the seam types, and `negotiate` for the
-  upgrader and the stream-negotiation responder its paths call. The
+  stages `upgrade` composes and the pure core that `negotiateStream`
+  drives. The
   security and mux implementations
   arrive inside the configuration lists (§3.1), so a host module that
   names a concrete seam value is a review failure. Test modules import

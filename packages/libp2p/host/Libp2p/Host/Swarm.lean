@@ -3,8 +3,9 @@ import Conc
 import Streams
 import Libp2p.Identity
 import Libp2p.Core
-import Libp2p.Negotiate.Legacy
 import Libp2p.Host.Error
+import Libp2p.Host.StreamSelect
+import Libp2p.Host.Upgrade
 import Libp2p.Host.Registry
 import Libp2p.Host.Dedup
 import Libp2p.Host.Peerstore
@@ -36,7 +37,7 @@ ARCHITECTURE, "Refinements fixed at implementation (unit 1b)"):
 `allowDial` before a dial, `allowInbound` after an accept, the
 resource manager's `openConnection` before the upgrade, and
 `allowSecured` and `ConnectionScope.setPeer` inside the upgrade, after
-the handshake and before the muxer stage (`Negotiate.upgradeWith`). A
+the handshake and before the muxer stage (`Libp2p.Host.upgrade`). A
 refusal is `Error.gated` with the checkpoint.
 
 ## Ownership
@@ -69,7 +70,7 @@ set_option autoImplicit false
 
 namespace Libp2p.Host
 
-open Conc Streams Multiformats Libp2p.Identity Libp2p.Core Libp2p.Negotiate.Legacy
+open Conc Streams Multiformats Libp2p.Identity Libp2p.Core
 
 /-- A failure of a task that no caller awaits: an inbound upgrade, a
 session that ended badly, an inbound stream. -/
@@ -242,9 +243,9 @@ private def admit (h : Host) (role : Role) (scope : ConnectionScope) (conn : Con
 /-! ## The upgrade -/
 
 /-- Run the upgrade of `conn` as a pending connection: registered for
-the shutdown (§5.5), under the deadline of the upgrader, with the
-checkpoint. Every failure releases `scope`; the upgrader has already
-closed the connection. -/
+the shutdown (§5.5), under the deadline of the upgrade, with the
+checkpoint. Every failure releases `scope`. On a failure, the upgrade
+already closed the connection. -/
 private def upgradeConn (h : Host) (role : Role) (conn : Connection) (expected : Option PeerId)
     (scope : ConnectionScope) : Async (Except Error Upgraded) := do
   let key ← (h.draw : BaseIO Nat)
@@ -257,7 +258,7 @@ private def upgradeConn (h : Host) (role : Role) (conn : Connection) (expected :
     conn.closeQuietly
   let unregister : BaseIO Unit := h.pending.update (·.map (·.erase key))
   let r ← try
-      (upgradeAdmit h.config.clock role conn .empty expected (h.admit role scope conn)
+      (upgrade h.config.clock role conn expected (h.admit role scope conn)
         h.config.security h.config.muxers).run
     catch e =>
       unregister

@@ -3,6 +3,11 @@ import Tests.Support
 import Conc
 import Streams
 import Multiformats
+import Libp2p.Identity
+import Libp2p.Core
+import Libp2p.Security
+import Libp2p.Mux
+import Libp2p.Negotiate
 import Libp2p.Host
 
 /-!
@@ -16,13 +21,11 @@ pure update functions, by value or under an `OnceRef`, with no
 connection in the loop. The session handle of a table entry is a `Nat`
 here, since the rule never reads it.
 
-Unit 1b runs hosts over the sim transport, with the real
-`Noise.securityProtocol` and `Mux.yamux` values (PRINCIPLES 1.4). Every
-host derives its peer id through `libp2p/identity`, and the upgrade runs
-through `libp2p/negotiate`. The real packages have landed (#53, #76,
-#77), and the upgrade still runs through the negotiate mock of the
-host, whose entries fail. The legs wait for the host swap of issue
-#70. Until then the suite names each leg as a skip.
+Unit 1b: hosts over the test values of root §3.1 (PRINCIPLES 1.4): the
+sim transport, the fixed-key test value `Noise.fixedKeyProtocol`, and
+a test clock that drives the upgrade deadline, so no check waits on the
+wall clock. The muxer is `Mux.yamux`. Each host hands its failures to a
+channel that the check reads.
 -/
 
 set_option autoImplicit false
@@ -278,18 +281,360 @@ private def errorChecks (r : Runner) : IO Unit := do
   for (e, line) in arms do
     r.check s!"Host.Error renders {line}" (toString e == line)
 
-/-! ## Unit 1b -/
+/-! ## Unit 1b: hosts over the sim -/
 
-/-- The unit 1b legs of the plan. Each one needs a host, and a host
-derives its peer id through `libp2p/identity` and upgrades through
-`libp2p/negotiate` (module doc). -/
-private def swarmLegs : List String :=
-  ["the upgrade pipeline in both directions, with the identity check",
-   "the host's own answers: dial to self, no address, no transport, unknown protocol, failing handler, after close",
-   "the policy doubles: a denying gater refuses a dial and an inbound connection",
-   "the silent peer at the deadline, and close reaching a parked upgrade",
-   "the shutdown stages of §5.5 in order",
-   "the leftover hand-over on a served stream"]
+section Swarm
+
+open Streams Libp2p.Security
+open Libp2p.Host (Host Config Failure Stage)
+
+/-- `n` bytes of the value `v`. -/
+private def fill (n : Nat) (v : UInt8) : ByteArray := ⟨Array.replicate n v⟩
+
+/-- A Noise configuration from an Ed25519 identity byte. The static key
+byte follows from it. -/
+private def cfgOf (idByte : UInt8) : Async Noise.Config := do
+  let .ok identity := PrivKey.ofData? .ed25519 (fill 32 idByte)
+    | throw <| IO.userError "test identity does not build"
+  let some static := Noise.Bytes32.ofByteArray? (fill 32 (idByte + 100))
+    | throw <| IO.userError "test static key is not 32 bytes"
+  return { identity, static }
+
+/-- The fixed-key Noise value of the identity byte `idByte`: its
+ephemeral keys come from an `Rng` seeded with 32 copies of
+`idByte + 50` (root §3.1). -/
+private def noiseOf (idByte : UInt8) : Async SecurityProtocol :=
+  return Noise.fixedKeyProtocol (← cfgOf idByte) (fill 32 (idByte + 50))
+
+/-- The echo protocol of the suite. The `/test/` prefix keeps it apart
+from every real id. -/
+private def echoId : ProtocolId := ⟨"/test/echo"⟩
+
+/-- A protocol whose handler fails at once. -/
+private def failId : ProtocolId := ⟨"/test/fail"⟩
+
+/-- An id no host serves. -/
+private def unknownId : ProtocolId := ⟨"/test/unknown"⟩
+
+/-- Read until the end of the stream, or a reset. -/
+private def readAll (s : Stream) : Async ByteArray := do
+  let mut acc := ByteArray.empty
+  repeat
+    match ← s.read with
+    | .ok (some b) => acc := acc ++ b
+    | _ => break
+  return acc
+
+/-- The echo handler: read to the end, write it back, close. -/
+private def echoHandler : StreamHandler where
+  id := echoId
+  handle _ s := do
+    let got ← readAll s
+    discard <| s.write got
+    s.close
+
+/-- The id of the handler that records its context. -/
+private def ctxId : ProtocolId := ⟨"/test/ctx"⟩
+
+/-- The failing handler. -/
+private def failHandler : StreamHandler where
+  id := failId
+  handle _ _ := throw (.protocol "the test handler fails")
+
+/-- A host of the suite on `net`, its peer id, and the channel its
+failures arrive on. -/
+private def mkHost (net : Sim.Net) (idByte : UInt8) (tc : TestClock)
+    (gater : ConnectionGater := Policy.permissiveGater) :
+    Async (Host × Chan Failure) := do
+  let cfg ← cfgOf idByte
+  let failures : Chan Failure ← Chan.new 16
+  let config : Config := {
+    identity := cfg.identity
+    transports := [net.transport]
+    security := [← noiseOf idByte]
+    muxers := [Libp2p.Mux.yamux]
+    handlers := [echoHandler, failHandler]
+    gater
+    clock := tc.clock
+    onFailure := fun f => discard (failures.trySend f) }
+  match ← (Host.new config : BaseIO _) with
+  | .ok h => return (h, failures)
+  | .error _ => throw <| IO.userError "test host does not build"
+
+/-- The address with `/p2p/<peer>` after it. -/
+private def withPeer (a : Multiaddr) (p : PeerId) : Async Multiaddr := do
+  match a.encapsulate (← ma s!"/p2p/{p}") with
+  | .ok full => return full
+  | .error _ => throw <| IO.userError "the /p2p address does not build"
+
+/-- Start a listener, or fail the run. -/
+private def listenOn (h : Host) (text : String) : Async Multiaddr := do
+  match ← h.startListening (← ma text) with
+  | .ok a => return a
+  | .error e => throw <| IO.userError s!"listen failed: {e}"
+
+/-- One echo round trip from `h` to `peer`: the stream negotiates
+`echoId`, the bytes come back, and the stream ends. -/
+private def echoOnce (h : Host) (peer : PeerId) (payload : String) : Async Bool := do
+  match ← h.newStream peer [echoId] with
+  | .error _ => return false
+  | .ok (id, s) =>
+    discard <| s.write payload.toUTF8
+    s.close
+    return id == echoId && (← readAll s) == payload.toUTF8
+
+/-- The pipeline in both directions: a dial with `/p2p`, an echo each
+way, a redial that reuses the session, and an identity mismatch. -/
+private def pipelineChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let (a, _) ← mkHost net 1 tc
+  let (b, _) ← mkHost net 2 tc
+  let addrA ← listenOn a "/memory/101"
+  let addrB ← listenOn b "/memory/102"
+  -- B dials A by its address and peer id.
+  match ← b.dial (← withPeer addrA a.localPeer) with
+  | .ok p => r.check "host: a dial proves the listener's peer id" (p == a.localPeer)
+  | .error e => r.check s!"host: a dial succeeds ({e})" false
+  r.check "host: the dialer serves the session" (← (b.connected a.localPeer : BaseIO Bool))
+  r.check "host: the dialer's stream echoes" (← echoOnce b a.localPeer "ping")
+  -- The listener committed the session too, and it opens streams back.
+  r.check "host: the listener's stream echoes" (← echoOnce a b.localPeer "pong")
+  -- A served stream gets the session's context: the proved peer, and
+  -- the connection's remote address. B dialed, so B's connection names
+  -- `addrA` as its remote end. A's connection names the sim port of
+  -- B's dial.
+  let seenA : Chan StreamContext ← Chan.new 1
+  let seenB : Chan StreamContext ← Chan.new 1
+  let recorder (seen : Chan StreamContext) : StreamHandler :=
+    { id := ctxId, handle := fun ctx s => do discard <| seen.send ctx; s.close }
+  a.setHandler (recorder seenA)
+  b.setHandler (recorder seenB)
+  discard <| b.newStream a.localPeer [ctxId]
+  discard <| a.newStream b.localPeer [ctxId]
+  match ← seenA.recv, ← seenB.recv with
+  | some ca, some cb =>
+    r.check "host: the handler context names the proved peer"
+      (ca.remotePeer == b.localPeer && cb.remotePeer == a.localPeer)
+    r.check "host: the dialer's handler context names the listener's address"
+      (cb.remoteAddr == addrA && ca.remoteAddr != addrA)
+  | _, _ => r.check "host: both handlers saw a context" false
+  -- A redial reuses the live session, and the peerstore grows nothing.
+  match ← b.dial (← withPeer addrA a.localPeer) with
+  | .ok p => r.check "host: a redial reuses the session" (p == a.localPeer)
+  | .error e => r.check s!"host: a redial succeeds ({e})" false
+  r.check "host: the dial stored the address once"
+    ((← (b.addrsOf a.localPeer : BaseIO (List Multiaddr))) == [addrA])
+  -- A dial that expects another peer fails at the identity check.
+  let (c, _) ← mkHost net 3 tc
+  match ← c.dial addrB (peer := some a.localPeer) with
+  | .error (.upgrade (.authentication _)) =>
+    r.check "host: an identity mismatch fails with authentication" true
+  | _ => r.check "host: an identity mismatch fails with authentication" false
+  r.check "host: the mismatched dial leaves no session" !(← (c.connected b.localPeer : BaseIO Bool))
+  c.close
+  b.close
+  a.close
+  tc.close
+
+/-- The host's own answers: a dial to itself, a peer with no address,
+an address with no transport part, an unknown protocol, a failing
+handler, and the calls after `close`. -/
+private def answerChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let (a, failsA) ← mkHost net 4 tc
+  let (b, _) ← mkHost net 5 tc
+  let addrA ← listenOn a "/memory/111"
+  r.check "host: a dial to our own id fails"
+    ((← b.dial addrA (peer := some b.localPeer)) matches .error .dialSelf)
+  r.check "host: a peer with no address fails"
+    ((← b.dialPeer a.localPeer) matches .error (.noAddresses _))
+  r.check "host: a /p2p address alone has no transport"
+    ((← b.dial (← ma s!"/p2p/{a.localPeer}")) matches .error (.noTransport _))
+  -- `dialPeer` walks the peerstore.
+  b.addAddrs a.localPeer [addrA]
+  r.check "host: dialPeer dials the peerstore address"
+    ((← b.dialPeer a.localPeer) matches .ok _)
+  -- The host answers `na` to an unknown protocol, and the session stays.
+  r.check "host: an unknown protocol fails the stream"
+    ((← b.newStream a.localPeer [unknownId]) matches .error (.stream _))
+  r.check "host: the session stays after an unknown protocol"
+    (← echoOnce b a.localPeer "still here")
+  -- A handler set on a running host serves the next stream.
+  (a.setHandler { echoHandler with id := unknownId } : BaseIO Unit)
+  r.check "host: a handler set at runtime serves the next stream"
+    ((← b.newStream a.localPeer [unknownId]) matches .ok _)
+  -- A failing handler resets the stream and reaches A's owner. The
+  -- session stays. A sends its reset right after its negotiation reply,
+  -- and a reset may drop the bytes in flight (`Streams.Error.reset`).
+  -- So B sees the reset in its first read. Or the reset comes before B
+  -- reads the reply, and B's negotiation ends with `closed`.
+  let resetSeen ← match ← b.newStream a.localPeer [failId] with
+    | .error (.stream (.closed _)) => pure true
+    | .error _ => pure false
+    | .ok (_, s) => pure ((← s.read) matches .error .reset)
+  r.check "host: a handler failure resets the stream" resetSeen
+  match ← failsA.recv with
+  | some f =>
+    r.check "host: a handler failure reaches the owner"
+      (f.peer == some b.localPeer && f.protocol == some failId &&
+        f.error matches .stream (.protocol _))
+  | none => r.check "host: a handler failure reaches the owner" false
+  r.check "host: the session stays after a handler failure"
+    (← echoOnce b a.localPeer "and here")
+  b.close
+  a.close
+  r.check "host: a dial after close fails with closing"
+    ((← b.dial addrA) matches .error .closing)
+  r.check "host: a listen after close fails with closing"
+    ((← a.startListening (← ma "/memory/112")) matches .error .closing)
+  tc.close
+
+/-- A gater that passes the dial and the accept, and refuses every
+proved peer: only the secured checkpoint answers no. -/
+private def securedOnlyGater : ConnectionGater :=
+  { Policy.permissiveGater with allowSecured := fun _ _ _ _ => pure false }
+
+/-- The policy doubles. A denying gater refuses a dial and an accepted
+connection. The permissive gater passes both, in the other checks. A
+gater that refuses at the secured checkpoint refuses after the
+handshake, and the scope and the secure connection close with it. -/
+private def policyChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let (open_, _) ← mkHost net 6 tc
+  let (shut, failsShut) ← mkHost net 7 tc (gater := Policy.denyingGater)
+  let addrOpen ← listenOn open_ "/memory/121"
+  let addrShut ← listenOn shut "/memory/122"
+  r.check "host: a denying gater refuses a dial"
+    ((← shut.dial addrOpen) matches .error (.gated .dial))
+  -- The refused inbound connection closes before any byte moves. The
+  -- dialer meets the close as the end of its read (`closed`), or as a
+  -- failed write, which is a fault (`Connection.write`, §3.5). The
+  -- order of its write and the close decides which.
+  let refused ← try
+      pure ((← open_.dial addrShut) matches .error (.upgrade (.closed _)))
+    catch _ => pure true
+  r.check "host: a denying gater refuses an inbound connection" refused
+  r.check "host: the refusal is no failure" (← (failsShut.tryRecv : BaseIO _)).isNone
+  r.check "host: the refused inbound peer has no session"
+    !(← (shut.connected open_.localPeer : BaseIO Bool))
+  -- The secured checkpoint: the dial and the handshake pass, and the
+  -- checkpoint refuses the proved peer before the muxer stage.
+  let (picky, failsPicky) ← mkHost net 13 tc (gater := securedOnlyGater)
+  r.check "host: the secured checkpoint refuses an outbound peer"
+    ((← picky.dial addrOpen) matches .error (.gated .secured))
+  r.check "host: the outbound secured refusal leaves no session"
+    !(← (picky.connected open_.localPeer : BaseIO Bool))
+  let addrPicky ← listenOn picky "/memory/123"
+  -- The dialer's handshake completes, then its muxer stage meets the
+  -- close. A failed write is a fault (§3.5), as above.
+  let refusedIn ← try
+      pure ((← open_.dial addrPicky) matches .error (.upgrade _))
+    catch _ => pure true
+  r.check "host: the secured checkpoint refuses an inbound peer" refusedIn
+  r.check "host: the secured refusal is no failure" (← (failsPicky.tryRecv : BaseIO _)).isNone
+  r.check "host: the inbound secured refusal leaves no session"
+    !(← (picky.connected open_.localPeer : BaseIO Bool))
+  picky.close
+  open_.close
+  shut.close
+  tc.close
+
+/-- True when `raw` reaches its end within eight reads. The host's
+responder writes its multistream header before it reads, as go's
+listener does (`Negotiate.negotiate`). So a raw peer can read that
+header before the end. A peer that sends past the bound counts as no
+end. -/
+private def endsSoon (raw : Connection) : Async Bool := do
+  for _ in [0:8] do
+    if (← raw.read).isNone then return true
+  return false
+
+/-- The silent peer, at host level (PRINCIPLES 5.4): a raw connection
+that sends nothing parks the inbound upgrade. The deadline fails it,
+and the failure reaches the owner. In a second run, `close` reaches
+the parked upgrade through the pending list, and every join returns. -/
+private def silentPeerChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let (a, failsA) ← mkHost net 8 tc
+  let addrA ← listenOn a "/memory/131"
+  let some raw ← net.transport.dial addrA | throw <| IO.userError "raw dial failed"
+  -- The upgrade arms its deadline before its first read parks.
+  discard tc.nextTimer
+  tc.advance Streams.unauthDeadlineMs
+  match ← failsA.recv with
+  | some f =>
+    r.check "host: a silent peer fails at the deadline"
+      (f.peer.isNone && f.error matches .upgrade (.timeout _))
+  | none => r.check "host: a silent peer fails at the deadline" false
+  r.check "host: the deadline closed the silent connection" (← endsSoon raw)
+  -- A second silent peer, and `close` before the deadline.
+  let some raw ← net.transport.dial addrA | throw <| IO.userError "raw dial failed"
+  discard tc.nextTimer
+  a.close
+  r.check "host: close reaches a parked upgrade, and returns" (← endsSoon raw)
+  tc.close
+
+/-- The shutdown order (§5.5): the stages run in sequence, and every
+join returns, with a listener whose accept parks, a live session, and
+a pending connection. -/
+private def shutdownChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let (a, _) ← mkHost net 9 tc
+  let (b, _) ← mkHost net 10 tc
+  let addrA ← listenOn a "/memory/141"
+  discard <| listenOn a "/memory/142"
+  discard <| b.dial addrA
+  let some raw ← net.transport.dial addrA | throw <| IO.userError "raw dial failed"
+  let stages : OnceRef (List Stage) ← OnceRef.new []
+  a.close (onStage := fun s => stages.update (· ++ [s]))
+  r.check "host: the shutdown runs the stages of §5.5 in order"
+    ((← (stages.get : BaseIO (List Stage))) ==
+      [.flag, .listeners, .pending, .sessions, .sessionLoops, .hostTasks])
+  r.check "host: the shutdown closed the pending connection" (← endsSoon raw)
+  r.check "host: a closed listener refuses a dial"
+    ((← b.dial addrA (peer := none)) matches .error _)
+  -- A second close finds nothing left, and returns.
+  a.close
+  b.close
+  tc.close
+
+/-- The leftover hand-over on a served stream (§4.7, §5.6). A peer
+writes its stream header, its proposal, and data in one write. The
+handler gets the data in its first read. The peer runs the plain
+upgrader of `libp2p/negotiate`, so the host's listen path meets a peer
+that is no host. -/
+private def handOverChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let (a, _) ← mkHost net 11 tc
+  let addrA ← listenOn a "/memory/151"
+  let noise ← noiseOf 12
+  let some conn ← net.transport.dial addrA | throw <| IO.userError "dial failed"
+  match ← (Libp2p.Negotiate.upgradeWith tc.clock .initiator conn .empty (some a.localPeer)
+      [noise] [Libp2p.Mux.yamux]).run with
+  | .error e => r.check s!"host: a plain upgrader reaches the host ({e})" false
+  | .ok (session, _) =>
+    match ← (session.openStream echoId).run with
+    | .error e => r.check s!"host: the stream opens ({e})" false
+    | .ok s =>
+      let msg (t : String) : ByteArray := Bytes.ofNatList (Libp2p.Negotiate.encodeText t)
+      discard <| s.write (msg "/multistream/1.0.0" ++ msg "/test/echo" ++ "coalesced".toUTF8)
+      s.close
+      -- The echo handler answers the header and the id, then the bytes.
+      let back ← readAll s
+      r.check "host: the bytes behind the proposal reach the handler"
+        (back == msg "/multistream/1.0.0" ++ msg "/test/echo" ++ "coalesced".toUTF8)
+    discard session.close.toBaseIO
+    discard session.join.run
+  a.close
+  tc.close
+
+end Swarm
 
 def Host.run (r : Runner) : IO Unit := do
   r.section "host" "(packages/libp2p/host/docs/PLAN.md, test milestones, units 1a and 1b)"
@@ -299,7 +644,10 @@ def Host.run (r : Runner) : IO Unit := do
   (handlerChecks r).run
   (peerstoreChecks r).run
   errorChecks r
-  for leg in swarmLegs do
-    r.skip s!"host: {leg}" "needs the negotiate swap of the host, issue #70"
+  for (label, act) in [("pipeline", pipelineChecks r), ("answers", answerChecks r),
+      ("policy", policyChecks r), ("silent peer", silentPeerChecks r),
+      ("shutdown", shutdownChecks r), ("hand-over", handOverChecks r)] do
+    try act.run
+    catch e => r.check s!"host {label}: runs ({e})" false
 
 end Tests
