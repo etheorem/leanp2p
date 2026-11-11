@@ -51,8 +51,18 @@ def Async.run {α : Type} (x : Async α) : IO α :=
 namespace Wrap
 
 open Std.Async in
-/-- Wait for a task without holding a thread. -/
-def await {α : Type} (t : Task α) : Async α :=
+/-- Wait for a task without holding a thread. A task that has already
+ended gives its value at once. `Std`'s `await` would wrap it as a
+pending task, and the next bind would queue the rest of the computation
+on the shared pool (`BaseAsync.bind`, `BaseIO.bindTask`). A receive
+from a channel that holds a value is such a task, so without the check
+every value in a channel costs one round trip through the pool. A
+`repeat` loop whose steps all end at once still runs in constant stack:
+`Std`'s `forIn` takes the next step by a self tail call. -/
+def await {α : Type} (t : Task α) : Async α := do
+  -- The ascription keeps the check `BaseIO`, so the lift into `Async`
+  -- applies (see `Conc.TaskSet.joinAll`).
+  if ← (IO.hasFinished t : BaseIO Bool) then return t.get
   MonadAwait.await t
 
 /-- Start an `Async` computation as a task on the shared pool. The

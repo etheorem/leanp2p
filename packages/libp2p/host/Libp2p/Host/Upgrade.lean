@@ -75,9 +75,9 @@ private def ownSecure (s : MuxSession) (sc : SecureConn) : MuxSession :=
 
 /-- The stages: negotiate the security protocol, run the handshake,
 check the identity, ask `admit` about the proved peer, negotiate the
-muxer, open the session. A failure or a refusal after the handshake
-closes and joins the secure connection. -/
-private def stages (role : Role) (conn : Connection) (expected : Option PeerId)
+muxer, open the session on `clock`. A failure or a refusal after the
+handshake closes and joins the secure connection. -/
+private def stages (clock : Clock) (role : Role) (conn : Connection) (expected : Option PeerId)
     (admit : PeerId → BaseIO (Option Checkpoint))
     (secs : List SecurityProtocol) (muxers : List Muxer) :
     Async (Except Core.Error Admission) := do
@@ -107,7 +107,7 @@ private def stages (role : Role) (conn : Connection) (expected : Option PeerId)
         let some mux := muxers.find? (fun m => decide (m.id = stage2.proto))
           | discardSecure sc
             return .error (.protocol "selected muxer is not configured")
-        match ← (mux.«open» role secure stage2.leftover).run with
+        match ← (mux.«open» role secure stage2.leftover clock).run with
         | .error e => discardSecure sc; return .error e
         | .ok session =>
           return .ok (.upgraded { session := ownSecure session sc, remotePeer := sc.remotePeer })
@@ -131,7 +131,7 @@ def upgrade (clock : Clock) (role : Role) (conn : Connection) (expected : Option
     ExceptT Core.Error Async Admission := do
   let late ← TaskSet.new
   let answer ← withinDeadline clock Streams.unauthDeadlineMs conn.closeQuietly
-    (stages role conn expected admit secs muxers) (releaseLate late)
+    (stages clock role conn expected admit secs muxers) (releaseLate late)
   late.joinAll
   match Negotiate.settleUpgrade answer with
   | .ok a => return a

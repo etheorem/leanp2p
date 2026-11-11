@@ -591,6 +591,37 @@ private def outcomeChecks (r : Runner) : Async Unit := do
     let o : Outcome Error ← Outcome.new
     r.check "an outcome with no answer reads as orderly" (succeedsWith () (← o.answer))
 
+/-- The receives of a queue that holds `n` values, by recursion: each
+step calls the next inside the bind of its receive. The shape of the
+`partial def` read loops of the stack (`Ping.echoLoop`). -/
+private partial def drainRec (c : Chan Nat) (sum : Nat) : Async Nat := do
+  match ← c.recv with
+  | some v => drainRec c (sum + v)
+  | none => return sum
+
+/-- `Wrap.await` takes the value of a finished task at once. A run of
+ready values must still run in bounded stack, in a `repeat` loop and in
+a recursive loop. -/
+private def readyChecks (r : Runner) : Async Unit := do
+  let n := 1000000
+  -- A `repeat` loop: `Std`'s `forIn` takes each step by a tail call.
+  do
+    let c : Chan Nat ← Chan.newUnbounded
+    for i in [0:n] do discard <| c.trySend i
+    c.close
+    let mut sum := 0
+    repeat
+      match ← c.recv with
+      | some v => sum := sum + v
+      | none => break
+    r.check s!"a repeat loop takes {n} ready values" (sum == n * (n - 1) / 2)
+  -- A recursive loop over the same run.
+  do
+    let c : Chan Nat ← Chan.newUnbounded
+    for i in [0:n] do discard <| c.trySend i
+    c.close
+    r.check s!"a recursive loop takes {n} ready values" ((← drainRec c 0) == n * (n - 1) / 2)
+
 def Concurrency.run (r : Runner) : IO Unit := do
   r.section "concurrency" "(packages/base/conc/docs/PLAN.md, test milestones)"
   let all : Async Unit := do
@@ -603,6 +634,7 @@ def Concurrency.run (r : Runner) : IO Unit := do
     clockChecks r
     alarmChecks r
     outcomeChecks r
+    readyChecks r
   all.run
 
 end Tests

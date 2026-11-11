@@ -42,7 +42,8 @@ values over the in-memory sim:
 * The fixed-key value gives the same bytes on the wire in two runs.
 * The leftover in both directions: message 0 reaches the responder
   through the `ByteArray` argument, and a transport frame that the
-  handshake over-read reaches the reader through the `SecureConn`.
+  handshake over-read reaches the reader through the `SecureConn`. A
+  leftover that ends inside a frame joins the next read.
 
 Beyond the milestones: a payload signed over another static key fails
 the initiator with `authentication` before message 2 goes out, an end
@@ -589,6 +590,42 @@ private def simLeftover (r : Runner) : Async Unit := do
   cr.close
   r.check s!"{name}: both joins answer an orderly end" ((← joinsOk ci) && (← joinsOk cr))
 
+/-- A leftover that ends inside a frame. Message 2 and the first 3 bytes
+of the first transport frame arrive in one chunk, and the rest of that
+frame arrives with the second frame. The transport reader starts from
+the leftover, so it must join the frame across the leftover and the
+next read (the module doc of `Libp2p/Security/Transport.lean`, "The
+reader's frames"). -/
+private def simLeftoverSplit (r : Runner) : Async Unit := do
+  let name := "noise split leftover"
+  let cfgI ← cfgOf name 3 5
+  let cfgR ← cfgOf name 4 6
+  let (c, s) ← pair
+  -- Write 1 is message 2, write 2 the first frame, write 3 the second.
+  let c' ← mapWrites c ByteArray.empty fun n b held =>
+    if n == 1 then (.empty, b)
+    else if n == 2 then (held ++ b.extract 0 3, b.extract 3 b.size)
+    else if n == 3 then (held ++ b, .empty)
+    else (b, held)
+  let pI := Noise.securityProtocol cfgI
+  let pR := Noise.securityProtocol cfgR
+  let t ← (Conc.Wrap.spawn (do
+      let some m0 ← s.read | throw <| IO.userError s!"{name}: no message 0"
+      (pR.handshake .responder s m0).run) :
+    BaseIO (Task (Except IO.Error (Except Libp2p.Core.Error SecureConn))))
+  let ci ← secured name (← (pI.handshake .initiator c' .empty).run)
+  ci.write "early".toUTF8
+  ci.write "later".toUTF8
+  let cr ← match ← Conc.Wrap.await t with
+    | .ok rr => secured name rr
+    | .error e => throw e
+  r.check s!"{name}: the leftover holds part of a frame" (cr.leftover.size == 3)
+  r.check s!"{name}: both frames reach the reader, decrypted"
+    ((← readN cr 10) == "earlylater".toUTF8)
+  ci.close
+  cr.close
+  r.check s!"{name}: both joins answer an orderly end" ((← joinsOk ci) && (← joinsOk cr))
+
 /-- Start one handshake as a task. The caller awaits it, which joins it
 (§4.1, rule 2). -/
 private def spawnHandshake (p : SecurityProtocol) (role : Libp2p.Core.Role) (c : Connection)
@@ -776,7 +813,8 @@ private def sim (r : Runner) : IO Unit := do
   transportEdges r
   for (label, act) in [("round trip", simRoundTrip r false), ("split round trip", simRoundTrip r true),
       ("corrupt", simCorrupt r), ("large write", simLargeWrite r), ("fixed keys", simFixedKey r),
-      ("leftover", simLeftover r), ("bad signature", simBadSignature r),
+      ("leftover", simLeftover r), ("split leftover", simLeftoverSplit r),
+      ("bad signature", simBadSignature r),
       ("handshake eof", simHandshakeEof r), ("write after close", simWriteAfterClose r), ("read fault", simReadFault r),
       ("write across the end", simWriteAcrossEnd r)] do
     try Conc.Async.run act

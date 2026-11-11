@@ -162,7 +162,7 @@ private def muxValue (id : Libp2p.Core.ProtocolId) (ranRef : Conc.OnceRef Bool)
     (leftRef : Conc.OnceRef (Option ByteArray))
     (openRef : Conc.OnceRef (Option Libp2p.Core.ProtocolId)) : Libp2p.Core.Muxer where
   id := id
-  «open» := fun _ _ leftover => do
+  «open» := fun _ _ leftover _ => do
     ranRef.set true
     leftRef.set (some leftover)
     openRef.set (some id)

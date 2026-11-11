@@ -1,7 +1,7 @@
 import Tests.Support
+import Tests.HostPair
 import Libp2p.Protocols.ReqResp.Exchange
-import Libp2p.Protocols.Mock.Muxer
-import Libp2p.Protocols.Mock.HostStream
+import Libp2p.Host
 import Multiformats.Multiaddr
 
 /-!
@@ -18,8 +18,8 @@ encoder shape writes through go's snappy.
 The sections follow the layers: the checksum, the chunk codec, the
 length prefix, the reader core as transcripts with no clock and no
 task, the writer, the concurrency limit, the exchange over a stream
-pair with the test clock, and the exchange over the sim transport
-through the mock muxer and the host stream mock.
+pair with the test clock, and the exchange between two hosts over the
+sim transport, with the fixed-key Noise value and yamux.
 -/
 
 set_option autoImplicit false
@@ -607,35 +607,17 @@ def limiterChecks (r : Runner) : IO Unit := do
 
 /-! ## Over the sim transport -/
 
-open Libp2p.Protocols.Mock.Muxer (muxer)
-open Libp2p.Protocols.Mock.HostStream (Host)
+open Tests.HostPair (Pair hostPair)
 
-/-- The peer id of a fixed Ed25519 seed of 32 copies of `v`. -/
-private def seedPeer (v : UInt8) : Async Libp2p.Identity.PeerId := do
-  let seed : ByteArray := ⟨Array.replicate 32 v⟩
-  match (do Libp2p.Identity.PeerId.ofPubKey (← (← Libp2p.Identity.PrivKey.ofData? .ed25519 seed).toPublic)
-      : Except Libp2p.Identity.Error Libp2p.Identity.PeerId) with
-  | .ok p => return p
-  | .error _ => throw (IO.userError "test: the fixed seed derives no peer id")
-
-/-- A connected pair of hosts over a new sim net and the mock muxer.
-Each end's handler context names the other end's peer and its own
-connection's remote address. -/
-def hostPair (split : Bool := false) : Async (Host × Host) := do
-  let net ← Streams.Sim.Net.new split
-  let addr ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/4100" with
-    | .ok a => pure a
-    | .error _ => throw (IO.userError "test address")
-  let l ← net.transport.listen addr
-  let some c ← net.transport.dial l.addr | throw (IO.userError "dial failed")
-  let some s ← l.accept | throw (IO.userError "accept failed")
-  l.close
-  let .ok cs ← (muxer.«open» .initiator c ByteArray.empty).run | throw (IO.userError "open failed")
-  let .ok ss ← (muxer.«open» .responder s ByteArray.empty).run | throw (IO.userError "open failed")
-  let client ← seedPeer 1
-  let server ← seedPeer 2
-  return (← Host.new cs { remotePeer := server, remoteAddr := c.remoteAddr },
-    ← Host.new ss { remotePeer := client, remoteAddr := s.remoteAddr })
+/-- The host's stream call for the server, as the `OpenStream` of
+`requestPeer`. A host failure that wraps a seam error reaches the
+requester as that error. The host renders its own refusals into
+`protocol`. -/
+def openStreamOf (p : Pair) : OpenStream := fun ids => do
+  match ← p.client.newStream p.serverPeer ids with
+  | .ok x => return .ok x
+  | .error (.stream e) | .error (.upgrade e) | .error (.session e) => return .error e
+  | .error e => return .error (.protocol (toString e))
 
 def simChecks (r : Runner) : Async Unit := do
   r.section "over the sim" "phase0 Req/Resp interaction; ARCHITECTURE §5.4; PRINCIPLES 1.4"
@@ -644,83 +626,71 @@ def simChecks (r : Runner) : Async Unit := do
   let answer : List Chunk := [⟨.success, digest, noise 1 70000⟩, ⟨.success, digest, noise 2 5⟩]
   for split in [false, true] do
     let tc ← TestClock.new
-    let (client, server) ← hostPair split
-    server.setHandler (handler m tc.clock 1000 fun _ => return answer)
-    server.serve
+    let p ← hostPair split
+    p.server.setHandler (handler m tc.clock 1000 fun _ => return answer)
     let limiter ← Limiter.new
     let got : OnceRef (List Chunk) ← OnceRef.new []
-    let res ← requestPeer client.newStream limiter m tc.clock 1000 (some (noise 3 200))
+    let res ← requestPeer (openStreamOf p) limiter m tc.clock 1000 (some (noise 3 200))
       fun c => got.update (· ++ [c])
     r.check s!"sim (split {split}): a request through the host gets its chunks"
       (succeedsWith () res && (← got.get).map (·.payload) == answer.map (·.payload))
-    r.check s!"sim (split {split}): the handler saw no failure" ((← server.failures.get).isEmpty)
+    r.check s!"sim (split {split}): the handler saw no failure" ((← p.failures.get).isEmpty)
     r.check s!"sim (split {split}): the limiter slot came back" ((← limiter.take m.id) && (← limiter.take m.id))
-    client.close
-    server.close
-    client.join
-    server.join
+    r.check s!"sim (split {split}): the hosts close with no fault" (← p.close).isNone
     tc.close
-  -- An id the peer does not serve: the stream is reset.
+  -- An id the peer does not serve: multistream-select answers `na`, so
+  -- the stream never opens for it.
   do
     let tc ← TestClock.new
-    let (client, server) ← hostPair
-    server.serve
-    let res ← requestPeer client.newStream (← Limiter.new) m tc.clock 1000 (some (noise 3 4))
+    let p ← hostPair
+    let res ← requestPeer (openStreamOf p) (← Limiter.new) m tc.clock 1000 (some (noise 3 4))
       fun _ => pure ()
-    r.check "sim: an id with no handler fails the request with a reset"
-      (failsWith (.stream .reset) res)
-    client.close
-    server.close
-    client.join
-    server.join
+    r.check "sim: an id with no handler fails the open"
+      (match res with | .error (.openFailed _) => true | _ => false)
+    r.check "sim: an id with no handler, the hosts close with no fault" (← p.close).isNone
     tc.close
   -- A silent peer over the sim: the deadline resets the stream, and the
   -- connection stays for the next exchange.
   do
     let tc ← TestClock.new
-    let (client, server) ← hostPair
+    let p ← hostPair
     -- The handler takes one read and ends with no answer and no close.
-    server.setHandler ⟨m.id, fun _ s => ExceptT.mk do
+    p.server.setHandler ⟨m.id, fun _ s => ExceptT.mk do
       discard <| s.read
       return .ok ()⟩
-    server.serve
     let owner ← TaskSet.new
     let res : OnceRef (Option (Except Error Unit)) ← OnceRef.new none
     owner.spawn do
-      res.set (some (← requestPeer client.newStream (← Limiter.new) m tc.clock 300 (some (noise 3 4))
+      res.set (some (← requestPeer (openStreamOf p) (← Limiter.new) m tc.clock 300 (some (noise 3 4))
         fun _ => pure ()))
     r.check "sim: a silent peer, the deadline arms" (← tc.nextTimer)
     tc.advance 300
     owner.joinAll
     r.check "sim: a silent peer fails the request at its deadline" ((← res.get).any (failsWith .timeout))
     tc.close
-    client.close
-    server.close
-    client.join
-    server.join
+    r.check "sim: a silent peer, the hosts close with no fault" (← p.close).isNone
   -- The connection closes under a parked read: the request ends.
   do
     let tc ← TestClock.new
-    let (client, server) ← hostPair
+    let p ← hostPair
     let parked : Chan Unit ← Chan.new 1
-    server.setHandler ⟨m.id, fun _ _ => ExceptT.mk do
+    p.server.setHandler ⟨m.id, fun _ _ => ExceptT.mk do
       discard <| parked.send ()
       return .ok ()⟩
-    server.serve
     let owner ← TaskSet.new
     let res : OnceRef (Option (Except Error Unit)) ← OnceRef.new none
     owner.spawn do
-      res.set (some (← requestPeer client.newStream (← Limiter.new) m tc.clock 60000 (some (noise 3 4))
+      res.set (some (← requestPeer (openStreamOf p) (← Limiter.new) m tc.clock 60000 (some (noise 3 4))
         fun _ => pure ()))
     -- The handler ran, so the request is past its write and parks on the read.
     discard <| parked.recv
-    client.close
+    p.client.close
     owner.joinAll
     r.check "sim: a connection closed under a parked read ends the request"
       ((← res.get).any fun e => match e with | .error _ => true | .ok _ => false)
-    server.close
-    client.join
-    server.join
+    -- The second close of the client does nothing, and the pair closes
+    -- the server and the clock.
+    r.check "sim: a closed connection, the hosts close with no fault" (← p.close).isNone
     tc.close
 
 def run (r : Runner) : IO Unit := do

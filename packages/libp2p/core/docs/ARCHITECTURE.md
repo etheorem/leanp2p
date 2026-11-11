@@ -96,9 +96,11 @@ The shapes are §4.9's, refined where this section says so.
   session. The spike split the directions into `MuxChoice.client` and
   `MuxChoice.server`; this package follows the `SecurityProtocol`
   shape and carries one field, `open : Role → Connection → ByteArray
-  → ExceptT Core.Error Async MuxSession`. The direction matters to every
-  muxer: yamux assigns stream ids by the parity of the direction
-  (§4.8).
+  → Clock → ExceptT Core.Error Async MuxSession`. The direction matters
+  to every muxer: yamux assigns stream ids by the parity of the
+  direction (§4.8). The `Clock` is the upgrader's clock. The session
+  runs its timers on it, so a host on a test clock runs its muxer on the
+  same clock (root §3.1).
 - `MuxSession` is the uniform session view: `openStream`, which
   returns a fresh `Stream` through `ExceptT Core.Error Async`;
   `accept : Async (Option Stream)`, which returns `none` when the

@@ -58,11 +58,12 @@ structure Muxer where
   id : ProtocolId
   /-- Start a session in the given role over the connection. The
   `ByteArray` holds the bytes the muxer negotiation over-read; the
-  session loop takes them as its first input (§4.7). The
-  implementation maps its own error into `Error` here, once (owned
-  contract 6). -/
+  session loop takes them as its first input (§4.7). The session runs
+  its timers on the `Clock`, the clock of the upgrader, so a test clock
+  reaches the muxer's deadlines too (root §3.1). The implementation
+  maps its own error into `Error` here, once (owned contract 6). -/
   -- `open` is a Lean keyword, so the declaration quotes the name in
   -- `«…»`. The field is still named `open`.
-  «open» : Role → Connection → ByteArray → ExceptT Error Async MuxSession
+  «open» : Role → Connection → ByteArray → Clock → ExceptT Error Async MuxSession
 
 end Libp2p.Core

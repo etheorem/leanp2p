@@ -16,7 +16,7 @@ discipline and the no-reader-strand contract (§4.7), the framing caps
 | `Streams/Constants.lean` | the constants this package owns, the 30 s deadline of §5.4 among them; one home per fact (§3.8) |
 | `Streams/Error.lean` | `Streams.Error`, the error inductive of the package (§3.5): why a `Stream` operation did not complete |
 | `Streams/Conn.lean` | `Connection`, `Listener`, and the `Transport` seam; `readExactly`; `withinUnauthDeadline`, the §5.4 deadline over a connection |
-| `Streams/Reader.lean` | `readLoop`, the reader task of a session (§3.3): a credit before each read, a post for each chunk and for the end; every muxer and secure-transport shell runs it, so the task has one home |
+| `Streams/Reader.lean` | `readLoop`, the reader task of a session (§3.3): a credit before each read, a post for each chunk and for the end; the muxer shells run it, so the task has one home |
 | `Streams/BufReader.lean` | `BufReader`, exact-length reads with a buffer over one connection, with the theorems of its offset arithmetic |
 | `Streams/Framing.lean` | `Framing`, length-prefix reads: the `Prefix` shapes, the `Frame` codec with its `LawfulCodec` proof, the `ByteArray` path, and the IO read; the caps of §5.1 apply before allocation |
 | `Streams/Stream.lean` | `Stream`, the application view over a muxer loop, with `prependBytes`; `Completions`, the tag table, as a pure state with its theorems; `LoopPort`, what a muxer shell gives one stream |
@@ -249,7 +249,10 @@ The names are §7 row 8's. The types follow §3.1.
   suite touches real TCP (PRINCIPLES 1.4). Its byte-splitting mode
   keeps write-boundary coupling visible; a sim that preserved write
   boundaries once hid a per-chunk cipher bug until TCP coalesced the
-  bytes (PRINCIPLES 1.6). The listener registry changes through
+  bytes (PRINCIPLES 1.6). The reading end does the split: the pipe
+  carries each write whole, and each read returns one byte of the held
+  chunk. One pipe value per byte made two tasks hand over each byte
+  through the shared pool, which cost more with more workers. The listener registry changes through
   `OnceRef.update`, never get-then-set (PRINCIPLES 3.3).
 - **`close` resolves the parked read's promise itself.** The runtime
   drops cancelled promises, so a cancel strands the waiter forever

@@ -516,10 +516,10 @@ private def ownSecure (s : Core.MuxSession) (sc : Core.SecureConn) : Core.MuxSes
       | .ok a => return a.bind fun () => b }
 
 /-- The pipeline: negotiate the security protocol, run the handshake,
-check the identity, negotiate the muxer, open the session. Each lookup
-is total; a miss after a selection is `protocol`. A failure after the
-handshake closes and joins the secure connection. -/
-private def upgradeCore (role : Core.Role) (conn : Streams.Connection)
+check the identity, negotiate the muxer, open the session on `clock`.
+Each lookup is total; a miss after a selection is `protocol`. A failure
+after the handshake closes and joins the secure connection. -/
+private def upgradeCore (clock : Conc.Clock) (role : Core.Role) (conn : Streams.Connection)
     (leftover : ByteArray) (expected : Option Libp2p.Identity.PeerId)
     (secs : List Core.SecurityProtocol) (muxers : List Core.Muxer) :
     Conc.Async (Except Core.Error (Core.MuxSession × Libp2p.Identity.PeerId)) := do
@@ -549,7 +549,7 @@ private def upgradeCore (role : Core.Role) (conn : Streams.Connection)
               discardSecure sc
               return .error (.protocol "selected muxer is not configured")
             | some mux =>
-              match ← mux.«open» role secure stage2.leftover with
+              match ← mux.«open» role secure stage2.leftover clock with
               | .error e => discardSecure sc; return .error e
               | .ok session => return .ok (ownSecure session sc, sc.remotePeer)
 
@@ -574,7 +574,8 @@ private def releaseLate (late : Conc.TaskSet) (r : Except Core.Error
 /-- The upgrade under one `Conc.withinDeadline`. The expiry closes
 the connection once at the boundary (root §3.5), and the race's
 `deadlineExpired` maps to the `timeout` arm through `settleUpgrade`.
-The clock is a seam, so the deadline test can advance it. -/
+The clock is a seam, so the deadline test can advance it. The muxer
+session runs on the same clock. -/
 
 def upgradeWith (clock : Conc.Clock) (role : Core.Role)
     (conn : Streams.Connection) (leftover : ByteArray)
@@ -584,7 +585,7 @@ def upgradeWith (clock : Conc.Clock) (role : Core.Role)
   let late ← Conc.TaskSet.new
   let answer ← Conc.withinDeadline clock Streams.unauthDeadlineMs
     (Streams.Connection.closeQuietly conn)
-    (upgradeCore role conn leftover expected secs muxers)
+    (upgradeCore clock role conn leftover expected secs muxers)
     (releaseLate late)
   late.joinAll
   match settleUpgrade answer with

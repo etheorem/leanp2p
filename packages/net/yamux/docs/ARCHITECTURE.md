@@ -276,9 +276,14 @@ the arithmetic (§6).
   parks it until the write deadline closes the connection. An owner
   that needs a shorter bound runs `join` under `withinDeadline` and
   closes the connection on expiry (PRINCIPLES 3.1; §5.4). go-yamux's
-  close waits for its send loop the same way, for at most one
-  `ConnectionWriteTimeout` (`vendor/go-yamux/session.go`, lines 313 to
-  316).
+  `CloseWithError` waits for its send loop the same way, for at most
+  one `ConnectionWriteTimeout`, before it writes its go-away
+  (`vendor/go-yamux/session.go`, lines 312 to 322). Its plain `Close`
+  sends no go-away and closes the connection at once (lines 283 to 285
+  and 324). We send the normal go-away, since the spec says one "should
+  be sent" when a session ends, so our close takes the bounded wait. On
+  a test clock the test owns that bound: a write that stays parked wakes
+  when the test advances or closes the clock.
 - **A step that fails drops its event.** The signature of §3.3 makes
   `step` return the error alone, so the actions of the failing event
   never run, deliveries included. A protocol failure closes the

@@ -22,6 +22,14 @@ reader once hid a cipher bug per chunk, until TCP joined the bytes
 (PRINCIPLES 1.6). With `splitWrites`, every write of the net arrives
 one byte at a time, so a boundary bug fails in the sim first.
 
+The reading end does the split. The pipe carries each write whole, and
+each read returns one byte of the chunk that the end holds. Only the
+first byte of a chunk waits on the pipe. A split at the writing end
+would put one byte in each pipe slot, and each byte would then cost a
+park, a wake, and a task on the shared pool. Two tasks that hand over
+one byte at a time contend on the pool's lock, more so with more
+workers.
+
 ## Close and teardown
 
 The sim keeps the close rules of a TCP transport (§4.7):
@@ -64,25 +72,41 @@ socket, so the system code is 0. -/
 private def closedError : IO.Error :=
   .resourceVanished 0 "sim: the connection is closed"
 
-/-- Write `b` to the pipe one byte at a time, and stop at the first
-refusal. An empty write goes to `Pipe.write` whole, which still reports
-a closed pipe. The split loop alone would skip that check. -/
-private def writeBytes (out : Pipe) (b : ByteArray) : Async (Except Conc.Error Unit) := do
-  if b.isEmpty then return ← out.write b
-  for i in [0:b.size] do
-    if let .error e ← out.write (b.extract i (i + 1)) then return .error e
-  return .ok ()
+/-- One byte of the held chunk, and the chunk with its offset moved on.
+`none` when the chunk is used up. The offset keeps the rest in place,
+so a read copies one byte, whatever the size of the chunk. -/
+private def takeByte (held : ByteArray × Nat) : Option ByteArray × (ByteArray × Nat) :=
+  let (chunk, pos) := held
+  if pos < chunk.size then (some (chunk.extract pos (pos + 1)), (chunk, pos + 1))
+  else (none, held)
+
+/-- The split read (module doc, "The hostile mode"): one byte of the
+held chunk, or the first byte of the next chunk of the pipe. -/
+private def readByte (inbound : Pipe) (held : OnceRef (ByteArray × Nat)) :
+    Async (Option ByteArray) := do
+  -- The ascription keeps the step `BaseIO`, as in `Net.dial`.
+  if let some b ← (held.updateGet takeByte : BaseIO (Option ByteArray)) then
+    return some b
+  -- Park: the peer's write wakes it, and so does the close of the pipe.
+  match ← inbound.read with
+  | none => return none
+  | some chunk =>
+    -- The pipe drops empty chunks, so the chunk has a first byte.
+    held.set (chunk, 1)
+    return some (chunk.extract 0 1)
 
 /-- One end of a sim connection: it reads `inbound` and writes
 `outbound`. -/
 private def endpoint (inbound outbound : Pipe) (localAddr remoteAddr : Multiaddr)
-    (split : Bool) : Connection :=
+    (split : Bool) : BaseIO Connection := do
+  let held ← OnceRef.new (ByteArray.empty, 0)
   let shut : BaseIO Unit := do
     outbound.close
     inbound.close
-  { read := inbound.read
+  return {
+    read := if split then readByte inbound held else inbound.read
     write := fun b => do
-      let sent ← if split then writeBytes outbound b else outbound.write b
+      let sent ← outbound.write b
       if let .error _ := sent then
         -- A failed write tears the connection down before the throw.
         shut
@@ -117,8 +141,9 @@ def dial (n : Net) (addr : Multiaddr) : Async (Option Connection) := do
   let localAddr ← memoryAddr port
   let toListener ← Pipe.new simPipeChunks
   let toDialer ← Pipe.new simPipeChunks
-  let dialerEnd := endpoint toDialer toListener localAddr addr n.splitWrites
-  let listenerEnd := endpoint toListener toDialer addr localAddr n.splitWrites
+  -- The ascriptions keep the steps `BaseIO`, as above.
+  let dialerEnd ← (endpoint toDialer toListener localAddr addr n.splitWrites : BaseIO Connection)
+  let listenerEnd ← (endpoint toListener toDialer addr localAddr n.splitWrites : BaseIO Connection)
   -- Park: an accept frees a slot, and the close of the listener wakes
   -- the send with `.error .closed`.
   match ← accepts.send listenerEnd with
