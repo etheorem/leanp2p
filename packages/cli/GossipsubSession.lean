@@ -22,6 +22,12 @@ open Libp2p.Protocols.Gossipsub Libp2p.Protocols.Gossipsub.Node
 /-- Use the production yamux session through the core muxer seam. -/
 def yamuxMuxer : Libp2p.Core.Muxer := Libp2p.Mux.yamux
 
+/-- The muxers the host offers, in preference order. The consensus
+networking spec makes mplex a requirement for a TCP client, and it puts
+yamux first (`vendor/consensus-specs/specs/phase0/p2p-interface.md`,
+lines 210 to 215). -/
+def offeredMuxers : List Libp2p.Core.Muxer := [yamuxMuxer, Libp2p.Mux.mplex]
+
 /-- The real host surface needed by the gossipsub node. -/
 structure Running where
   host : Libp2p.Host.Host
@@ -53,7 +59,7 @@ def start (identity : PrivKey) (nodeConfig : Node.Config := {}) : IO (Except Str
     identity := identity
     transports := [Streams.Tcp.transport]
     security := [Libp2p.Security.Noise.securityProtocol noise]
-    muxers := [yamuxMuxer]
+    muxers := offeredMuxers
     handlers := [Identify.respondHandler pubkey [] servedProtocols "leanp2p"] }
   let hostResult ← BaseIO.toIO (Libp2p.Host.Host.new config)
   let host ← match hostResult with

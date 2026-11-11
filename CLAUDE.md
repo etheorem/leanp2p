@@ -278,11 +278,11 @@ spec, the spec wins, and we record the discrepancy rather than paper
 over it.
 
 In scope for v1 (P0 in ARCHITECTURE.md §8): tcp transport, Noise XX,
-yamux, multistream-select, identity (keys, peer id), identify, host and
-upgrader, req/resp (`ssz_snappy`), gossipsub v1.1, and the ENR codec.
-Deferred to seams only: TLS and the X.509 extension, mplex beyond the
-interface, QUIC/WebTransport, kad-dht, mDNS, relay and circuit, hole
-punching, WebSockets, WebRTC, pnet, peer records.
+yamux, mplex, multistream-select, identity (keys, peer id), identify,
+host and upgrader, req/resp (`ssz_snappy`), gossipsub v1.1, and the ENR
+codec. Deferred to seams only: TLS and the X.509 extension,
+QUIC/WebTransport, kad-dht, mDNS, relay and circuit, hole punching,
+WebSockets, WebRTC, pnet, peer records.
 
 ## Don'ts
 

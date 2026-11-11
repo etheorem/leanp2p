@@ -28,8 +28,9 @@ def mplexId : ProtocolId := { toString := "/mplex/6.7.0" }
 def testId : ProtocolId := { toString := "/leanp2p/test-mux/1.0.0" }
 
 /-- The mplex declared-length cap: 1 MiB, spelled `1024 * 1024`.
-The future P2 mplex implementation checks a declared length against
-this cap before allocation. This module names the cap. -/
+The mplex decoders of `Mplex/Wire.lean` check a declared length
+against this cap before allocation, and the session splits a longer
+write into messages of this size. -/
 def mplexMessageCap : Nat := 1024 * 1024
 
 end Libp2p.Mux

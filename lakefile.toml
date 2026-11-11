@@ -219,6 +219,13 @@ root = "Tests.Main"
 name = "yamux-interop"
 root = "Tests.Interop.Yamux"
 
+# The Lean side of the mplex interop check against go-mplex; run it
+# through `scripts/mplex-interop.sh`. Like `yamux-interop`, it is not
+# part of `lake test`.
+[[lean_exe]]
+name = "mplex-interop"
+root = "Tests.Interop.Mplex"
+
 # The Lean side of the Noise interop check against go-libp2p's Noise
 # transport; run it through `scripts/noise-interop.sh`. Like
 # `yamux-interop`, it is not part of `lake test`.

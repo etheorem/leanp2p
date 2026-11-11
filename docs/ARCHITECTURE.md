@@ -27,7 +27,7 @@ pre-authentication byte. It shuts down deterministically. Its protocol
 cores are machine-checked.
 
 Non-goals for v1: QUIC and WebTransport transports, kad-dht, NAT
-traversal, browser dialing, and TLS and mplex beyond their seams.
+traversal, browser dialing, and TLS beyond its seam.
 Gossipsub is in scope, and §8 ranks it. The layering leaves room for
 every non-goal, and no part of the design depends on their absence.
 
@@ -856,7 +856,7 @@ Everything with libp2p semantics, in subpackages:
   lazy dialer) and the upgrader.
 - **`mux/`**: the `Muxer` values. yamux (P0) assigns the `/yamux/1.0.0`
   id to the session of `net/yamux`. That session lives in `net/yamux`
-  because it does not know libp2p. mplex (P2) has go-compatible
+  because it does not know libp2p. mplex (P0, W5.10) has go-compatible
   identity: both sides number from zero, and the session keys streams
   by `(id, initiator)`. The spike already validated this against the
   go behavior. Half-close follows the spec. Close ends the write
@@ -975,7 +975,7 @@ The build order, one `packages/<group>/<pkg>` per step:
 | 7 | `crypto/backend` | `Crypto/OpenSsl.lean`, `c/p2pcrypto.c` | Ed25519/X25519/RSA sign+verify, SHA-1/SHA-512/HMAC/HKDF, ChaCha20-Poly1305 seal/open, X.509 helpers, randomness and key generation, plus secp256k1, ECDSA P-256 signing and derivation, the interim SHA-256 fallback binding, the P-256 verifier, the reference of the differential test of the facade route, and the pins for LeanHazmatSecp256k1/P256/Sha256/Keccak with the v4.34 build checks; every `ByteArray` argument **borrowed** (`@&`) | fixture suites + verifier-strictness regressions (key type, RSA 2048-8192, low-S, X.509 validity + critical exts) | key *marshalings* go to `libp2p/identity` (§4.6); P-256 verification, keccak-256, and secp256k1 key recovery route to the etheorem hazmat packages, secp256k1 verification stays on the shim for low-S, and SHA-256 stays on the interim fallback while its pin is out (§4.6) |
 | 8 | `net/streams` | `Net/{Transport,Tcp}.lean`, `Conn/{Reader,Frame,Stream}.lean`, `Sim.lean` | `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` (+`prependBytes`), sim harness | TCP suite (dial/listen, mss over TCP, noise over TCP, muxers over TCP), silent-peer teardown | contracts: libuv close-wakes discipline; failed write = teardown; no reader strand (each stage hands its leftover on as data, §4.7) |
 | 9 | `net/yamux` | `Conn/Yamux.lean` | header codec, session, muxer entry | yamux suite + hostile-frame regressions + interop prereqs | depends only on `Connection` from `net/streams`; caps, window enforcement, SYN-only creation, stream retirement, and wake hand-off carry over as contracts |
-| 10 | `libp2p/*` | everything else in the spike (`Host.lean`, `Conn/{Upgrade,Security,Noise,TlsExt,Mplex}.lean`, `Crypto/{Keys,PeerId,Messages}.lean`, `Protocol/*`, `Peer/*`) | see §4.9 | node suite + noise suite + keys suite + interop prereqs | build order inside: identity → core → security/noise ∥ mux (yamux) → negotiate → host → protocols; mplex last (deferred for consensus, §8) |
+| 10 | `libp2p/*` | everything else in the spike (`Host.lean`, `Conn/{Upgrade,Security,Noise,TlsExt,Mplex}.lean`, `Crypto/{Keys,PeerId,Messages}.lean`, `Protocol/*`, `Peer/*`) | see §4.9 | node suite + noise suite + keys suite + interop prereqs | build order inside: identity → core → security/noise ∥ mux (yamux) → negotiate → host → protocols; mplex last (W5.10, §8) |
 | 11 | `cli/` | `Main.lean`, `PingNode.lean`, `Interop.lean`, `scripts/` | node binaries + harness | end-to-end demo + interop matrix | `VECTORS.lock`, `scripts/extract-vectors.py`, and `Tests/vectors/` arrive earlier, in PLAN.md W0.3 |
 
 The *Public surface* column names the entry points of the spike, so
@@ -1001,7 +1001,8 @@ interface seams exist, and no implementation work is scheduled.
 |---|---|---|
 | TCP transport | consensus networking runs on TCP (and QUIC) | done |
 | Noise XX (`/noise`) | the only security protocol in the eth2 networking spec | done |
-| yamux | the required muxer over TCP (the spec removed mplex; QUIC muxes internally) | done, hardened |
+| yamux | the preferred muxer over TCP: the spec makes yamux take precedence over mplex during negotiation (QUIC muxes internally) | done, hardened |
+| mplex | the spec requires it of every TCP client (`vendor/consensus-specs/specs/phase0/p2p-interface.md`, lines 210 to 215). Every host offers `[Mux.yamux, Mux.mplex]`, in that order. go-libp2p v0.50 removed mplex from its defaults. This document records that as a difference with go, where the spec wins (PRINCIPLES 2.1) | done |
 | multistream-select | negotiation for security + muxer | done |
 | multiformats (multiaddr/varint/peer-id multihash, base58/base32) | dialing, ENR ↔ multiaddr, peer ids | done |
 | keys + peer id, **Ed25519** (+ secp256k1 host keys) | host identity; clients use Ed25519/secp256k1 | done (Ed25519 and secp256k1) |
@@ -1029,7 +1030,6 @@ interface seams exist, and no implementation work is scheduled.
 - **TLS 1.3 security and the X.509 libp2p extension.** The eth2 spec
   names Noise only. The spike work is done, and no more work is
   planned.
-- **mplex.** The eth2 networking spec removed it.
 - **RSA and ECDSA P-256 host keys.** Consensus clients use Ed25519 or
   secp256k1. RSA comes from the go-libp2p defaults, and the eth2 spec
   does not use it.

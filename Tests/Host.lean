@@ -24,8 +24,10 @@ here, since the rule never reads it.
 Unit 1b: hosts over the test values of root §3.1 (PRINCIPLES 1.4): the
 sim transport, the fixed-key test value `Noise.fixedKeyProtocol`, and
 a test clock that drives the upgrade deadline, so no check waits on the
-wall clock. The muxer is `Mux.yamux`. Each host hands its failures to a
-channel that the check reads.
+wall clock. Each host offers `[Mux.yamux, Mux.mplex]`, in the order
+of the consensus networking spec, so two hosts agree on yamux. A plain
+upgrader that offers mplex alone reaches the host over mplex. Each host
+hands its failures to a channel that the check reads.
 -/
 
 set_option autoImplicit false
@@ -352,7 +354,7 @@ private def mkHost (net : Sim.Net) (idByte : UInt8) (tc : TestClock)
     identity := cfg.identity
     transports := [net.transport]
     security := [← noiseOf idByte]
-    muxers := [Libp2p.Mux.yamux]
+    muxers := [Libp2p.Mux.yamux, Libp2p.Mux.mplex]
     handlers := [echoHandler, failHandler]
     gater
     clock := tc.clock
@@ -634,6 +636,35 @@ private def handOverChecks (r : Runner) : Async Unit := do
   a.close
   tc.close
 
+/-- The second muxer of the host (root PLAN W5.10). A peer that
+offers mplex alone gets mplex from the host, which offers yamux first,
+and a stream carries bytes over it. -/
+private def mplexChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let (a, _) ← mkHost net 13 tc
+  let addrA ← listenOn a "/memory/161"
+  let noise ← noiseOf 14
+  let some conn ← net.transport.dial addrA | throw <| IO.userError "dial failed"
+  match ← (Libp2p.Negotiate.upgradeWith tc.clock .initiator conn .empty (some a.localPeer)
+      [noise] [Libp2p.Mux.mplex]).run with
+  | .error e => r.check s!"host: a peer that offers mplex alone upgrades ({e})" false
+  | .ok (session, _) =>
+    r.check "host: a peer that offers mplex alone upgrades" true
+    match ← (session.openStream echoId).run with
+    | .error e => r.check s!"host: a stream opens over mplex ({e})" false
+    | .ok s =>
+      let msg (t : String) : ByteArray := Bytes.ofNatList (Libp2p.Negotiate.encodeText t)
+      discard <| s.write (msg "/multistream/1.0.0" ++ msg "/test/echo" ++ "over mplex".toUTF8)
+      s.close
+      let back ← readAll s
+      r.check "host: the echo comes back over mplex"
+        (back == msg "/multistream/1.0.0" ++ msg "/test/echo" ++ "over mplex".toUTF8)
+    discard session.close.toBaseIO
+    discard session.join.run
+  a.close
+  tc.close
+
 end Swarm
 
 def Host.run (r : Runner) : IO Unit := do
@@ -646,7 +677,8 @@ def Host.run (r : Runner) : IO Unit := do
   errorChecks r
   for (label, act) in [("pipeline", pipelineChecks r), ("answers", answerChecks r),
       ("policy", policyChecks r), ("silent peer", silentPeerChecks r),
-      ("shutdown", shutdownChecks r), ("hand-over", handOverChecks r)] do
+      ("shutdown", shutdownChecks r), ("hand-over", handOverChecks r),
+      ("mplex", mplexChecks r)] do
     try act.run
     catch e => r.check s!"host {label}: runs ({e})" false
 

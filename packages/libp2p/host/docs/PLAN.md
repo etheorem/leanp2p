@@ -80,7 +80,9 @@ the host's own shell, `negotiateStream`, over the pure core of
 
 - The upgrade pipeline over the sim, in both directions: dial and
   listen through the fixed-key test value `Noise.fixedKeyProtocol` and
-  `Mux.yamux`, on a test clock (root §3.1, PRINCIPLES 1.4). An
+  the muxer list `[Mux.yamux, Mux.mplex]`, on a test clock (root §3.1,
+  PRINCIPLES 1.4). A plain upgrader that offers mplex alone reaches
+  the host over mplex (root PLAN W5.10). An
   identity-check mismatch fails with the `Host.Error` arm that wraps
   `Core.Error.authentication` (§4.9; the negotiate pair).
 - The silent-peer regression at host level (PRINCIPLES 5.4): a raw

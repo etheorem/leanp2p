@@ -13,14 +13,13 @@ the suite passes under `+RTS -N1`, and the import lint is green.
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
 | 1 | W4.3, W5.2 | the P0 delivery: integration with the landed Core seam, `Mux.yamux` over the Yamux session, the independent `Mux.test` session, and the constants and adapter tests | the root W5.4 row and the unit 1 milestones below are satisfied |
-| 2 | W2.1, W5.2, unit 1 | the mplex value (P2, §8): the message codec, `Mux.mplex`, the go-compatible `(id, initiator)` identity, the half-close rules, and the 1 MiB cap | the mplex half of the root W5.4 deliverable holds, and the unit 2 milestones below pass |
+| 2 | W2.1, W5.2, unit 1 | the mplex value (root W5.10): the message codec, `Mux.mplex`, the go-compatible `(id, initiator)` identity, the half-close rules, and the 1 MiB cap | the root W5.10 row holds, and the unit 2 milestones below pass |
 
 Unit 2 depends on W2.1, on the seam from W5.2, and on the constants
-from unit 1, including `Mux.mplexMessageCap`. The root graph lets
-mplex follow W5.4 at any time. Unit 2 checks a declared length
-against that cap.
+from unit 1, including `Mux.mplexMessageCap`. Unit 2 checks a declared
+length against that cap.
 
-Units 0 and 1 are complete. Unit 2 remains P2.
+Units 0, 1, and 2 are complete.
 
 ## Consumers
 
@@ -30,10 +29,11 @@ Units 0 and 1 are complete. Unit 2 remains P2.
 - The host (W5.6) serves the stream handlers through the `MuxSession`
   the chosen value returns, and joins its completion (§3.1).
 - `cli/` (W5.8) and the interop matrix (W5.9) assemble the ordered
-  muxer lists (§3.1). The W5.9 gate is `tcp + /noise + yamux` (root
-  PLAN W5.9). The same-node-code-under-both payoff of PRINCIPLES 1.3
-  was demonstrated in-process and over loopback; a live go matrix
-  cannot exercise mplex against v0.50 and later.
+  muxer lists (§3.1). Every host offers `[Mux.yamux, Mux.mplex]`, in
+  that order. The W5.9 gate is `tcp + /noise + yamux` (root PLAN
+  W5.9). A live go-libp2p matrix cannot exercise mplex against v0.50
+  and later, so `scripts/mplex-interop.sh` runs `Mux.mplex` against
+  go-mplex itself.
 
 ## Test milestones (unit 1)
 
@@ -98,6 +98,11 @@ are required acceptance gates (§6, PRINCIPLES 5.3).
 - Reset aborts both directions and retires the stream from the session
   map (§4.9).
 - The suite passes under `+RTS -N1` (§6, PRINCIPLES 5.3).
+- go-mplex interop: `scripts/mplex-interop.sh` runs `Mux.mplex`
+  against go-mplex v0.7.0 over loopback TCP, in both directions. Four
+  streams each move `mplexMessageCap + 7` bytes, with a half-close
+  before every echo. The check stays outside `lake test`, which takes
+  no Go tooling.
 
 ## Vector stance
 
@@ -106,10 +111,12 @@ branch holds no mplex or yamux file; no muxer wire transcript was
 captured. The yamux session carries its own suite in `net/yamux`: the
 fixed header bytes, the hostile frames, and the flow-control cases
 (the yamux pair, plan). This package pins the unit 1 seam
-adaptation through `Mux.yamux` and `Mux.test`. Unit 2 will pin the
-mplex identity and half-close cases through `Mux.mplex`. The live
+adaptation through `Mux.yamux` and `Mux.test`. Unit 2 pins the
+mplex identity and half-close cases through `Mux.mplex`, and the spike's
+four header vectors in `Tests/Mplex.lean`. The live
 gate is the go-libp2p interop matrix at W5.9 over `tcp + /noise +
 yamux` (root PLAN W5.9); the spike proved that path once, and W5.9
 re-runs it against this implementation. The same-node-code-under-both
-payoff of PRINCIPLES 1.3 was demonstrated in-process and over loopback,
-and a live go matrix cannot exercise mplex against v0.50 and later.
+payoff of PRINCIPLES 1.3 was demonstrated in-process and over loopback.
+A live go-libp2p matrix cannot exercise mplex against v0.50 and later;
+`scripts/mplex-interop.sh` covers go-mplex directly.
