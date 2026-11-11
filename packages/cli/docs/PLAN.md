@@ -88,13 +88,43 @@ home blocks the demo echo leg. `pingnode serve` is implemented.
   section. The run uses the exchange deadline after `newStream`
   returns. A bound on the negotiation inside that call waits on the
   pending proposal in the comment linked above.
-- Ping interop with go (the spike's `ping-interop.sh` shape): the
-  script builds `pingd.go` in docker (go-libp2p v0.50.0, CGO off),
-  starts both nodes on loopback, and dials in both directions over
-  `tcp + /noise + yamux`: lean dials go, and go dials lean. The
-  spike selected the muxer from the Noise handshake extension. The
-  target advertises no muxers there, so both sides negotiate the
-  muxer on the wire (the negotiate pair's decision).
+- Go-to-Lean ping is in this slice. The Go peer dials `pingnode
+  serve`, while the outbound `newStream` proposal stays pending.
+  `scripts/ping-go/main.go` dials one multiaddr over TCP, Noise, and
+  yamux, and prints `PING OK rtt=<duration>`. The module requires
+  `github.com/libp2p/go-libp2p v0.50.0`. The host Go toolchain builds
+  it with `CGO_ENABLED=0`. The module asks for Go 1.26.
+  `scripts/ping-go-interop.sh` starts `pingnode serve 0` with
+  `LEAN_NUM_THREADS=1`, joins the `ADDR` multiaddr and the peer id,
+  and requires one ping result. Stdin EOF then waits for server exit
+  0. `finish_child` ends an owned child that misses its wait: SIGTERM,
+  at most 2 seconds (`term_grace`), SIGKILL, then `wait`. A child
+  that has already exited is reaped. The trap keeps the script's
+  status. Three runs of `scripts/ping-go-interop.sh` used
+  `LEAN_NUM_THREADS=1` on the server. Run 1 exited 0 and printed
+  `PASS go-to-lean PING OK rtt=532.916µs`. Run 2 exited 0 and printed
+  `PASS go-to-lean PING OK rtt=778.708µs`. Both had empty stderr.
+  Run 3 exited 1. Stderr was `FAIL go-to-lean: server exit 1`, then
+  `stream failed: closed: the stream closed peer 12D3KooWPDx7LZXLcXg8CgvnLimnKnQeM9rXKPeS9jJgNgmfLAGs protocol /ipfs/ping/1.0.0`,
+  then `resource vanished (error code: 0, noise: the secure connection is closed)`.
+  The architecture decision records the cause. The yamux rule that
+  throws this write stays in place. The shutdown fault stays open.
+  `PING_GO_BIN=/usr/bin/false scripts/ping-go-interop.sh` exited 1
+  with `FAIL go-to-lean: go exit 1`. The `pingnode` process, the
+  stdin holder, and the Go command were gone. A test-only peer that
+  ignores SIGTERM, passed as `PING_GO_BIN`, made the script exit 1
+  after 28 seconds, including its build, with
+  `FAIL go-to-lean: go ping missed 25 s`. The Go peer, the Lean
+  server, and the stdin holder were gone. The cleanup bound is 31
+  seconds: the 25 second ping deadline, then 2 seconds for the peer,
+  2 seconds for the holder, and 2 seconds for the server. The check
+  stays outside `lake test`.
+  Lean-to-Go, the demo, and the bidirectional gate remain unfinished.
+  The two questions at
+  https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244
+  remain pending. The spike selected its muxer from the Noise
+  handshake extension. This stack negotiates the muxer on the wire
+  (the negotiate pair's decision).
 - The in-suite legs pass under `+RTS -N1` (§6; PRINCIPLES 5.3).
 
 ## Test milestones (unit 2)

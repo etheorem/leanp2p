@@ -416,7 +416,9 @@ An inbound peer failure reaches stderr through `onFailure`, on the
 host task that saw it. The accept loop keeps running. A write that
 throws is kept until `close` returns, and the process then exits 1.
 A host-task fault reaches stderr when `close` throws it, and the
-process then exits 1.
+process then exits 1. A Go dialer that closes the TCP connection
+after a successful ping can take this path. The Go-helper decision
+records the runs and the open question.
 
 The read has no reader task. The calling thread blocks in `getLine`.
 The accept loop is the host task that `startListening` started.
@@ -502,8 +504,36 @@ handler. The spike demo still echoes on `/demo/echo/1.0.0`.
   the harness, and never on a shipped or proof path. The tree holds
   `interop-matrix.sh` and `interop-slowreader/` under the root
   `scripts/`, beside the W0.3 vector tooling (§7 row 11's note).
-  Unit 1 adds `pingd.go` and `ping-interop.sh`, in the spike's
-  ping-interop shape. The spike also kept a
+  The Go-to-Lean ping check is `scripts/ping-go/` and
+  `scripts/ping-go-interop.sh`. The Go peer dials `pingnode serve`,
+  so this leg stands while the outbound `newStream` proposal is
+  pending. The module requires go-libp2p v0.50.0. The host Go
+  toolchain builds the helper with `CGO_ENABLED=0`. That module asks
+  for Go 1.26. The helper runs on the host loopback.
+  Shutdown after a successful Go ping is still open. Go closes the
+  TCP connection with RST (linger 0). A TCP read of that RST answers
+  EOF, and the Noise session ends. A later write throws `closedError`
+  in `Libp2p/Security/Transport.lean`: `resourceVanished` code 0,
+  `noise: the secure connection is closed`. Yamux records the write.
+  The session ended because the connection ended, so `Session.join`
+  throws the write (`packages/net/yamux/docs/ARCHITECTURE.md`). The
+  ping handler also answers `.closed`. `serveStream` reports that as
+  `stream failed: closed: the stream closed`. `Host.close` throws the
+  write fault, and `guarding` returns 1.
+  A nonzero `resourceVanished` code stays a fault. Code 0 on this
+  path is the secure connection's own closed error. Treating that
+  error as the peer's end would change the yamux sentence that throws
+  a failed write when the session ends at the connection. The
+  question stands: after the peer's RST has ended the secure
+  connection, should join still throw `resourceVanished` code 0 with
+  that Noise detail, and should `pingnode serve` still exit 1?
+  `finish_child` in `scripts/ping-go-interop.sh` sends SIGTERM, waits
+  at most 2 seconds, sends SIGKILL if the child is alive, and reaps
+  it. The ping deadline, the stdin holder, and the EXIT trap share
+  that helper. The trap keeps the original status. A child that has
+  already exited is reaped. The Go module pin and the Lean
+  toolchain stay as they are. Lean-to-Go and the bidirectional gate
+  stay unfinished. The spike also kept a
   test-plans runner image, `interop/leanp2p/{Makefile,Dockerfile}`.
   The target drops the image, and `scripts/interop-matrix.sh` is the
   gate's only form, so docker appears only inside the scripts.
