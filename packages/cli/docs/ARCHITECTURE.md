@@ -28,8 +28,9 @@ row 18).
 
 `Demo.lean` and `PingNode.lean` are the executable roots. Each
 `main` checks its arguments with `Cmd.parse`. A usage error exits 2.
-`demo` and `pingnode dial` then print `not implemented` to stderr
-and exit 1. `pingnode serve` listens.
+`demo` then prints `not implemented` to stderr and exits 1.
+`pingnode serve` listens. `pingnode dial` dials the expected peer
+and prints one ping.
 `Main.lean`
 stays the gossipsub participant. The Lake lib is `CliHarness`.
 `CliHarness.lean` declares no API, and the lib exists so the suite
@@ -49,8 +50,7 @@ are all named `Cli`. An isolated consumer imported `Cli`, built a
 `Cmd`, and called `validate` on this toolchain, and that build
 completed. This package's lib and empty root are `CliHarness`, so
 the module name `Cli` belongs to the parser. The namespace `Cli`
-stays. That tag sets `experimental.module`. These executables do
-not parse arguments yet. The harness's go-side helpers are scripts
+stays. That tag sets `experimental.module`. Each executable parses its own arguments. The harness's go-side helpers are scripts
 under the root `scripts/`, test-only per CLAUDE.md's dependencies
 rule.
 
@@ -148,9 +148,9 @@ Both files sit in `packages/cli`. The namespaces are `Cli.Demo` and
 `Cli.PingNode`, the shape `Cli.GossipsubSession` already uses.
 `gossipsub-interop` keeps the root `Main`. `interop` keeps the root
 `Interop.Main`. `lakefile.toml` names `demo` and `pingnode`. The
-argument table below is in force. `demo` and `pingnode dial` then
-print `not implemented` to stderr and exit 1. `pingnode serve`
-listens.
+argument table below is in force. `demo` then prints `not
+implemented` to stderr and exits 1. `pingnode serve` listens.
+`pingnode dial` dials the expected peer and prints one ping.
 
 ### Arguments
 
@@ -179,11 +179,15 @@ The last component of a dial address is `/p2p/<id>`.
 that remains in the transport prefix is a usage error. A missing
 final component, a peer component in another position, an address
 whose only component is `/p2p/<id>`, and any other `splitPeer`
-failure are usage errors. The dial then uses that peer id as the
-expected identity. A port of 0 inside a parsed dial address reaches
-the transport, and the transport reports the result as a runtime
-failure. This slice accepts that address and then takes the
-unfinished path.
+failure are usage errors. The dial uses that address and that
+peer id as the arguments of `Host.dial`. A port of 0 inside a
+parsed dial address reaches the transport, and the transport
+reports the result as a runtime failure. `Tests/Cli.lean` covers
+that address with `capture` and a 10 second deadline. The child
+exits inside the deadline, the exit code is 1, stdout is empty, and
+stderr is a nonempty runtime diagnostic. The kernel text stays with
+the transport. `Tests/CliLive.lean` covers a port the test closed
+and matches `nobody listens at <addr>`.
 
 The commands are `Cmd.init` values with an empty flag list, so help
 and version flags are absent. `Cmd.parse` answers the parser error.
@@ -367,8 +371,74 @@ its cleanup tasks. A result that arrives after the timer goes to
 
 The policy adds no library idle timeout. `Host` keeps its interface.
 An authenticated idle connection stays open under §5.4.
-`pingnode serve` opens no outbound stream. The dial slice implements
-the timer. This slice records the policy.
+`pingnode serve` opens no outbound stream. `pingnode dial`
+implements the timer. `demo` still waits for its slice.
+
+### Dial
+
+`validDial` returns the parsed multiaddr and the expected `PeerId`.
+`dial` passes that pair to `Host.dial`. The `some` peer is the
+expected identity `checkIdentity` compares during the upgrade.
+
+The command then opens one ping stream with `Host.newStream`.
+`Conc.withinDeadline` applies `Streams.unauthDeadlineMs` around that
+call. The clock is `Clock.system`. Expiry spawns `Host.close` on a
+`TaskSet` the command owns. The close wakes the parked open. The
+command joins the open and the cleanup set. `release` resets a
+stream that arrives after the timer. The default `release` drops its
+value, and a stream needs this reset.
+
+An `IO.Error` from the open starts the same close, and the command
+joins it. The thrown error stays the first fault. An `Except`
+failure from `newStream` returns that `Host.Error`. `guarding` then
+closes the host. `Host.close` is idempotent, so the expiry close and
+the later `guarding` close both run.
+
+The payload comes from `Crypto.randomBytes` at `Ping.payloadSize`.
+`Ping.ping` runs under a second `withinDeadline` of the same
+duration. That budget starts after `newStream` returns. Expiry
+resets the stream. A protocol failure resets the stream and maps
+the error through `Ping.mapPingError` into `Host.Error.stream`. A
+thrown `IO.Error` stays a fault. Success calls `Stream.close`, then
+prints `PING OK rtt=<ms>ms`. The process prints that line only after
+the echo check.
+
+A usage error exits 2. Success exits 0. A runtime failure or a
+cleanup failure exits 1. Every host `openHost` returns reaches
+`Host.close`.
+
+`Tests/CliLive.lean` covers a successful dial, a port the test
+bound and then closed, an expected-peer mismatch, a peer that stays
+silent during protocol selection, and a peer that reads the payload
+and writes no echo. The two silent peers run until the command
+budget. The capture bound is 50 seconds, and the command exits
+inside it. Stdout is empty on each failure before a successful ping.
+The refused dial prints `nobody listens at <addr>`. The mismatch
+prints `upgrade failed: authentication failure: remote peer id
+differs from the expected peer id`. The silent selection prints
+`stream failed: timeout: the stream opening deadline expired`. The
+missing echo prints `stream failed: timeout: the ping exchange
+deadline expired`.
+
+The dial slice recorded `lake build demo pingnode tests`, then
+`LEANP2P_SUITE=cli .lake/build/bin/tests` and `LEANP2P_SUITE=cli
+LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1 -RTS`. Each of
+those suite runs passed 137 checks, with 0 failed, 0 todo, and 0
+skipped. The port-zero correction builds with `lake build tests`.
+`LEANP2P_SUITE=cli LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1
+-RTS` passed 138 checks, with 0 failed, 0 todo, and 0 skipped. That
+command runs the CLI suites alone. The added check is the bounded
+port-zero exit. `scripts/lint-imports.sh` checked 189 module files,
+with 0 violations. `git diff --check` reported no whitespace errors.
+The serve slice's focused command passed 121 checks. The full
+`lake test` was not rerun. Its recorded baseline still has one
+failure in `Tests/Streams.lean`: `the teardown aborted the stuck
+write: the peer meets a reset`.
+
+`demo` still prints `not implemented` and exits 1.
+`Libp2p.Protocols.TestSupport.Echo` is still absent. Lean-to-Go and
+the bidirectional gate stay unfinished. The abrupt Go-first close
+stays the historical case in the Go-helper decision.
 
 ### Stream retirement
 

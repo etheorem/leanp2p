@@ -5,8 +5,10 @@ import Tests.Support
 # Demo and pingnode arguments
 
 The checks run the built binaries. A usage error exits 2 with an
-empty stdout. `demo` and `pingnode dial` still reach the unfinished
-diagnostic. `pingnode serve` with a valid port listens.
+empty stdout. A dial to port 0 is an immediate local failure.
+`capture` bounds it at 10 seconds. The child exits inside that
+deadline with code 1, empty stdout, and a nonempty stderr.
+`pingnode serve` with a valid port listens.
 -/
 
 set_option autoImplicit false
@@ -143,6 +145,17 @@ private def expectServe (runner : Runner) (name port : String) (requireBind : Bo
     runner.check s!"{name}: runtime stderr"
       (out.stderr != "" && !out.stderr.startsWith "invalid port:")
 
+/-- A dial that passes validation and then fails before a ping.
+The deadline bounds an immediate local failure. The child must exit
+inside it, with code 1, empty stdout, and a nonempty stderr. -/
+private def expectDialFail (runner : Runner) (name : String) (args : Array String) :
+    IO Unit := do
+  let out ← capture ".lake/build/bin/pingnode" args 10000
+  runner.check s!"{name}: bounded" !out.timedOut
+  runner.check s!"{name}: exit 1" (out.exitCode == 1)
+  runner.check s!"{name}: stdout empty" (out.stdout == "")
+  runner.check s!"{name}: runtime stderr" (out.stderr != "")
+
 /-- Run one built executable and compare its exit, stdout, and stderr. -/
 private def expect (runner : Runner) (name exe : String) (args : Array String)
     (code : UInt32) (stderr : String) : IO Unit := do
@@ -189,11 +202,10 @@ def run (runner : Runner) : IO Unit := do
   let dial := s!"/ip4/127.0.0.1/tcp/4001/p2p/{peer}"
   expect runner "pingnode dial missing address" "pingnode" #["dial"] 2
     "Missing positional argument `<multiaddr>.`"
-  expect runner "pingnode dial" "pingnode" #[ "dial", dial ] 1
-    "pingnode: not implemented"
-  expect runner "pingnode dial port 0" "pingnode"
-    #[ "dial", s!"/ip4/127.0.0.1/tcp/0/p2p/{peer}" ] 1
-    "pingnode: not implemented"
+  -- Port 0 fails in the kernel before a listener is required. The
+  -- capture bound is 10 seconds. A refused port that the suite binds
+  -- itself lives in `Tests/CliLive.lean`.
+  expectDialFail runner "pingnode dial port 0" #[ "dial", s!"/ip4/127.0.0.1/tcp/0/p2p/{peer}" ]
   expect runner "pingnode dial extra" "pingnode" #[ "dial", dial, "extra" ] 2
     "Redundant positional argument `extra`."
   expect runner "pingnode dial parse" "pingnode" #["dial", "not-an-addr"] 2

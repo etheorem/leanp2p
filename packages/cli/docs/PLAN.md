@@ -32,8 +32,9 @@ The executable roots are `Demo` and `PingNode`, in `packages/cli`.
 `Main` stays the root of `gossipsub-interop`. The lib is
 `CliHarness`. Its globs include `Demo` and `PingNode`, and the
 lakefile names the `demo` and `pingnode` executables. A usage
-error exits 2. `demo` and `pingnode dial` print `not implemented`
-and exit 1. `pingnode serve` listens.
+error exits 2. `demo` prints `not implemented` and exits 1.
+`pingnode serve` listens. `pingnode dial` dials the expected peer
+and prints one ping.
 The W5.8 behavior section
 of the package architecture is the contract those binaries implement,
 including the argument table, the exit codes, the ping and identify
@@ -44,9 +45,10 @@ working decisions. The review context is
 https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
 One-shot `pingnode dial` and `demo` apply a 30 second budget around
 `Host.newStream`. Expiry fails the command and closes the owned
-host. The dial slice implements that timer. The demo echo handler
+host. `pingnode dial` implements that timer. The demo echo handler
 and client belong at `Libp2p.Protocols.TestSupport.Echo`. This slice
-does not add that module. `pingnode serve` is implemented.
+does not add that module. `pingnode serve` and `pingnode dial` are
+implemented. `demo` still prints `not implemented`.
 
 - The demo runs end to end over loopback: two hosts dial, complete the
   upgrade, identify, and exchange pings. The listener's identify
@@ -82,13 +84,39 @@ does not add that module. `pingnode serve` is implemented.
   whose transport prefix still contains a `p2p` component. A line
   break in an operand stays inside that one stderr line.
   `Tests/Cli.lean` runs the built binaries for these cases. A valid
-  `demo` or `pingnode dial` list still exits 1 with the unfinished
-  diagnostic. A valid `pingnode serve` port is not a usage error.
-- `pingnode dial` against `pingnode serve` prints `PING OK`, and both
-  processes close their hosts on the failure paths of the behavior
-  section. The run uses the exchange deadline after `newStream`
-  returns, and the 30 second budget around that call. The dial slice
-  implements the budget.
+  `demo` list exits 1 with the unfinished diagnostic. A dial to
+  port 0 uses `capture` with a 10 second deadline. The child exits
+  inside that deadline with code 1, empty stdout, and a nonempty
+  runtime diagnostic. A valid `pingnode serve` port reaches
+  `startListening`.
+- `pingnode dial` against `pingnode serve` prints `PING OK rtt=<ms>ms`
+  and exits 0. The server then exits 0 on stdin EOF. The command
+  passes the parsed address and the expected peer to `Host.dial`.
+  `Host.newStream` runs under `Streams.unauthDeadlineMs`. Expiry
+  closes the owned host and joins the open and the cleanup task.
+  `release` resets a late stream. The exchange deadline starts after
+  `newStream` returns, and expiry resets that stream. A protocol
+  failure resets the stream and maps through `Ping.mapPingError`.
+  `Tests/CliLive.lean` also covers a closed port, an expected-peer
+  mismatch, a peer that stays silent during protocol selection, and
+  a peer that reads the payload and writes no echo. Each failure
+  before a successful ping has empty stdout. The capture bound on
+  the two silent peers is 50 seconds, and the command exits inside
+  it. The dial slice recorded `lake build demo pingnode tests`,
+  then `LEANP2P_SUITE=cli .lake/build/bin/tests` and `LEANP2P_SUITE=cli
+  LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1 -RTS`. Each of
+  those suite runs passed 137 checks, with 0 failed, 0 todo, and 0
+  skipped. The port-zero correction builds with `lake build tests`.
+  `LEANP2P_SUITE=cli LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1
+  -RTS` passed 138 checks, with 0 failed, 0 todo, and 0 skipped.
+  That command runs the CLI suites alone. The added check is the
+  bounded port-zero exit. `scripts/lint-imports.sh` checked 189
+  module files, with 0 violations. `git diff --check` reported no
+  whitespace errors. The 121-check command above is the serve
+  slice. The full `lake test` was not rerun. Its recorded baseline
+  still has one failure in `Tests/Streams.lean`: `the teardown
+  aborted the stuck write: the peer meets a reset`. Lean-to-Go, the
+  demo, echo, and the bidirectional gate remain unfinished.
 - Go-to-Lean ping is in this slice. The Go peer dials `pingnode
   serve`. `scripts/ping-go/main.go` dials one multiaddr over TCP,
   Noise, and yamux, prints `PING OK rtt=<duration>`, and waits for

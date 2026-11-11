@@ -3,6 +3,7 @@ import Conc
 import Crypto
 import Streams
 import Multiformats
+import Libp2p.Core
 import Libp2p.Identity
 import Libp2p.Security
 import Libp2p.Mux
@@ -22,8 +23,9 @@ escaped in the usage line.
 
 `serve` builds one host after that check. It listens, registers
 identify, prints `ADDR`, and flushes. It then reads stdin in `IO`.
-EOF calls `Host.close` and exits 0. `dial` still reaches the
-unfinished node and exits 1.
+EOF calls `Host.close` and exits 0. `dial` dials the expected peer,
+opens one ping stream under the 30 second command budget, completes
+one exchange, prints `PING OK`, and closes the host.
 -/
 
 set_option autoImplicit false
@@ -31,7 +33,7 @@ set_option autoImplicit false
 namespace Cli.PingNode
 
 open Cli
-open Libp2p.Host (Host Failure)
+open Libp2p.Host (Host Error Failure)
 open Libp2p.Identity (PeerId PrivKey)
 
 /-- One string operand. -/
@@ -73,11 +75,6 @@ private def oneLine (text : String) : String :=
 private def usage (line : String) : IO UInt32 := do
   IO.eprintln (oneLine line)
   return 2
-
-/-- The dial path is not built in this slice. -/
-private def unfinished : IO UInt32 := do
-  IO.eprintln "pingnode: not implemented"
-  return 1
 
 /-- The agent string identify advertises. -/
 private def agent : String := "leanp2p"
@@ -219,20 +216,144 @@ private def transportHasPeer (transport : Multiformats.Multiaddr) : Bool :=
   transport.components.any fun c =>
     decide (c.proto = Multiformats.Protocol.«p2p»)
 
-/-- Accept a final `/p2p/<id>` whose transport prefix has no `/p2p`. -/
-private def validDial (text : String) : Except String Unit := do
+/-- Accept a final `/p2p/<id>` whose transport prefix has no `/p2p`.
+The pair is the address `Host.dial` takes and the expected peer. -/
+private def validDial (text : String) :
+    Except String (Multiformats.Multiaddr × PeerId) := do
   let addr ← match Multiformats.Multiaddr.parse? text with
     | .ok addr => pure addr
     | .error err => throw s!"{reprStr err} {text}"
   match Host.splitPeer addr with
-  | .ok (transport, some _) =>
+  | .ok (transport, some peer) =>
     if transportHasPeer transport then
       throw s!"dial address has an earlier /p2p peer: {text}"
-    else pure ()
+    else pure (addr, peer)
   | .ok (_, none) => throw s!"dial address has no final /p2p peer: {text}"
   | .error err => throw s!"{err} {text}"
 
-/-- Check `args`. `serve` runs the host. `dial` is still unfinished. -/
+/-- The command budget around `Host.newStream` and the ping exchange.
+The home of the duration is `Streams.unauthDeadlineMs`. -/
+private def commandBudget : Nat := Streams.unauthDeadlineMs
+
+/-- Reset `stream`, and suppress a secondary reset error. -/
+private def resetStream (stream : Streams.Stream) : IO Unit := do
+  try Conc.Async.run stream.reset catch _ => pure ()
+
+/-- Join `cleanup`. A fault of the join is kept when `primary` is empty. -/
+private def joinCleanup (cleanup : Conc.TaskSet) (primary : Option IO.Error) :
+    IO (Option IO.Error) := do
+  try
+    Conc.Async.run cleanup.joinAll
+    return primary
+  catch e =>
+    return primary <|> some e
+
+/-- Print `line` and exit 1. -/
+private def failLine (line : String) : IO UInt32 := do
+  IO.eprintln line
+  return 1
+
+/-- One ping on `stream`. The exchange deadline starts here. A timeout
+or a protocol failure resets the stream. A validated echo closes it. -/
+private def onePing (stream : Streams.Stream) : IO UInt32 := do
+  let payload ← match ← (Crypto.randomBytes Libp2p.Protocols.Ping.payloadSize).run with
+    | .error e =>
+      resetStream stream
+      IO.eprintln (reprStr e)
+      return 1
+    | .ok payload => pure payload
+  let resets ← Conc.TaskSet.new
+  let raced ← try
+      Conc.Async.run <|
+        Conc.withinDeadline Conc.Clock.system commandBudget
+          (resets.spawn stream.reset)
+          (Libp2p.Protocols.Ping.ping stream Conc.Clock.system payload)
+    catch e =>
+      resets.spawn stream.reset
+      let fault ← joinCleanup resets (some e)
+      IO.eprintln s!"{fault.getD e}"
+      return 1
+  let later ← joinCleanup resets none
+  match raced with
+  | .error .deadlineExpired =>
+    IO.eprintln (Error.stream (.timeout "the ping exchange deadline expired")).render
+    if let some err := later then IO.eprintln s!"{err}"
+    return 1
+  | .error .closed =>
+    resetStream stream
+    IO.eprintln (Error.stream (.closed "the ping exchange select closed")).render
+    if let some err := later then IO.eprintln s!"{err}"
+    return 1
+  | .ok (.error e) =>
+    resetStream stream
+    IO.eprintln (Error.stream (Libp2p.Protocols.Ping.mapPingError e)).render
+    if let some err := later then IO.eprintln s!"{err}"
+    return 1
+  | .ok (.ok none) =>
+    resetStream stream
+    IO.eprintln (Error.stream (.protocol "ping returned no round trip")).render
+    if let some err := later then IO.eprintln s!"{err}"
+    return 1
+  | .ok (.ok (some rtt)) =>
+    if let some err := later then
+      resetStream stream
+      IO.eprintln s!"{err}"
+      return 1
+    try
+      Conc.Async.run stream.close
+    catch e =>
+      IO.eprintln s!"{e}"
+      return 1
+    IO.println s!"PING OK rtt={rtt}ms"
+    return 0
+
+/-- Open the ping stream under `commandBudget`. Expiry starts
+`Host.close` on `cleanup`, which wakes the parked open. A late stream
+is reset through the same set. -/
+private def openPing (host : Host) (peer : PeerId) (cleanup : Conc.TaskSet) :
+    IO (Except Conc.Error (Except Error (Libp2p.Core.ProtocolId × Streams.Stream))) := do
+  try
+    Conc.Async.run <|
+      Conc.withinDeadline Conc.Clock.system commandBudget
+        (cleanup.spawn host.close)
+        (host.newStream peer [Libp2p.Protocols.Ping.protocolId])
+        (fun
+          | .ok (_, stream) => cleanup.spawn stream.reset
+          | .error _ => pure ())
+  catch e =>
+    cleanup.spawn host.close
+    let fault ← joinCleanup cleanup (some e)
+    if let some err := fault then throw err
+    throw e
+
+/-- Dial `addr`, require `peer`, and print one ping. `guarding` closes
+the host on every return. -/
+private def dial (addr : Multiformats.Multiaddr) (peer : PeerId) : IO UInt32 := do
+  let faults ← IO.mkRef (none : Option IO.Error)
+  match ← openHost faults with
+  | .error line => failLine line
+  | .ok host =>
+    guarding host faults do
+      match ← Conc.Async.run (host.dial addr (some peer)) with
+      | .error e => failLine e.render
+      | .ok _ =>
+        let cleanup ← Conc.TaskSet.new
+        let opened ← openPing host peer cleanup
+        match opened with
+        | .error .deadlineExpired =>
+          let later ← joinCleanup cleanup none
+          IO.eprintln (Error.stream (.timeout "the stream opening deadline expired")).render
+          if let some err := later then IO.eprintln s!"{err}"
+          return 1
+        | .error .closed =>
+          let later ← joinCleanup cleanup none
+          IO.eprintln (Error.stream (.closed "the stream opening select closed")).render
+          if let some err := later then IO.eprintln s!"{err}"
+          return 1
+        | .ok (.error e) => failLine e.render
+        | .ok (.ok (_, stream)) => onePing stream
+
+/-- Check `args`. `serve` runs the host. `dial` pings the expected peer. -/
 def main (args : List String) : IO UInt32 := do
   match command.parse args with
   | .error err => usage err.kind.msg
@@ -247,7 +368,7 @@ def main (args : List String) : IO UInt32 := do
       match operandValue parsed "multiaddr" with
       | some text =>
         match validDial text with
-        | .ok () => unfinished
+        | .ok (addr, peer) => dial addr peer
         | .error line => usage line
       | none => usage "missing multiaddr"
     | _ => usage "missing subcommand"

@@ -5,7 +5,9 @@ import Multiformats
 import Libp2p.Identity
 import Libp2p.Security
 import Libp2p.Mux
+import Libp2p.Core
 import Libp2p.Host
+import Libp2p.Negotiate
 import Libp2p.Protocols.Ping
 import Libp2p.Protocols.Identify
 import Tests.Cli
@@ -18,7 +20,10 @@ The checks run the built `pingnode` with `LEAN_NUM_THREADS=1`. One
 client host dials it over TCP and Noise while stdin stays open. The
 other checks cover EOF, a busy port, a failed `ADDR` write, an inbound
 failure, a deadline that kills a sleeper, and a registered task that
-returns an error.
+returns an error. The dial checks run the built `pingnode dial` against
+this server, a closed port, a different peer id, a peer that accepts
+the stream and stays silent, and a peer that reads the payload and
+does not echo it.
 
 Each reader task belongs to the check that started it. The check wakes
 the task by closing the pipe it reads, and then joins it.
@@ -87,8 +92,9 @@ private def collectLines (h : IO.FS.Handle) (lines : IO.Ref (Array String)) : IO
     if line.isEmpty then return
     lines.modify (·.push (stripNl line))
 
-/-- A fresh client host with the same stack as `pingnode serve`. -/
-private def clientHost : IO Host := do
+/-- A fresh host with the same stack as `pingnode serve`. `handlers`
+serves inbound streams. -/
+private def hosted (handlers : List Libp2p.Core.StreamHandler) : IO Host := do
   let seed ← match ← Crypto.ed25519Generate.run with
     | .error e => throw <| IO.userError (reprStr e)
     | .ok seed => pure seed
@@ -103,9 +109,14 @@ private def clientHost : IO Host := do
     transports := [Streams.Tcp.transport]
     security := [Libp2p.Security.Noise.securityProtocol noise]
     muxers := [Libp2p.Mux.yamux, Libp2p.Mux.mplex]
+    handlers
   } : BaseIO _) with
   | .error e => throw <| IO.userError (reprStr e)
   | .ok host => return host
+
+/-- A fresh client host with the same stack as `pingnode serve`. -/
+private def clientHost : IO Host :=
+  hosted []
 
 /-- Dial `peer`, ping once, and read its identify record. `host.close`
 finishes before this function returns, including when the exchange throws. -/
@@ -425,6 +436,177 @@ private def timeoutCleanup (runner : Runner) : IO Unit := do
   runner.check "timeout cleanup bounded" (elapsed < 5000)
   runner.check "timeout cleanup readers" (out.stdout == "" && out.stderr == "")
 
+/-- `stdout` is one `PING OK` line. -/
+private def pingStdout (stdout : String) : Bool :=
+  match stdout.splitOn "rtt=" with
+  | ["PING OK ", rest] => rest.endsWith "ms\n" && rest != "ms\n"
+  | _ => false
+
+/-- Close `host` and keep the earlier fault. -/
+private def closeHost (host : Host) (primary : Option IO.Error) : IO (Option IO.Error) := do
+  try
+    Conc.Async.run host.close
+    return primary
+  catch e =>
+    return primary <|> some e
+
+/-- `pingnode dial` against the live server prints one RTT and exits 0.
+The server then sees stdin EOF and exits 0. -/
+private def dialOk (runner : Runner) : IO Unit := do
+  withSession fun session => do
+    let target := s!"{session.addr}/p2p/{session.peer}"
+    let out ← Tests.Cli.capture bin #["dial", target] 20000 oneWorker
+    runner.check "dial ping exits" (!out.timedOut && out.exitCode == 0)
+    runner.check "dial ping stdout" (pingStdout out.stdout)
+    runner.check "dial ping stderr empty" (out.stderr == "")
+    session.stdin.set none
+    let (code, killed) ← Tests.Cli.waitChild session.child 10000
+    runner.check "dial server exits" (code == 0 && !killed)
+
+/-- A port this check bound and then closed refuses the dial. -/
+private def dialRefused (runner : Runner) : IO Unit := do
+  let loop ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/0" with
+    | .ok addr => pure addr
+    | .error e => throw <| IO.userError (reprStr e)
+  let listener ← Conc.Async.run (Streams.Tcp.listen loop)
+  listener.close
+  Conc.Async.run listener.join
+  let host ← clientHost
+  let mut fault : Option IO.Error := none
+  try
+    let target := s!"{listener.addr}/p2p/{host.localPeer}"
+    let out ← Tests.Cli.capture bin #["dial", target] 10000 oneWorker
+    runner.check "dial refused exits" (!out.timedOut && out.exitCode == 1)
+    runner.check "dial refused stdout" (out.stdout == "")
+    runner.check "dial refused stderr"
+      (out.stderr == s!"nobody listens at {listener.addr}\n")
+  catch e =>
+    fault := some e
+  fault ← closeHost host fault
+  if let some e := fault then throw e
+
+/-- The address is the server's, and the peer id is a different host. -/
+private def dialMismatch (runner : Runner) : IO Unit := do
+  let other ← clientHost
+  let mut fault : Option IO.Error := none
+  try
+    withSession fun session => do
+      let target := s!"{session.addr}/p2p/{other.localPeer}"
+      let out ← Tests.Cli.capture bin #["dial", target] 15000 oneWorker
+      runner.check "dial mismatch exits" (!out.timedOut && out.exitCode == 1)
+      runner.check "dial mismatch stdout" (out.stdout == "")
+      runner.check "dial mismatch stderr"
+        (out.stderr == "upgrade failed: authentication failure: remote peer id differs from the expected peer id\n")
+      session.stdin.set none
+      let (code, killed) ← Tests.Cli.waitChild session.child 10000
+      runner.check "dial mismatch server exits" (code == 0 && !killed)
+  catch e =>
+    fault := some e
+  fault ← closeHost other fault
+  if let some e := fault then throw e
+
+/-- Accept one connection, take the ping stream, and do not read it.
+The second accept parks until the dialer closes the session. -/
+private def stallSession (listener : Streams.Listener)
+    (sec : Libp2p.Core.SecurityProtocol) : IO Unit := do
+  Conc.Async.run do
+    match ← listener.accept with
+    | none => pure ()
+    | some conn =>
+      match ← (Libp2p.Negotiate.upgrade Libp2p.Core.Role.responder conn ByteArray.empty none
+          [sec] [Libp2p.Mux.yamux]).run with
+      | .error _ => pure ()
+      | .ok (session, _) =>
+        match ← session.accept with
+        | some _ => discard <| session.accept
+        | none => pure ()
+        session.close
+        discard <| session.join.run
+
+/-- The peer finishes Noise and yamux, then stays silent during
+protocol selection. The dialer's own budget ends the command. -/
+private def dialStall (runner : Runner) : IO Unit := do
+  let seed ← match ← Crypto.ed25519Generate.run with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok seed => pure seed
+  let key ← match PrivKey.ofData? .ed25519 seed.bytes with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok key => pure key
+  let noise ← match ← (Libp2p.Security.Noise.Config.generate key).run with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok noise => pure noise
+  let pub ← match key.toPublic with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok pub => pure pub
+  let peer ← match PeerId.ofPubKey pub with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok peer => pure peer
+  let loop ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/0" with
+    | .ok addr => pure addr
+    | .error e => throw <| IO.userError (reprStr e)
+  let listener ← Conc.Async.run (Streams.Tcp.listen loop)
+  let task ← IO.asTask
+    (stallSession listener (Libp2p.Security.Noise.securityProtocol noise))
+    Task.Priority.dedicated
+  let mut fault : Option IO.Error := none
+  try
+    let target := s!"{listener.addr}/p2p/{peer}"
+    let start ← IO.monoMsNow
+    let out ← Tests.Cli.capture bin #["dial", target] 50000 oneWorker
+    let elapsed := (← IO.monoMsNow) - start
+    runner.check "dial stall exits" (!out.timedOut && out.exitCode == 1)
+    runner.check "dial stall stdout" (out.stdout == "")
+    runner.check "dial stall stderr"
+      (out.stderr == "stream failed: timeout: the stream opening deadline expired\n")
+    runner.check "dial stall bounded" (elapsed ≥ 25000 && elapsed < 45000)
+  catch e =>
+    fault := some e
+  listener.close
+  try
+    match ← IO.wait task with
+    | .ok () => pure ()
+    | .error e =>
+      if fault.isNone then fault := some e
+  catch e =>
+    if fault.isNone then fault := some e
+  if let some e := fault then throw e
+
+/-- Read the payload and park. The handler does not write the echo. -/
+private def silentPing : Libp2p.Core.StreamHandler where
+  id := Libp2p.Protocols.Ping.protocolId
+  handle _ s := ExceptT.mk do
+    match ← s.read with
+    | .ok (some _) =>
+      match ← s.read with
+      | _ => return .ok ()
+    | _ => return .ok ()
+
+/-- The peer selects ping and does not return an echo. The exchange
+budget ends the command, and `Host.close` joins the parked handler. -/
+private def dialNoEcho (runner : Runner) : IO Unit := do
+  let host ← hosted [silentPing]
+  let mut fault : Option IO.Error := none
+  try
+    let loop ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/0" with
+      | .ok addr => pure addr
+      | .error e => throw <| IO.userError (reprStr e)
+    let bound ← match ← Conc.Async.run (host.startListening loop) with
+      | .error e => throw <| IO.userError e.render
+      | .ok bound => pure bound
+    let target := s!"{bound}/p2p/{host.localPeer}"
+    let start ← IO.monoMsNow
+    let out ← Tests.Cli.capture bin #["dial", target] 50000 oneWorker
+    let elapsed := (← IO.monoMsNow) - start
+    runner.check "dial no echo exits" (!out.timedOut && out.exitCode == 1)
+    runner.check "dial no echo stdout" (out.stdout == "")
+    runner.check "dial no echo stderr"
+      (out.stderr == "stream failed: timeout: the ping exchange deadline expired\n")
+    runner.check "dial no echo bounded" (elapsed ≥ 25000 && elapsed < 45000)
+  catch e =>
+    fault := some e
+  fault ← closeHost host fault
+  if let some e := fault then throw e
+
 /-- The server checks. -/
 def run (runner : Runner) : IO Unit := do
   runner.section "pingnode serve" "packages/cli/PingNode.lean"
@@ -435,5 +617,11 @@ def run (runner : Runner) : IO Unit := do
   closedStdout runner
   timeoutCleanup runner
   registeredFault runner
+  runner.section "pingnode dial" "packages/cli/PingNode.lean"
+  dialOk runner
+  dialRefused runner
+  dialMismatch runner
+  dialStall runner
+  dialNoEcho runner
 
 end Tests.CliLive
