@@ -37,6 +37,11 @@ package docs: the negotiation leftover seeds the handshake, the
 muxer negotiation starts with no bytes, and the muxer negotiation
 leftover reaches `Muxer.open`.
 
+The host of `libp2p/host` composes its upgrade from these public
+stages (`Libp2p/Host/Upgrade.lean`). Its secured checkpoint sits
+between the handshake and the muxer stage. A change to the stage order
+in one module needs the same change in the other.
+
 ## The secure connection has an owner
 
 The handshake answers a `SecureConn`, whose transport runs tasks, and
