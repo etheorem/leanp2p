@@ -2,8 +2,11 @@ import Crypto
 import Streams
 import Interop.Config
 import Interop.Redis
-import Interop.Mock.Stack
 import Libp2p.Identity
+import Libp2p.Security
+import Libp2p.Mux
+import Libp2p.Host
+import Libp2p.Protocols.Ping
 
 /-!
 # The transport-interop harness
@@ -15,7 +18,9 @@ test-plan peer is the model on the other side of the wire
 (`vendor/go-libp2p/test-plans/cmd/ping/main.go`).
 
 Both sides read the configuration, connect to Redis, and start a host
-with the TCP transport, Noise, and the configured muxer.
+with the TCP transport, Noise, and yamux. `libp2p/mux` holds no mplex
+value (P2, the mux PLAN, unit 2), so a run with `muxer=mplex` exits
+nonzero at the host start.
 
 * **The listener** listens, publishes its address with the `/p2p/<id>`
   suffix through `RPUSH`, and sleeps for the test timeout. The runner
@@ -50,8 +55,9 @@ namespace Interop
 
 open Conc (Async)
 open Interop.Config (Config)
-open Interop.Mock
 open Libp2p.Identity (PeerId PrivKey)
+open Libp2p.Host (Host)
+open Libp2p.Protocols (Ping.protocolId Ping.payloadSize Ping.ping Ping.pingHandler)
 
 /-- The interval between two `PING`s while Redis starts, in milliseconds.
 The go peer waits the same 100 ms (line 84 of its `main.go`). -/
@@ -83,8 +89,9 @@ partial def connectRedis (cfg : Config) (deadlineMs : Nat) : Run Redis.Client :=
   if deadlineMs ≤ (← IO.monoMsNow) then
     throw s!"redis at {cfg.redisAddr.describe}: no answer within {cfg.timeoutSec} s"
   let sleep ← Conc.Park.sleep redisRetryMs ()
-  -- Park: the sleep ends it; nothing else waits on this task. The
-  -- ascription keeps `select` in `Async` (see `dial` for the unfolding).
+  -- Park: the sleep ends it; nothing else waits on this task. `Run`
+  -- unfolds to `Async (Except String _)`, so the ascription keeps
+  -- `select` in `Async`.
   (Conc.select #[sleep] : Async Unit)
   connectRedis cfg deadlineMs
 
@@ -96,19 +103,24 @@ def generateKey : Run PrivKey := do
   let seed ← orFail "identity seed" (fun e => reprStr e) (← Crypto.ed25519Generate.run)
   orFail "identity key" (fun e => reprStr e) (PrivKey.ofData? .ed25519 seed.bytes)
 
-/-- The host of one run: TCP, Noise, and the configured muxer, with the
-ping handler (root §3.1: the ordered lists are assembled here). -/
+/-- The host of one run: TCP, Noise with a static key from the system
+generator, yamux, and the ping handler (root §3.1: the ordered lists
+are assembled here). -/
 def startHost (cfg : Config) : Run Host := do
+  let muxer ← match cfg.muxer with
+    | .yamux => pure Libp2p.Mux.yamux
+    | .mplex => throw "muxer mplex: libp2p/mux holds no mplex value (P2, the mux PLAN, unit 2)"
   let key ← generateKey
-  let muxer := match cfg.muxer with
-    | .yamux => yamux
-    | .mplex => mplex
-  orFail "host" (fun e => reprStr e) (← Host.new {
-    key
+  let noise ← orFail "noise static key" (fun e => reprStr e)
+    (← (Libp2p.Security.Noise.Config.generate key).run)
+  -- The ascription keeps the call in `BaseIO`. The `←` lifts the
+  -- action into the run, and `orFail` binds the `Except` as data.
+  orFail "host" (fun e => reprStr e) (← (Host.new {
+    identity := key
     transports := [Streams.Tcp.transport]
-    securities := [noise key]
+    security := [Libp2p.Security.Noise.securityProtocol noise]
     muxers := [muxer]
-    handlers := [Ping.handler] })
+    handlers := [Ping.pingHandler] } : BaseIO _))
 
 /-- The address the listener publishes: the bound address, with the
 Redis connection's local IP in place of `0.0.0.0`, and the `/p2p/<id>`
@@ -126,8 +138,8 @@ def publishedAddr (bound redisLocal : Multiformats.Multiaddr) (peer : PeerId) :
 
 /-- The listener: publish the address, then sleep for the timeout. -/
 def listen (cfg : Config) (redis : Redis.Client) (h : Host) : Run Unit := do
-  let bound ← orFail "listen" (fun e => reprStr e) (← h.startListening cfg.listenAddr)
-  let addr ← orFail "address" id (publishedAddr bound redis.conn.localAddr h.id)
+  let bound ← orFail "listen" toString (← h.startListening cfg.listenAddr)
+  let addr ← orFail "address" id (publishedAddr bound redis.conn.localAddr h.localPeer)
   IO.eprintln s!"listening on {addr}"
   discard <| orFail "redis RPUSH" (fun e => reprStr e)
     (← redis.rpush Config.listenerAddrKey addr)
@@ -148,20 +160,19 @@ def dial (cfg : Config) (redis : Redis.Client) (h : Host) : Run Unit := do
     (Multiformats.Multiaddr.parse? text)
   IO.eprintln s!"dialing {text}"
   let start ← IO.monoNanosNow
-  let peer ← orFail "dial" (fun e => reprStr e) (← h.dial addr)
-  let (_, stream) ← orFail "ping stream" (fun e => reprStr e)
+  let peer ← orFail "dial" toString (← h.dial addr)
+  let (_, stream) ← orFail "ping stream" toString
     (← h.newStream peer [Ping.protocolId])
   let payload ← orFail "ping payload" (fun e => reprStr e)
     (← (Crypto.randomBytes Ping.payloadSize).run)
   let pingStart ← IO.monoNanosNow
-  -- `Run` unfolds to `Async (Except String _)`, the type of `Ping.ping`,
-  -- so an unannotated `←` would run the call as a `Run` step and throw
-  -- its error here, before the reset below. The annotation makes Lean
-  -- lift the `Async` call and bind the `Except` as data.
-  let answer : Except String (Option Nat) ← (Ping.ping stream Conc.Clock.system payload : Async _)
+  -- The annotation binds the ping's `Except` as data, so its failure
+  -- waits until after the reset below. `orFail` then reports it.
+  let answer : Except Libp2p.Protocols.Ping.Error (Option Nat) ←
+    (Ping.ping stream Conc.Clock.system payload : Async _)
   let done ← IO.monoNanosNow
   stream.reset
-  discard <| orFail "ping" id answer
+  discard <| orFail "ping" (fun e => reprStr e) answer
   IO.println (Config.timingJson ((done - start) / 1000) ((done - pingStart) / 1000))
 
 /-- One harness run. The host closes on every path (cli ARCHITECTURE,

@@ -17,11 +17,12 @@ the runner compares the keys literally.
 
 ## What the harness supports
 
-The gate runs `tcp + /noise + yamux` (root PLAN W5.9). The harness also
-reads `mplex`, the second `Muxer` value (root §4.9). Any other
-transport, security, or muxer name is a configuration error, and the
-binary exits nonzero (the test plan: "On error, the dialer should
-return a non-zero exit code").
+The gate runs `tcp + /noise + yamux` (root PLAN W5.9). The parse also
+reads `mplex`, the second muxer of root §4.9. `libp2p/mux` holds no
+mplex value yet (P2, the mux PLAN, unit 2), so the host start refuses
+it. Any other transport, security, or muxer name is a configuration
+error. On every refusal the binary exits nonzero (the test plan: "On
+error, the dialer should return a non-zero exit code").
 
 `ip` and `redis_addr` take literal IPv4 addresses. The TCP transport
 dials and listens on `/ip4` and `/ip6` only (the streams ARCHITECTURE,
