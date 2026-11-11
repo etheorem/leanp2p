@@ -180,9 +180,9 @@ The production result reports the full buffer size. Concatenated field
 encodings form one message; this codec cannot infer a boundary between
 two messages.
 
-The production decoder walks the `ByteArray` with a cursor. It gives
-the varint dependency a window bounded by that dependency's byte budget.
-It checks payload lengths against the available bytes before extraction.
+The production decoder walks the `ByteArray` with a cursor. It reads
+each varint through `Varint.decodeAt?`, and `codec/varint` cuts the
+window of its own byte budget. The decoder checks payload lengths against the available bytes before extraction.
 A peer cannot cause an allocation from a promised length alone.
 
 `getSub?` returns the last payload as specified by this package's
