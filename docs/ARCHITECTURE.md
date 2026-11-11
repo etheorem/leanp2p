@@ -1002,7 +1002,7 @@ interface seams exist, and no implementation work is scheduled.
 | TCP transport | consensus networking runs on TCP (and QUIC) | done |
 | Noise XX (`/noise`) | the only security protocol in the eth2 networking spec | done |
 | yamux | the preferred muxer over TCP: the spec makes yamux take precedence over mplex during negotiation (QUIC muxes internally) | done, hardened |
-| mplex | the spec requires it of every TCP client (`vendor/consensus-specs/specs/phase0/p2p-interface.md`, lines 210 to 215). Every host offers `[Mux.yamux, Mux.mplex]`, in that order. go-libp2p v0.50 removed mplex from its defaults, a difference with go that PRINCIPLES 2.1 records | done |
+| mplex | the spec requires it of every TCP client (`vendor/consensus-specs/specs/phase0/p2p-interface.md`, lines 210 to 215). Every host offers `[Mux.yamux, Mux.mplex]`, in that order. go-libp2p v0.50 removed mplex from its defaults. This document records that as a difference with go, where the spec wins (PRINCIPLES 2.1) | done |
 | multistream-select | negotiation for security + muxer | done |
 | multiformats (multiaddr/varint/peer-id multihash, base58/base32) | dialing, ENR ↔ multiaddr, peer ids | done |
 | keys + peer id, **Ed25519** (+ secp256k1 host keys) | host identity; clients use Ed25519/secp256k1 | done (Ed25519 and secp256k1) |
