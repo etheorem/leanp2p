@@ -21,7 +21,8 @@ stream id: `header = id * 8 + flag`. The header takes at most 9 bytes
 Two decoders read the same format. `decode?` is the model over the
 `List Nat` byte model, and it carries the round-trip theorem.
 `decodeAtB?` is the production decoder over `ByteArray`. It reads in
-place from an offset, and the suite pins it to the model on every run
+place from an offset through `Varint.decodeAt?`, and the suite pins it
+to the model on every run
 (CLAUDE.md, "Proofs and tests").
 
 Both decoders answer the same three ways, through `Bytes.DecodeError`:
@@ -241,21 +242,13 @@ def encodeB (flag : Flag) (id : Nat) (payload : ByteArray) : ByteArray :=
   ofNatList (Varint.encodeNat (headerValue flag id))
     ++ ofNatList (Varint.encodeNat payload.size) ++ payload
 
-/-- One varint at offset `pos`, and the offset after it. The decoder
-reads a copy of at most `Varint.maxBytes` bytes, so a long buffer costs
-nothing extra. -/
-def varintAt? (b : ByteArray) (pos : Nat) : Except DecodeError (Varint.UVarint × Nat) :=
-  match Varint.decodeB? (b.extract pos (pos + Varint.maxBytes)) with
-  | .ok (v, n) => .ok (v, pos + n)
-  | .error e => .error e
-
 /-- One message at offset `pos` of `b`, and the offset after it. The
 answers are the answers of `decode?`. The decoder copies the data only
 after the cap check, and only once all of it has arrived. -/
 def decodeAtB? (b : ByteArray) (pos : Nat) : Except DecodeError (Frame × Nat) := do
-  let (header, afterHeader) ← varintAt? b pos
+  let (header, afterHeader) ← Varint.decodeAt? b pos
   let some flag := Flag.ofCode? (header.val % 8) | throw .malformed
-  let (length, afterLength) ← varintAt? b afterHeader
+  let (length, afterLength) ← Varint.decodeAt? b afterHeader
   if Libp2p.Mux.mplexMessageCap < length.val then throw .malformed
   let (payload, next) ← sliceAt? b afterLength length.val
   return ({ flag, id := header.val / 8, payload }, next)
