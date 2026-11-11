@@ -30,7 +30,10 @@ closes every inbox, the accept queue, and the connection. A local
 reset of a stream closes that inbox too. The reader never parks on the
 writer: the one message it sends, the reset of an inbound open over
 `liveStreamCap`, goes through `trySend`, and a full queue drops it.
-So a peer that does not read cannot stop our reads.
+So a peer that does not read cannot stop our reads. The drop is
+intended. The peer's stream then gets no answer, and it waits until
+the peer resets it or the session ends. The case needs two things at
+once: a peer over `liveStreamCap` streams, and a full writer queue.
 
 mplex has no flow control (the spec, "Implementation notes"). A stream
 whose inbox is full blocks the reader until the application reads,
