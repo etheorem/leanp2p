@@ -278,9 +278,11 @@ private structure Ends where
   dialer : Connection
   peer : Connection
 
-/-- Two connected ends over a fresh sim network. -/
-private def ends : Async Ends := do
-  let net ← Net.new
+/-- Two connected ends over a fresh sim network. With `split`, every
+read of an end returns one byte, so the session reader meets each
+message in its smallest pieces (`Streams.Sim`, "The hostile mode"). -/
+private def ends (split : Bool := false) : Async Ends := do
+  let net ← Net.new split
   let addr ← match Multiaddr.parse? "/memory/7" with
     | .ok a => pure a
     | .error _ => throw <| IO.userError "test address does not parse"
@@ -619,9 +621,11 @@ private def runLifecycle (r : Runner) : Async Unit := do
     pair.peer.close
 
 /-- Two sessions under load: several streams at once, past the cap,
-with a half-close before each echo. -/
-private def runEcho (r : Runner) : Async Unit := do
-  let pair ← ends
+with a half-close before each echo. With `split`, each message of the
+cap reaches the reader one byte per read, so a boundary bug or a
+quadratic cost in the reader shows here. -/
+private def runEcho (r : Runner) (split : Bool) : Async Unit := do
+  let pair ← ends split
   let a ← openSession .initiator pair.dialer
   let b ← openSession .responder pair.peer
   let size := mplexMessageCap + 7
@@ -653,12 +657,12 @@ private def runEcho (r : Runner) : Async Unit := do
   clients.joinAll
   server.joinAll
   let n ← (failures.get : BaseIO Nat)
-  r.check "three concurrent streams echo cap + 7 bytes each" (n == 0)
+  r.check s!"(split {split}) three concurrent streams echo cap + 7 bytes each" (n == 0)
   a.close
   b.close
   let ja ← joinAnswer a
   let jb ← joinAnswer b
-  r.check "both sessions join after the echo" (ja.any isOk && jb.any isOk)
+  r.check s!"(split {split}) both sessions join after the echo" (ja.any isOk && jb.any isOk)
 
 private def checks (r : Runner) : Async Unit := do
   runIdentity r
@@ -668,7 +672,8 @@ private def checks (r : Runner) : Async Unit := do
   runOutbound r
   runLeftover r
   runLifecycle r
-  runEcho r
+  for split in [false, true] do
+    runEcho r split
 
 def run (r : Runner) : IO Unit := do
   r.section "mplex session" "packages/libp2p/mux/Libp2p/Mux/Mplex/Session.lean"
