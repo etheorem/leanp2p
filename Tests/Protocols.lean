@@ -12,6 +12,7 @@ import Libp2p.Core
 import Libp2p.Host
 import Libp2p.Protocols
 import Libp2p.Protocols.Identity
+import Libp2p.Protocols.TestSupport.Echo
 
 /-!
 # Identify and ping suite
@@ -126,6 +127,40 @@ private def mkEnd (readP writeP : Conc.Pipe) : Streams.Stream := {
       | Conc.Error.deadlineExpired => Streams.Error.timeout)) <$> writeP.write bytes
   close := pure ()
   reset := readP.close }
+
+/-- One echo end. `close` closes the write pipe, so a half-close is
+visible as EOF on the other end. -/
+private def mkEchoEnd (readP writeP : Conc.Pipe) : Streams.Stream := {
+  read := do
+    match ← readP.read with
+    | none => return .ok none
+    | some chunk => return .ok (some chunk)
+  write := fun bytes =>
+    (Except.mapError (fun e => match e with
+      | Conc.Error.closed => Streams.Error.closed
+      | Conc.Error.deadlineExpired => Streams.Error.timeout)) <$> writeP.write bytes
+  close := writeP.close
+  reset := do
+    readP.close
+    writeP.close
+}
+
+/-- A stream whose read and write are the supplied actions. `close`
+sets `closed`. -/
+private def echoScript (readAct : Conc.Async (Except Streams.Error (Option ByteArray)))
+    (writeAct : ByteArray → Conc.Async (Except Streams.Error Unit))
+    (closed : IO.Ref Bool) : Streams.Stream := {
+  read := readAct
+  write := writeAct
+  close := closed.set true
+  reset := pure ()
+}
+
+/-- True when the answer is the core error `want`. -/
+private def echoIs {α : Type} (x : Except Libp2p.Core.Error α) (want : Libp2p.Core.Error) : Bool :=
+  match x with
+  | .error e => decide (e = want)
+  | _ => false
 
 /-- The pair: `a` reads `ba` and writes `ab`; `b` reads `ab` and
 writes `ba`. -/
@@ -521,6 +556,146 @@ private def asyncChecks (r : Runner) : Conc.Async Unit := do
       (failsWith (Ping.Error.wrongSize 31) res)
     tc.close
 
+/-- The echo handler and client, on a half-closing pipe and on scripted
+streams. -/
+private def echoChecks (r : Runner) : Conc.Async Unit := do
+  -- echo: one chunk comes back, and the handler half-closes
+  do
+    let ab ← Conc.Pipe.new 4
+    let ba ← Conc.Pipe.new 4
+    let a := mkEchoEnd ba ab
+    let b := mkEchoEnd ab ba
+    let ctx ← ctxOf (testPeer 0)
+    let ts ← Conc.TaskSet.new
+    ts.spawn do
+      runHandler Libp2p.Protocols.TestSupport.Echo.handler ctx b
+    let payload := Bytes.ofString "echo-me"
+    let res ← Libp2p.Protocols.TestSupport.Echo.exchange a payload
+    let after ← a.read
+    ts.joinAll
+    r.check "echo e2e returns the sent bytes"
+      (match res with | .ok (some got) => got == payload | _ => false)
+    r.check "echo e2e half-close ends the reply" (isOkNone after)
+
+  -- echo: an initial EOF half-closes and returns
+  do
+    let ab ← Conc.Pipe.new 4
+    let ba ← Conc.Pipe.new 4
+    let a := mkEchoEnd ba ab
+    let b := mkEchoEnd ab ba
+    ab.close
+    let res ← Libp2p.Protocols.TestSupport.Echo.serve b
+    let after ← a.read
+    r.check "echo handler initial EOF completes" (match res with | .ok () => true | _ => false)
+    r.check "echo handler initial EOF half-closes" (isOkNone after)
+
+  -- echo: a read error maps and does not half-close
+  do
+    let closed ← IO.mkRef false
+    let s := echoScript (pure (.error .reset)) (fun _ => pure (.ok ())) closed
+    let res ← Libp2p.Protocols.TestSupport.Echo.serve s
+    r.check "echo handler read reset maps" (echoIs res (.protocol "the peer reset the stream"))
+    r.check "echo handler read reset skips the half-close" !(← closed.get)
+
+  -- echo: a write error maps and does not half-close
+  do
+    let closed ← IO.mkRef false
+    let chunk := Bytes.ofString "echo-me"
+    let s := echoScript (pure (.ok (some chunk))) (fun _ => pure (.error .closed)) closed
+    let res ← Libp2p.Protocols.TestSupport.Echo.serve s
+    r.check "echo handler write closed maps" (echoIs res (.closed "the stream closed"))
+    r.check "echo handler write closed skips the half-close" !(← closed.get)
+
+  -- echo: a thrown read stays an IO error
+  do
+    let closed ← IO.mkRef false
+    let s := echoScript (throw <| IO.userError "echo read fault") (fun _ => pure (.ok ())) closed
+    let caught ← try
+      discard <| Libp2p.Protocols.TestSupport.Echo.serve s
+      pure none
+    catch e =>
+      pure (some (toString e))
+    r.check "echo handler read fault stays an IO error" (caught == some "echo read fault")
+    r.check "echo handler read fault skips the half-close" !(← closed.get)
+
+  -- echo: a thrown write stays an IO error
+  do
+    let closed ← IO.mkRef false
+    let chunk := Bytes.ofString "echo-me"
+    let s := echoScript (pure (.ok (some chunk))) (fun _ => throw <| IO.userError "echo write fault") closed
+    let caught ← try
+      discard <| Libp2p.Protocols.TestSupport.Echo.serve s
+      pure none
+    catch e =>
+      pure (some (toString e))
+    r.check "echo handler write fault stays an IO error" (caught == some "echo write fault")
+    r.check "echo handler write fault skips the half-close" !(← closed.get)
+
+  -- echo: a thrown half-close stays an IO error
+  do
+    let closed ← IO.mkRef false
+    let chunk := Bytes.ofString "echo-me"
+    let s : Streams.Stream := {
+      read := pure (.ok (some chunk))
+      write := fun got => pure (if got == chunk then .ok () else .error .closed)
+      close := do
+        closed.set true
+        throw <| IO.userError "echo close fault"
+      reset := pure ()
+    }
+    let caught ← try
+      discard <| Libp2p.Protocols.TestSupport.Echo.serve s
+      pure none
+    catch e =>
+      pure (some (toString e))
+    r.check "echo handler close fault stays an IO error" (caught == some "echo close fault")
+    r.check "echo handler close fault reached the half-close" (← closed.get)
+
+  -- echo: the client returns EOF, a mapped write error, and a thrown read
+  do
+    let payload := Bytes.ofString "echo-me"
+    let eof : Streams.Stream := {
+      read := pure (.ok none)
+      write := fun _ => pure (.ok ())
+      close := pure ()
+      reset := pure ()
+    }
+    let res ← Libp2p.Protocols.TestSupport.Echo.exchange eof payload
+    r.check "echo client EOF returns absent" (match res with | .ok none => true | _ => false)
+    let refused : Streams.Stream := {
+      read := pure (.ok none)
+      write := fun _ => pure (.error .timeout)
+      close := pure ()
+      reset := pure ()
+    }
+    let bad ← Libp2p.Protocols.TestSupport.Echo.exchange refused payload
+    r.check "echo client write timeout maps"
+      (echoIs bad (.timeout "the stream deadline expired"))
+    let thrown : Streams.Stream := {
+      read := throw <| IO.userError "echo client read fault"
+      write := fun _ => pure (.ok ())
+      close := pure ()
+      reset := pure ()
+    }
+    let caught ← try
+      discard <| Libp2p.Protocols.TestSupport.Echo.exchange thrown payload
+      pure none
+    catch e =>
+      pure (some (toString e))
+    r.check "echo client read fault stays an IO error" (caught == some "echo client read fault")
+    let writeFault : Streams.Stream := {
+      read := pure (.ok none)
+      write := fun _ => throw <| IO.userError "echo client write fault"
+      close := pure ()
+      reset := pure ()
+    }
+    let writeCaught ← try
+      discard <| Libp2p.Protocols.TestSupport.Echo.exchange writeFault payload
+      pure none
+    catch e =>
+      pure (some (toString e))
+    r.check "echo client write fault stays an IO error" (writeCaught == some "echo client write fault")
+
 /-! ## Identify and push between two hosts -/
 
 /-- `h` with the handler `sh` registered under its id, wrapped so that
@@ -720,6 +895,8 @@ def run (r : Runner) : IO Unit := do
     (succeedsWith (good, pid) (Identify.validate (msgPayload good) none))
 
   -- ping: the spec constants and the echo check
+  r.check "echo protocol id constant" (Libp2p.Protocols.TestSupport.Echo.protocolId.toString == "/demo/echo/1.0.0")
+  r.check "echo handler carries the protocol id" (Libp2p.Protocols.TestSupport.Echo.handler.id == Libp2p.Protocols.TestSupport.Echo.protocolId)
   r.check "ping protocol id constant" (Ping.protocolId.toString == "/ipfs/ping/1.0.0")
   r.check "ping payload size 32" (Ping.payloadSize == 32)
   let sent := List.replicate 32 7
@@ -733,6 +910,7 @@ def run (r : Runner) : IO Unit := do
     (failsWith .mismatch (Ping.checkEcho sent altered))
 
   Conc.Async.run (asyncChecks r)
+  Conc.Async.run (echoChecks r)
   Conc.Async.run (hostChecks r)
 
 end Tests.Protocols

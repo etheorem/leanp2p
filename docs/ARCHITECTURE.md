@@ -872,9 +872,10 @@ Everything with libp2p semantics, in subpackages:
   `Host.Error`, which wraps `Core.Error` with arms of its own.
 - **`protocols/`**: identify (with push), ping, req/resp, and
   gossipsub (§8). A contributor working decision on the CLI branch
-  places the future demo echo handler and client at
+  places the demo echo handler and client at
   `Libp2p.Protocols.TestSupport.Echo`. That module sits beside the
-  four protocols, and this tree does not implement it yet.
+  four protocols. It reads one chunk, echoes those bytes, and
+  half-closes. The demo executable wires it.
 - **Policy seams**: connection gater, resource manager, address ranker.
   The interfaces exist now, and the implementations come later.
 

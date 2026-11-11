@@ -46,15 +46,16 @@ https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
 One-shot `pingnode dial` and `demo` apply a 30 second budget around
 `Host.newStream`. Expiry fails the command and closes the owned
 host. `pingnode dial` implements that timer. The demo echo handler
-and client belong at `Libp2p.Protocols.TestSupport.Echo`. This slice
-does not add that module. `pingnode serve` and `pingnode dial` are
-implemented. `demo` still prints `not implemented`.
+and client are `Libp2p.Protocols.TestSupport.Echo`. That module
+reads one chunk, echoes those bytes, and half-closes. The demo
+executable still prints `not implemented`. `pingnode serve` and
+`pingnode dial` are implemented.
 
 - The demo runs end to end over loopback: two hosts dial, complete the
   upgrade, identify, and exchange pings. The listener's identify
   record carries the bound address and the registered protocol ids.
-  The echo leg joins this run when
-  `Libp2p.Protocols.TestSupport.Echo` exists. Each `newStream` uses
+  The echo leg uses `Libp2p.Protocols.TestSupport.Echo`. The demo
+  executable wires that leg. Each `newStream` uses
   the exchange deadline after the call returns, and the 30 second
   budget around the call.
   The spike's node-suite legs are the carried tests (the spike's
@@ -115,8 +116,9 @@ implemented. `demo` still prints `not implemented`.
   whitespace errors. The 121-check command above is the serve
   slice. The full `lake test` was not rerun. Its recorded baseline
   still has one failure in `Tests/Streams.lean`: `the teardown
-  aborted the stuck write: the peer meets a reset`. The demo, echo,
-  and the bidirectional gate remain unfinished.
+  aborted the stuck write: the peer meets a reset`. The demo
+  executable and the bidirectional gate remain unfinished. Echo
+  support is `Libp2p.Protocols.TestSupport.Echo`.
 - Go-to-Lean ping is in this slice. The Go peer dials `pingnode
   serve`. `scripts/ping-go/main.go` dials one multiaddr over TCP,
   Noise, and yamux, prints `PING OK rtt=<duration>`, and waits for
@@ -179,8 +181,9 @@ implemented. `demo` still prints `not implemented`.
   go build` from `scripts/ping-go` completed. `bash -n
   scripts/ping-go-interop.sh` completed. `git diff --check` reported
   no whitespace errors. Lean sources are unchanged, so the 138-check
-  result above stands. The demo, echo, and the bidirectional gate
-  remain unfinished. This check stays outside `lake test`.
+  result above stands. The demo executable and the bidirectional gate
+  remain unfinished. Echo support is `Libp2p.Protocols.TestSupport.Echo`.
+  This check stays outside `lake test`.
 - The in-suite legs pass under `+RTS -N1` (§6; PRINCIPLES 5.3).
 
 ## Test milestones (unit 2)

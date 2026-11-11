@@ -38,7 +38,18 @@ in the codec group wrapping upstream `google/snappy`.
   node (root PLAN W5.8; the spike's `Main.lean` and `PingNode.lean`
   show the wiring). A contributor working decision places the demo
   echo handler and client at `Libp2p.Protocols.TestSupport.Echo`.
-  That module is not in this plan's units yet.
+  That module reads one chunk, echoes those bytes, and half-closes.
+  The demo executable wires it. The module is outside units 1 to 3.
+  `lake build tests` completed. `LEANP2P_SUITE=protocols
+  .lake/build/bin/tests` passed 80 checks, with 0 failed, 0 todo, and
+  0 skipped. `LEANP2P_SUITE=protocols LEAN_NUM_THREADS=1
+  .lake/build/bin/tests +RTS -N1 -RTS` passed 80 checks, with 0
+  failed, 0 todo, and 0 skipped. That command runs `Tests.Protocols`.
+  `scripts/lint-imports.sh` checked 190 module files, with 0
+  violations. `git diff --check` reported no whitespace errors.
+  The full `lake test` was not rerun. Its recorded baseline still has
+  one failure in `Tests/Streams.lean`: `the teardown aborted the stuck
+  write: the peer meets a reset`.
 - The consensus client consumes req/resp and gossipsub through the
   handler values and the client side (§8). SSZ payload types stay with
   the client.

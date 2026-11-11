@@ -96,8 +96,9 @@ work.
 1. **No protocol logic.** Ping and identify come from
    `libp2p/protocols`: the handler values, `Ping.ping`, and
    `Identify.client`. The demo echo home is
-   `Libp2p.Protocols.TestSupport.Echo`, recorded below. This slice
-   does not add that module. Every seam
+   `Libp2p.Protocols.TestSupport.Echo`, recorded below. That module
+   provides the handler and the client. The demo executable still
+   wires them. Every seam
    value comes from its implementation
    package: the TCP transport from `net/streams`, which alone binds
    `Std.Async.TCP` (§9, delta 7), the security value from
@@ -259,8 +260,9 @@ Both binaries build one `Host.Config`.
   leaves the accept loop running. A fault of a host task surfaces
   when `Host.close` joins the task.
 
-The demo and the ping node register ping and identify. Echo
-registration waits for `Libp2p.Protocols.TestSupport.Echo`.
+The demo and the ping node register ping and identify. The demo
+registers `Libp2p.Protocols.TestSupport.Echo.handler` when the demo
+slice wires it.
 
 `Identify.respondHandler` is registered after `startListening`
 returns. Its listen-address list is that bound address, as
@@ -436,7 +438,8 @@ failure in `Tests/Streams.lean`: `the teardown aborted the stuck
 write: the peer meets a reset`.
 
 `demo` still prints `not implemented` and exits 1.
-`Libp2p.Protocols.TestSupport.Echo` is still absent. The Lean-to-Go
+`Libp2p.Protocols.TestSupport.Echo` provides the handler and the
+client. The demo executable is unfinished. The Lean-to-Go
 ping check is recorded in the Go-helper decision. The bidirectional
 gate stays unfinished. The abrupt Go-first close stays the historical
 case in the Go-helper decision.
@@ -509,8 +512,9 @@ The demo runs these steps in order.
    so far.
 6. Store that address with `addAddrs`, then `dialPeer`.
 7. Open a `newStream` for ping, then identify, then the echo id
-   from `Libp2p.Protocols.TestSupport.Echo`. The echo module waits
-   for its slice. Each `newStream` uses the 30 second budget above.
+   from `Libp2p.Protocols.TestSupport.Echo`. The handler and the
+   client are available. The demo executable wires them in its
+   slice. Each `newStream` uses the 30 second budget above.
 8. Close the dialer, then the listener.
 
 Every exit closes each host that `Host.new` returned. The call is
@@ -520,7 +524,7 @@ received `onFailure` also exits 1, after both closes.
 
 On success, stdout carries the dial line, the ping rtt, and the
 identify summary. The spike's `Main.lean` is the shape of those
-lines. The echo line waits for `Libp2p.Protocols.TestSupport.Echo`.
+lines. The echo line waits for the demo executable.
 
 ### Working decision: the demo echo home
 
@@ -538,10 +542,27 @@ logic.
 November 2026 records "echo must come from protocol test support."
 §4.9 still names identify, ping, req/resp, and gossipsub. Test
 support sits beside that list. The spike handler reads one chunk,
-writes those bytes, and half-closes. The client writes `echo-me`
-and reads the reply. This slice does not add the module. The demo
-echo leg waits for that slice. The ping node registers ping and
-identify.
+writes those bytes, and half-closes. The client writes one payload and reads one reply.
+`Libp2p.Protocols.TestSupport.Echo` provides `serve`, `handler`, and
+`exchange`. The protocol id lives in that module. An initial EOF
+half-closes and returns. A `Streams.Error` maps through
+`mapStreamError`. A thrown `IO.Error` stays thrown. The caller owns
+the stream. `serve` half-closes on an orderly read. `exchange` leaves
+the stream open. One chunk is the whole exchange. The demo chooses
+the payload and prints the result. The demo executable is unfinished.
+The ping node registers ping and identify.
+
+`lake build tests` completed. `LEANP2P_SUITE=protocols
+.lake/build/bin/tests` passed 80 checks, with 0 failed, 0 todo, and
+0 skipped. `LEANP2P_SUITE=protocols LEAN_NUM_THREADS=1
+.lake/build/bin/tests +RTS -N1 -RTS` passed 80 checks, with 0 failed,
+0 todo, and 0 skipped. That command runs `Tests.Protocols`.
+`scripts/lint-imports.sh` checked 190 module files, with 0
+violations. `git diff --check` reported no whitespace errors. The
+138-check CLI result stays the dial slice's record. The full
+`lake test` was not rerun. Its recorded baseline still has one
+failure in `Tests/Streams.lean`: `the teardown aborted the stuck
+write: the peer meets a reset`.
 
 ## Decisions
 
@@ -628,7 +649,8 @@ identify.
   go build` from `scripts/ping-go` completed. `bash -n
   scripts/ping-go-interop.sh` completed. Lean sources are unchanged
   in this slice, so the 138-check result above stands. The
-  bidirectional gate, the demo, and echo stay unfinished. The
+  bidirectional gate and the demo executable stay unfinished. Echo
+  support is `Libp2p.Protocols.TestSupport.Echo`. The
   spike also kept a
   test-plans runner image, `interop/leanp2p/{Makefile,Dockerfile}`.
   The target drops the image, and `scripts/interop-matrix.sh` is the
