@@ -21,12 +21,11 @@ theorem encodeFieldsBModel (fs : Fields) :
     Bytes.toNatList (encodeFieldsB fs) = encodeFields fs :=
   Bytes.toNatListOfNatListOfLt (encodeFields fs) (encodeFieldsBytes fs)
 
-/-- A budget-sized window avoids copying the remaining message for each varint. -/
+/-- The varint at `pos`, through the offset reader of `codec/varint`,
+with its error mapped into the protobuf error. -/
 private def readVarintAt (bs : ByteArray) (pos : Nat) :
-    Except Error (Varint.UVarint × Nat) := do
-  let window := bs.extract pos (min bs.size (pos + Varint.maxBytes))
-  let (v, used) ← (Varint.decodeB? window).mapError Error.framing
-  .ok (v, pos + used)
+    Except Error (Varint.UVarint × Nat) :=
+  (Varint.decodeAt? bs pos).mapError Error.framing
 
 /-- Check the length before extracting a fixed-width or variable payload. -/
 private def takeBytesAt (bs : ByteArray) (pos count : Nat) :
