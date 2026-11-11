@@ -436,9 +436,10 @@ failure in `Tests/Streams.lean`: `the teardown aborted the stuck
 write: the peer meets a reset`.
 
 `demo` still prints `not implemented` and exits 1.
-`Libp2p.Protocols.TestSupport.Echo` is still absent. Lean-to-Go and
-the bidirectional gate stay unfinished. The abrupt Go-first close
-stays the historical case in the Go-helper decision.
+`Libp2p.Protocols.TestSupport.Echo` is still absent. The Lean-to-Go
+ping check is recorded in the Go-helper decision. The bidirectional
+gate stays unfinished. The abrupt Go-first close stays the historical
+case in the Go-helper decision.
 
 ### Stream retirement
 
@@ -555,8 +556,9 @@ identify.
   the harness, and never on a shipped or proof path. The tree holds
   `interop-matrix.sh` and `interop-slowreader/` under the root
   `scripts/`, beside the W0.3 vector tooling (§7 row 11's note).
-  The Go-to-Lean ping check is `scripts/ping-go/` and
-  `scripts/ping-go-interop.sh`. The Go peer dials `pingnode serve`.
+  The ping checks are `scripts/ping-go/` and
+  `scripts/ping-go-interop.sh`. `ping-go <multiaddr>` dials
+  `pingnode serve`. `ping-go listen` serves `pingnode dial`.
   The module requires go-libp2p v0.50.0. The host Go toolchain builds
   the helper with `CGO_ENABLED=0`. That module asks for Go 1.26. The
   helper runs on the host loopback.
@@ -600,7 +602,33 @@ identify.
   miss is 33 seconds: the 25 second ping deadline, then 2 seconds
   for each of the four children. Those processes were gone after
   each check. The Go module pin and the Lean toolchain stay as they
-  are. Lean-to-Go and the bidirectional gate stay unfinished. The
+  are. `ping-go listen` binds `/ip4/127.0.0.1/tcp/0` with TCP, Noise,
+  and yamux, and enables the host ping service. It prints
+  `ADDR <multiaddr> <peerid>` for the bound address, waits for stdin
+  EOF, and then closes the host. `scripts/ping-go-interop.sh lean-to-go`
+  runs `pingnode dial` with `LEAN_NUM_THREADS=1`, requires `PING OK`
+  and dialer exit 0, then closes the Go stdin and requires Go exit 0.
+  The owned children are the Go process, the Go stdin holder, and the
+  dialer. Three runs exited 0 and printed `PASS lean-to-go PING OK
+  rtt=1ms`, `PASS lean-to-go PING OK rtt=0ms`, and `PASS lean-to-go
+  PING OK rtt=1ms`. `scripts/ping-go-interop.sh` with no argument
+  printed `PASS go-to-lean PING OK rtt=973.708µs`.
+  `PING_LEAN_BIN=/usr/bin/false scripts/ping-go-interop.sh lean-to-go`
+  exited 1 with `FAIL lean-to-go: lean exit 1`. A test-only dialer
+  that ignores SIGTERM exited 1 after 29 seconds, including its
+  build, with `FAIL lean-to-go: lean ping missed 25 s`. Those
+  processes were gone after each check. The reviewer independently
+  confirmed both ping directions, the false dialer failure, and the
+  stalled dialer. That stalled run failed after 28.3 seconds, and
+  every tracked child was reaped. The confirmation is separate from
+  the 29 second run above. The cleanup bound on that
+  miss is 31 seconds: the 25 second ping deadline, then 2 seconds
+  for the dialer, the Go process, and the Go stdin holder.
+  `gofmt -l scripts/ping-go/main.go` printed nothing. `CGO_ENABLED=0
+  go build` from `scripts/ping-go` completed. `bash -n
+  scripts/ping-go-interop.sh` completed. Lean sources are unchanged
+  in this slice, so the 138-check result above stands. The
+  bidirectional gate, the demo, and echo stay unfinished. The
   spike also kept a
   test-plans runner image, `interop/leanp2p/{Makefile,Dockerfile}`.
   The target drops the image, and `scripts/interop-matrix.sh` is the

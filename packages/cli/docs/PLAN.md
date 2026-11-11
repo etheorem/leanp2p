@@ -115,8 +115,8 @@ implemented. `demo` still prints `not implemented`.
   whitespace errors. The 121-check command above is the serve
   slice. The full `lake test` was not rerun. Its recorded baseline
   still has one failure in `Tests/Streams.lean`: `the teardown
-  aborted the stuck write: the peer meets a reset`. Lean-to-Go, the
-  demo, echo, and the bidirectional gate remain unfinished.
+  aborted the stuck write: the peer meets a reset`. The demo, echo,
+  and the bidirectional gate remain unfinished.
 - Go-to-Lean ping is in this slice. The Go peer dials `pingnode
   serve`. `scripts/ping-go/main.go` dials one multiaddr over TCP,
   Noise, and yamux, prints `PING OK rtt=<duration>`, and waits for
@@ -148,10 +148,39 @@ implemented. `demo` still prints `not implemented`.
   holders, and the server were gone. The cleanup bound on that miss
   is 33 seconds: the 25 second ping deadline, then 2 seconds for
   each of the four children. The check stays outside `lake test`.
-  Lean-to-Go, the demo, echo, and the bidirectional gate remain
-  unfinished. The spike selected its muxer from the Noise handshake
+  The spike selected its muxer from the Noise handshake
   extension. This stack negotiates the muxer on the wire (the
   negotiate pair's decision).
+- Lean-to-Go ping uses the same helper and driver. `ping-go listen`
+  binds `/ip4/127.0.0.1/tcp/0`, enables the host ping service, and
+  prints `ADDR` for the bound address and the host peer id. The host
+  stays up until stdin EOF, then closes. `ping-go <multiaddr>` stays
+  the dial invocation. `scripts/ping-go-interop.sh lean-to-go` starts
+  that listener, runs `pingnode dial` with `LEAN_NUM_THREADS=1`,
+  requires `PING OK` and dialer exit 0, then closes the Go stdin and
+  requires Go exit 0. The owned children are the Go process, the Go
+  stdin holder, and the dialer. Three runs exited 0 and printed
+  `PASS lean-to-go PING OK rtt=1ms`, `PASS lean-to-go PING OK rtt=0ms`,
+  and `PASS lean-to-go PING OK rtt=1ms`. `scripts/ping-go-interop.sh`
+  with no argument printed `PASS go-to-lean PING OK rtt=973.708µs`.
+  `PING_LEAN_BIN=/usr/bin/false scripts/ping-go-interop.sh lean-to-go`
+  exited 1 with `FAIL lean-to-go: lean exit 1`. A test-only dialer
+  that ignores SIGTERM, passed as `PING_LEAN_BIN`, made the script
+  exit 1 after 29 seconds, including its build, with
+  `FAIL lean-to-go: lean ping missed 25 s`. The Go process, the stdin
+  holder, and the dialer were gone. The reviewer independently
+  confirmed both ping directions, the false dialer failure, and the
+  stalled dialer. That stalled run failed after 28.3 seconds, and
+  every tracked child was reaped. The confirmation is separate from
+  the 29 second run above. The cleanup bound on that miss
+  is 31 seconds: the 25 second ping deadline, then 2 seconds for
+  the dialer, the Go process, and the Go stdin holder.
+  `gofmt -l scripts/ping-go/main.go` printed nothing. `CGO_ENABLED=0
+  go build` from `scripts/ping-go` completed. `bash -n
+  scripts/ping-go-interop.sh` completed. `git diff --check` reported
+  no whitespace errors. Lean sources are unchanged, so the 138-check
+  result above stands. The demo, echo, and the bidirectional gate
+  remain unfinished. This check stays outside `lake test`.
 - The in-suite legs pass under `+RTS -N1` (§6; PRINCIPLES 5.3).
 
 ## Test milestones (unit 2)
