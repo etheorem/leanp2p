@@ -360,6 +360,14 @@ The question blocks a negotiation bound on `pingnode dial` and on
 each `newStream` of the demo. `pingnode serve` opens no outbound
 stream.
 
+The pending proposal is
+https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
+It asks whether `pingnode dial` and the demo may apply
+`Streams.unauthDeadlineMs` to `Host.newStream`, treat expiry as a
+command failure, and close the host they own. The proposal stays
+pending. It blocks the dial implementation and each outbound
+`newStream` of the demo. The server path stays as implemented.
+
 The question for the issue:
 
 What bounds protocol negotiation inside `Host.newStream`? The stream
@@ -468,6 +476,11 @@ package has no such support.
 The implementation slice places the handler and the client after a
 maintainer assigns the home. The ping node registers ping and
 identify.
+
+The same comment,
+https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244,
+asks where the handler and the client for `/demo/echo/1.0.0` live.
+That home stays pending. It blocks the demo echo leg.
 
 The question for the issue:
 

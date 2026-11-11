@@ -40,10 +40,12 @@ including the argument table, the exit codes, the ping and identify
 deadlines, the
 stream retirement, and the two-host close. Those deadlines start
 after `newStream` returns. The demo echo home and the deadline around
-`Host.newStream` are the open questions in that architecture. The
-echo leg waits on the first. The dial and the demo add no bound of
-their own on the negotiation inside `newStream` until the second has
-an answer.
+`Host.newStream` are the open questions in that architecture. Both
+are pending on
+https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
+The 30 s `newStream` proposal in that comment stays pending. It
+blocks `pingnode dial` and the demo's outbound streams. The echo
+home blocks the demo echo leg. `pingnode serve` is implemented.
 
 - The demo runs end to end over loopback: two hosts dial, complete the
   upgrade, identify, and exchange pings. The listener's identify
@@ -85,7 +87,7 @@ an answer.
   processes close their hosts on the failure paths of the behavior
   section. The run uses the exchange deadline after `newStream`
   returns. A bound on the negotiation inside that call waits on the
-  stream-open question.
+  pending proposal in the comment linked above.
 - Ping interop with go (the spike's `ping-interop.sh` shape): the
   script builds `pingd.go` in docker (go-libp2p v0.50.0, CGO off),
   starts both nodes on loopback, and dials in both directions over
