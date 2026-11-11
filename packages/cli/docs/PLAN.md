@@ -29,11 +29,13 @@ the same pattern, a live run against foreign nodes.
 ## Test milestones (unit 1)
 
 The executable roots are `Demo` and `PingNode`, in `packages/cli`.
-`Main` stays the root of `gossipsub-interop`. The commit that adds
-the files widens the `Cli` lib globs, and it adds the `demo` and
-`pingnode` executables. The W5.8 behavior section of the package
-architecture is the contract those binaries implement, including the
-argument table, the exit codes, the ping and identify deadlines, the
+`Main` stays the root of `gossipsub-interop`. The lib is
+`CliHarness`. Its globs include `Demo` and `PingNode`, and the
+lakefile names the `demo` and `pingnode` executables. Each entry
+prints `not implemented` and exits 1. The W5.8 behavior section
+of the package architecture is the contract those binaries implement,
+including the argument table, the exit codes, the ping and identify
+deadlines, the
 stream retirement, and the two-host close. Those deadlines start
 after `newStream` returns. The demo echo home and the deadline around
 `Host.newStream` are the open questions in that architecture. The

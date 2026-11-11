@@ -341,10 +341,9 @@ findings, for the stage-close cleanup batch:
   primitives", and one word carries one meaning.
 - Deferred. `packages/codec/snappy/Snappy.lean:4-5`, unit W6.2 appears
   in two consecutive sentences; cut one statement of it.
-- Deferred. `packages/cli/Cli.lean:7`, "the executables arrive with
-  W5.8" covers all three binaries the docstring names, but the
-  interop harness arrives with W5.9. The sentence also joins two
-  independent claims.
+- Closed by the cli scaffold. `packages/cli/Cli.lean` is now
+  `packages/cli/CliHarness.lean`, and the docstring no longer says
+  that the executables arrive with W5.8.
 - Deferred. `packages/crypto/Crypto.lean:4-5`, "one import surface over
   the pure copies and the backend bindings" names two of the three legs
   §3.6 enumerates (the etheorem packages are the third) and reads the

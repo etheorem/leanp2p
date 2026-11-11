@@ -26,7 +26,9 @@
 # allows but no docs row names is headroom, and the docs win on a
 # conflict. A file directly
 # under the group directory is the group root (today the Crypto facade
-# and the Cli root); it may import every leaf of its group. base has
+# and `CliHarness.lean`); it may import every leaf of its group. The
+# module `Cli` is the parser package, and it sits at this end of the
+# chain. base has
 # no order in the docs, so
 # the rule skips it. The §3.1 carve-out:
 # within libp2p, negotiate and host import core and no implementation,
@@ -148,7 +150,7 @@ while IFS= read -r -d '' f; do
       *)
         seg=${mod%%.*}
         case $seg in
-          Cli|Interop) gname=cli; grank=0 ;;
+          Cli|CliHarness|Interop) gname=cli; grank=0 ;;
           Streams|StreamsShim|Yamux) gname=net;    grank=2 ;;
           Crypto|CryptoPure|Backend) gname=crypto; grank=3 ;;
           Varint|Multiformats|Proto|Snappy) gname=codec; grank=4 ;;

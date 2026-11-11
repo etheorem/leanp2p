@@ -26,27 +26,30 @@ row 18).
 | `Interop/Resp.lean` | RESP2, pure: the reply header parse with its caps, and the command encoding |
 | `Interop/Redis.lean` | the harness coordination client, private to the `interop` executable: `PING`, `RPUSH`, and `BLPOP` over one connection; the spike's `LeanP2P/Interop/Redis.lean` mapped here |
 
-`Demo.lean` and `PingNode.lean` land with unit 1. `Main.lean` stays
-the gossipsub participant. The Lake lib `Cli` is nominal: `Cli.lean`
-declares no API, and the lib exists so the suite can import the
-harness (see Decisions). Unit 1 widens that lib's globs for `Demo`
-and `PingNode` in the commit that adds the files. Config parsing
-lives in each binary, because the contracts differ. Argument parsing
-uses `leanprover/lean4-cli` as the first choice. The library is
-maintained under the leanprover organization, and CLAUDE.md's "Lean
-on Lean" principle prefers a maintained library before a hand-rolled
-one. The §2 rule bans reusable code inside `cli/`; the parsing
-mechanism lives in the dependency, and each binary keeps its own
-parsing code. The hand-rolled parser is the recorded fallback if the
-pin does not fit the v4.34 toolchain. The tag `v4.34.0` of
-`leanprover/lean4-cli` carries `lean-toolchain` `leanprover/lean4:v4.34.0`,
-and its package, lib, and root module are all named `Cli`. This
-package's lib and its module `Cli` use that same name, so the commit
-that adds the dependency renames this lib and this empty module
-together. The namespace `Cli` stays. That tag also sets
-`experimental.module`. This tree has not compiled the dependency.
-The harness's go-side helpers are scripts under the root `scripts/`,
-test-only per CLAUDE.md's dependencies rule.
+`Demo.lean` and `PingNode.lean` are the executable roots. Each
+`main` prints `not implemented` to stderr and exits 1. `Main.lean`
+stays the gossipsub participant. The Lake lib is `CliHarness`.
+`CliHarness.lean` declares no API, and the lib exists so the suite
+can import the harness (see Decisions). Its globs include `Demo`
+and `PingNode`. Config parsing lives in each binary, because the
+contracts differ. Argument parsing uses `leanprover/lean4-cli`.
+The library is maintained under the leanprover organization, and
+CLAUDE.md's "Lean on Lean" principle prefers a maintained library
+before a hand-rolled one. The §2 rule bans reusable code inside
+`cli/`; the parsing mechanism lives in the dependency, and each
+binary keeps its own parsing code. The hand-rolled parser remains
+the recorded fallback if a later pin fails the v4.34 toolchain.
+The tag `v4.34.0` is commit
+`e92c9f15fdfacc8536f31cfb3b7ad26c3c8cd204`. Its `lean-toolchain` is
+`leanprover/lean4:v4.34.0`, and its package, lib, and root module
+are all named `Cli`. An isolated consumer imported `Cli`, built a
+`Cmd`, and called `validate` on this toolchain, and that build
+completed. This package's lib and empty root are `CliHarness`, so
+the module name `Cli` belongs to the parser. The namespace `Cli`
+stays. That tag sets `experimental.module`. These executables do
+not parse arguments yet. The harness's go-side helpers are scripts
+under the root `scripts/`, test-only per CLAUDE.md's dependencies
+rule.
 
 ## Public surface
 
@@ -139,8 +142,9 @@ above stays in force.
 Both files sit in `packages/cli`. The namespaces are `Cli.Demo` and
 `Cli.PingNode`, the shape `Cli.GossipsubSession` already uses.
 `gossipsub-interop` keeps the root `Main`. `interop` keeps the root
-`Interop.Main`. Unit 1 adds the two `lean_exe` entries. The current
-`lakefile.toml` has neither name.
+`Interop.Main`. `lakefile.toml` names `demo` and `pingnode`. Each
+entry prints `not implemented` to stderr and exits 1. The argument
+table below is the contract for the later slice.
 
 ### Arguments
 
@@ -455,10 +459,10 @@ handler. The spike demo still echoes on `/demo/echo/1.0.0`.
 
 - **A nominal lib, and no public API.** §2 gives `cli/` no public
   API, and the dependency chain of §2 puts it where nothing below
-  can import it. `Cli.lean` declares nothing. The Lake lib `Cli`
-  exists so the suite can import `Interop` and the gossipsub
-  modules. Its current roots are `Cli`, `Interop`,
-  `GossipsubInterop`, and `GossipsubSession`.
+  can import it. `CliHarness.lean` declares nothing. The Lake lib
+  `CliHarness` exists so the suite can import `Interop` and the
+  gossipsub modules. Its roots are `CliHarness`, `Demo`, `PingNode`,
+  `Interop`, `GossipsubInterop`, and `GossipsubSession`.
 - **The go-side helpers stay scripts, test-only.** CLAUDE.md's
   dependencies rule keeps Go and Rust tooling test-only, confined to
   the harness, and never on a shipped or proof path. The tree holds
@@ -515,11 +519,12 @@ identity, transport, and Noise construction, and their muxer list is
 - One new external dependency, `leanprover/lean4-cli`, for argument
   parsing. CLAUDE.md's dependency rule records it: the require block,
   `lake update`, the pinned rev, and `lake-manifest.json` committed.
-  The candidate pin is tag `v4.34.0`. The modules section records the
-  `Cli` name collision and that this tree has not compiled the pin.
-  The hand-rolled parser is the recorded fallback if the pin does not
-  fit v4.34, and the argument behavior above is the same on either
-  route. The coordination client is in-repo Lean, as the spike's
+  The pin is tag `v4.34.0`, commit
+  `e92c9f15fdfacc8536f31cfb3b7ad26c3c8cd204`. The modules section
+  records the consumer that compiled that commit and the rename to
+  `CliHarness`. The hand-rolled parser remains the recorded fallback
+  if a later pin fails v4.34, and the argument behavior above is the
+  same on either route. The coordination client is in-repo Lean, as the spike's
   is, with no Redis client package.
 - No build glue. The executables build through the declarative
   package metadata (PRINCIPLES 4.2).
