@@ -270,7 +270,13 @@ private def dispatch (rt : Runtime) (f : Frame) : Async (Except Core.Error Unit)
 /-- The reader loop. `buf` holds the bytes from `pos` on that no
 message has taken yet. The loop reads the connection only when the
 buffer holds no complete message, so the buffer holds at most one
-partial message, under the cap, and one read. -/
+partial message, under the cap, and one read.
+
+The loop appends each read to `buf`, which it alone holds, so Lean
+grows the array in place. It drops the taken bytes only before a read
+that follows a taken message. A message that arrives in many small
+reads then costs linear time. The Noise reader stays linear the same
+way (`Security/Transport.lean`, "The reader's frames"). -/
 private def readLoop (rt : Runtime) (leftover : ByteArray) : Async (Except Core.Error Unit) := do
   let mut buf := leftover
   let mut pos := 0
@@ -287,8 +293,11 @@ private def readLoop (rt : Runtime) (leftover : ByteArray) : Async (Except Core.
       match chunk with
       | none => return .ok ()
       | some c =>
-        buf := buf.extract pos buf.size ++ c
-        pos := 0
+        if pos > 0 then
+          buf := buf.extract pos buf.size
+          pos := 0
+        -- `buf` has no other reference, so the append grows it in place.
+        buf := buf ++ c
   return .ok ()
 
 /-- End every stream, and refuse new ones. A stream whose peer
