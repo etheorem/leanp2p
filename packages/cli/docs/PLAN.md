@@ -13,7 +13,7 @@ W5.9 gate runs live, outside the suite runner.
 | Unit | Root deps | Deliverable | Done when |
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
-| 1 | W5.7 | the demo node and the ping node binaries, with the composition wiring, as running code that documents it (root W5.8) | the root W5.8 row holds, and the unit 1 milestones pass |
+| 1 | W5.7 | the demo node and the ping node binaries, with the composition wiring, as running code that documents it (root W5.8) | the root W5.8 row holds, the W5.8 behavior section of the package architecture holds, and the unit 1 milestones pass |
 | 2 | 1 | the transport-interop harness, closed by its gate: the go-libp2p matrix `tcp + /noise + yamux`, dial and listen, plus the silent-peer and slow-reader scenarios (root W5.9) | the gate passes, and the unit 2 milestones pass |
 
 Unit 0 is done.
@@ -28,11 +28,43 @@ the same pattern, a live run against foreign nodes.
 
 ## Test milestones (unit 1)
 
+The executable roots are `Demo` and `PingNode`, in `packages/cli`.
+`Main` stays the root of `gossipsub-interop`. The commit that adds
+the files widens the `Cli` lib globs, and it adds the `demo` and
+`pingnode` executables. The W5.8 behavior section of the package
+architecture is the contract those binaries implement, including the
+argument table, the exit codes, the ping and identify deadlines, the
+stream retirement, and the two-host close. Those deadlines start
+after `newStream` returns. The demo echo home and the deadline around
+`Host.newStream` are the open questions in that architecture. The
+echo leg waits on the first. The dial and the demo add no bound of
+their own on the negotiation inside `newStream` until the second has
+an answer.
+
 - The demo runs end to end over loopback: two hosts dial, complete the
-  upgrade, identify, and exchange pings and an echo. The spike's
-  node-suite legs are the carried tests (the spike's `Tests/Node.lean`
-  drives two hosts over loopback TCP through ping, identify, and
-  echo).
+  upgrade, identify, and exchange pings. The listener's identify
+  record carries the bound address and the registered protocol ids.
+  The echo leg joins this run after the echo question has a home.
+  Each `newStream` uses the exchange deadline after the call returns.
+  A bound on the negotiation inside the call waits on the stream-open
+  question.
+  The spike's node-suite legs are the carried tests (the spike's
+  `Tests/Node.lean` drives two hosts over loopback TCP through ping,
+  identify, and echo).
+- `pingnode serve` prints the bound address, flushes it, and stays up
+  until stdin EOF while an inbound dial still completes. This check
+  runs with `LEAN_NUM_THREADS=1` and under `+RTS -N1`. The server
+  lifetime section names the read as an implementation choice.
+  `scripts/park-threads.lean` measures `IO.wait`.
+- A usage error exits 2 before a host exists: a `demo` argument, a
+  missing or unknown `pingnode` subcommand, an extra operand, a port
+  outside 0..65535, a multiaddr that fails `Multiaddr.parse?`, and a
+  dial address that `Host.splitPeer` rejects.
+- `pingnode dial` against `pingnode serve` prints `PING OK`, and both
+  processes close their hosts on the failure paths of the behavior
+  section. The run uses the exchange deadline after `newStream`
+  returns. A bound on the negotiation inside that call waits on the
+  stream-open question.
 - Ping interop with go (the spike's `ping-interop.sh` shape): the
   script builds `pingd.go` in docker (go-libp2p v0.50.0, CGO off),
   starts both nodes on loopback, and dials in both directions over

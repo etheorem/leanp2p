@@ -41,9 +41,9 @@ table lands in `Identify.lean`. The `NoiseHandshakePayload` table went
 to `libp2p/security` beside the handshake it serves. The `Envelope` and
 `PeerRecord` tables stay deferred (§8; §10, row 17). One protocol per
 module line keeps the responsibility split of PRINCIPLES 1.2; this
-package holds four protocols, and no module holds two. The echo demo of
-§2's tree comment (`identify, ping, echo (demo)`) is not in this
-package; §4.9 names no echo, so no module line covers it.
+package holds four protocols, and no module holds two. §4.9 names
+identify, ping, req/resp, and gossipsub, and the module list follows
+that sentence. The package exports no echo handler.
 
 ## Public surface
 
