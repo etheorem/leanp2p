@@ -113,6 +113,8 @@ def startHost (cfg : Config) : Run Host := do
   let key ← generateKey
   let noise ← orFail "noise static key" (fun e => reprStr e)
     (← (Libp2p.Security.Noise.Config.generate key).run)
+  -- The ascription keeps the call in `BaseIO`. The `←` lifts the
+  -- action into the run, and `orFail` binds the `Except` as data.
   orFail "host" (fun e => reprStr e) (← (Host.new {
     identity := key
     transports := [Streams.Tcp.transport]
