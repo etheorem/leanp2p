@@ -59,13 +59,14 @@ connection: one. rust-libp2p holds one decrypted frame in
 drained it (`vendor/rust-libp2p/transports/noise/src/io.rs`, lines 73
 to 94). nim-libp2p decrypts in `readMessage`, on the reader's demand
 (`vendor/nim-libp2p/libp2p/protocols/secure/noise.nim`, line 450). Here
-one chunk is the plaintext of one connection read, so the transport
-reads no further ahead than one read. -/
+one chunk is the plaintext of one post of the reader, the whole frames
+it has gathered, so the transport reads no further ahead than those
+frames and one frame more. -/
 def inboxChunks : Nat := 1
 
 /-- The events that wait for the transport loop. The posters are the
-reader, which holds at most `inboxChunks` credits, so it posts at most
-one read at a time, and the writers of the secure connection, each
+reader, which holds at most `inboxChunks` credits, so it has at most
+one post in flight, and the writers of the secure connection, each
 parked on its own write. The one muxer of the stack writes from one
 task (the yamux ARCHITECTURE, "Three tasks, and one writer"). So the
 queue holds both posters, and a third poster parks. -/

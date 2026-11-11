@@ -253,8 +253,11 @@ the spike's own recorded rule.
   cipher states, and a writer task run each secure connection, as the
   yamux shell runs a session. Noise has no window, so the loop cannot
   hold the overflow of a slow reader. The reader takes a credit before
-  each connection read instead, and each read settles to one delivery
-  or one returned credit (`stepBytesSettles`). The inbox holds
+  each post instead, and each post settles to one delivery or one
+  returned credit (`stepBytesSettles`). A post holds every whole frame
+  the reader has gathered, so a peer whose bytes arrive one per read
+  costs one loop step per frame (the module doc of
+  `Libp2p/Security/Transport.lean`, "The reader's frames"). The inbox holds
   `inboxChunks` = 1 chunk: rust-libp2p holds one decrypted frame ahead
   of its reader (`Output.recv_buffer`,
   `vendor/rust-libp2p/transports/noise/src/io.rs`, lines 42 and 73 to
@@ -291,8 +294,10 @@ the spike's own recorded rule.
   no `crypto/pure` import. The signature checks go through the sign
   and verify dispatch of `libp2p/identity`.
 - From `net/streams`, `Connection`, `BufReader` and `Framing.read` for
-  the handshake reads, and `readLoop` and `Completions` for the reader
-  task and the write tags of the transport shell. From `base/conc`,
+  the handshake reads, and `Completions` for the write tags of the
+  transport shell. The shell's reader is its own task, since it posts
+  whole frames (the module doc of `Libp2p/Security/Transport.lean`,
+  "The reader's frames"). From `base/conc`,
   `Async`, and the channels, the cell, and the task set of that shell.
   From `base/bytes`, the byte model and `Blob`, the bytes inside core
   data. From the codec group, `codec/proto` for the payload message.

@@ -18,8 +18,9 @@ The transport is a pure core (root ARCHITECTURE §3.3), at the small
 scale it has. `State` holds the two cipher states and the ciphertext of
 a frame that has not fully arrived. `step` takes one event:
 
-* `bytes`: one connection read. The core opens every whole frame in the
-  buffer, joins their plaintext, and keeps the rest.
+* `bytes`: the ciphertext of one post of the reader. The core opens
+  every whole frame in the buffer, joins their plaintext, and keeps the
+  rest.
 * `write`: the plaintext of one application write, under a tag. The core
   seals it in chunks of `maxPlaintext` (owned contract 3).
 * `eof`: the connection ended. An end between frames is orderly. An end
@@ -36,23 +37,40 @@ Three tasks run one secure connection, as the yamux shell runs a
 session (`Yamux.Loop`):
 
 * **The reader** reads the connection and posts `Event.bytes`. Before
-  each read it takes a credit, so it never reads further ahead than the
-  inbox has room for.
+  each post it takes a credit, so it never reads further ahead than the
+  inbox has room for, and one frame more.
 * **The loop** owns the `State`. It takes one event at a time, calls
   `step`, and performs the actions. Nothing it performs parks.
 * **The writer** writes the sealed frames to the connection, in order,
   and answers a write's tag after its frames have gone.
+
+## The reader's frames
+
+The reader reads until its buffer holds at least one whole frame, and
+then posts every whole frame of the buffer as one event. It keeps the
+rest of the buffer for the next post. A connection read can split the
+peer's frames at any byte, down to one byte per read. A post per read
+would then cost one loop step and one credit per byte. The buffer holds
+at most one frame that has not fully arrived, `2 + maxMessage` bytes,
+and one read more (root §5.1). At the end of the connection the reader
+posts the rest, so the core sees an end inside a frame
+(`Error.truncatedFrame`).
+
+The reader appends each read to a buffer that it alone holds, so Lean
+grows the array in place, and the appends of a frame cost linear time.
+The handshake's leftover seeds the buffer, so the frames it holds and
+the frames of the reads line up.
 
 ## The credits
 
 Noise has no window, so the read side keeps its bound through credits
 (PRINCIPLES 3.4). The inbox holds `inboxChunks` chunks, and the credit
 channel starts with as many tokens. The reader takes one token per
-read. Each `bytes` event gives exactly one action that settles it
+post. Each `bytes` event gives exactly one action that settles it
 (`stepBytesSettles`): a `deliver` takes an inbox slot, and the reader
 of the secure connection returns the token when it takes the chunk; a
-`credit` returns the token at once, when the read completed no frame.
-So the tokens, the reads in flight, and the chunks in the inbox always
+`credit` returns the token at once, when the post opened no plaintext.
+So the tokens, the posts in flight, and the chunks in the inbox always
 add up to `inboxChunks`. A delivery always finds a free slot, and the
 loop never parks on the inbox. While the application reads nothing, the
 reader holds no token, and TCP carries the back-pressure to the peer.
@@ -93,15 +111,15 @@ structure State where
   pending : Blob
   deriving BEq, Repr
 
-/-- The state after a handshake. The leftover of the handshake arrives
-as the first `bytes` event, so the state starts with no pending
-bytes. -/
+/-- The state after a handshake. The leftover of the handshake seeds
+the reader and arrives in its first `bytes` event, so the state starts
+with no pending bytes. -/
 def State.ofCompletion (c : Completion) : State :=
   ⟨c.send, c.recv, ⟨.empty⟩⟩
 
 /-- An input of the transport core. -/
 inductive Event where
-  /-- The bytes of one connection read. -/
+  /-- The bytes of one post of the reader. -/
   | bytes (b : Blob)
   /-- The plaintext of one application write, under its tag. -/
   | write (tag : Nat) (pt : Blob)
@@ -178,10 +196,56 @@ def openFrames (cs : CipherState) (buf : ByteArray) :
     Except Error (CipherState × ByteArray × ByteArray) :=
   openFrom cs buf (buf.size / 2 + 1) 0 .empty
 
-/-- The action that settles one read: the plaintext, or a credit when
-the read gave none. A frame may carry an empty plaintext, and
-`Connection.read` never answers an empty chunk, so an empty result
-returns the credit. -/
+/-- The end of the whole frames of `buf` from `pos`: the offset after
+the last frame whose 2-byte length and ciphertext are all in `buf`. The
+scan reads only the length prefixes. Each frame takes at least 2 bytes,
+so a `fuel` of `buf.size / 2 + 1` reaches the end (`wholeFrames`). -/
+def wholeFramesFrom (buf : ByteArray) : Nat → Nat → Nat
+  | 0, pos => pos
+  | fuel + 1, pos =>
+    if h : pos + 2 ≤ buf.size then
+      -- The `u16be` prefix of the noise-libp2p spec, "Wire Format".
+      let len := buf[pos].toNat * 256 + buf[pos + 1].toNat
+      if pos + 2 + len ≤ buf.size then wholeFramesFrom buf fuel (pos + 2 + len) else pos
+    else pos
+
+/-- The length of the longest prefix of `buf` that holds whole frames
+only. The reader posts that prefix (module doc, "The reader's
+frames"). -/
+def wholeFrames (buf : ByteArray) : Nat :=
+  wholeFramesFrom buf (buf.size / 2 + 1) 0
+
+/-- The scan never passes the end of the buffer. -/
+theorem wholeFramesFromLe (buf : ByteArray) :
+    ∀ (fuel pos : Nat), pos ≤ buf.size → wholeFramesFrom buf fuel pos ≤ buf.size
+  | 0, _, h => h
+  | fuel + 1, pos, h => by
+    unfold wholeFramesFrom
+    split
+    -- The `let` of the length hides the inner `if` from `split`, so
+    -- `dsimp only` substitutes the binding first.
+    · dsimp only
+      split
+      · next hn => exact wholeFramesFromLe buf fuel _ hn
+      · exact h
+    · exact h
+
+/-- The prefix of whole frames fits in the buffer, so the reader's
+`extract` calls cut inside it. -/
+theorem wholeFramesLe (buf : ByteArray) : wholeFrames buf ≤ buf.size :=
+  wholeFramesFromLe buf _ 0 (Nat.zero_le _)
+
+-- One frame of 1 byte, then a frame of 2 bytes with 1 arrived.
+#guard wholeFrames ⟨#[0, 1, 9, 0, 2, 7]⟩ == 3
+-- One frame of 1 byte, then an empty frame: both are whole.
+#guard wholeFrames ⟨#[0, 1, 9, 0, 0]⟩ == 5
+-- Half a length prefix.
+#guard wholeFrames ⟨#[0]⟩ == 0
+
+/-- The action that settles one post: the plaintext, or a credit when
+the post gave none. A frame may carry an empty plaintext, and the last
+post may hold the rest of a frame only. The inbox takes no empty chunk,
+so an empty result returns the credit. -/
 def settle (pt : ByteArray) : Action :=
   if pt.isEmpty then .credit else .deliver ⟨pt⟩
 
@@ -313,11 +377,40 @@ def teardown (sh : Shared) (ending : Ending) : BaseIO Unit := do
   sh.credits.close
   sh.out.close
 
-/-- The reader task (`Streams.readLoop`). The loop or the application
-returns its credits (module doc, "The credits"). -/
-def reader (sh : Shared) : Async Unit :=
-  Streams.readLoop sh.conn sh.credits sh.outcome.recordFault
-    (fun b => sh.events.send (.bytes ⟨b⟩)) (discard <| sh.events.send .eof)
+/-- The reader task (module doc, "The reader's frames"). `seed` holds
+the handshake's leftover. Before each post it takes a credit, which the
+loop or the application returns (module doc, "The credits"). It reads
+until the buffer holds a whole frame, and posts every whole frame. A
+failed read reaches `recordFault` and ends the reads like the end of
+the connection. The task ends when the credits close, when a post
+answers `.error` (the loop has ended), or at the end of the
+connection. -/
+def reader (sh : Shared) (seed : ByteArray) : Async Unit := do
+  let mut buf := seed
+  repeat
+    -- Park: the loop or the application returns a credit, and the
+    -- teardown closes the credits.
+    if (← sh.credits.recv).isNone then break
+    let mut cut := wholeFrames buf
+    let mut ended := false
+    while cut == 0 && !ended do
+      -- Park: the peer's bytes wake it, and so does the close of the
+      -- connection.
+      match ← (try sh.conn.read catch e => do sh.outcome.recordFault e; pure none) with
+      | some b =>
+        -- `buf` has no other reference, so the append grows it in place.
+        buf := buf ++ b
+        cut := wholeFrames buf
+      | none => ended := true
+    if ended then
+      -- The rest of a frame goes first, so the core sees the end inside
+      -- it (`Error.truncatedFrame`).
+      if !buf.isEmpty then
+        if let .error _ ← sh.events.send (.bytes ⟨buf⟩) then break
+      discard <| sh.events.send .eof
+      break
+    if let .error _ ← sh.events.send (.bytes ⟨buf.extract 0 cut⟩) then break
+    buf := buf.extract cut buf.size
 
 /-- The writer task. It answers each tag after the frames before it, so
 a write answers `.ok` exactly when its frames have gone to the
@@ -379,7 +472,7 @@ namespace Session
 
 /-- Run a secure connection over `conn` with the cipher states of the
 handshake. `leftover` holds the ciphertext the handshake read past its
-last message; it is the first event, ahead of any connection read
+last message; it seeds the reader, ahead of any connection read
 (owned contract 5). -/
 def new (conn : Connection) (c : Completion) (leftover : ByteArray) : BaseIO Session := do
   let sh : Shared := {
@@ -390,18 +483,17 @@ def new (conn : Connection) (c : Completion) (leftover : ByteArray) : BaseIO Ses
     credits := ← Chan.new inboxChunks
     writes := ← Completions.new
     outcome := ← Outcome.new }
-  -- The leftover is a read of its own: it takes a credit, and the
-  -- reader gets the rest. The queues are empty, so each send takes.
-  let first := if leftover.isEmpty then 0 else 1
-  if first = 1 then discard <| sh.events.trySend (.bytes ⟨leftover⟩)
-  for _ in [first:inboxChunks] do
+  -- The credit queue is empty, so each send takes.
+  for _ in [0:inboxChunks] do
     discard <| sh.credits.trySend ()
   let tasks ← TaskSet.new
   tasks.spawn do
     let ending ← sh.run (State.ofCompletion c)
     sh.teardown ending
   tasks.spawn sh.writer
-  tasks.spawn sh.reader
+  -- The leftover seeds the reader's buffer, ahead of every read, so its
+  -- frames come first (module doc, "The reader's frames").
+  tasks.spawn (sh.reader leftover)
   return {
     read := do
       -- Park: the loop's delivery wakes it, and so does `teardown`.

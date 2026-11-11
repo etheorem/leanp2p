@@ -6,8 +6,9 @@ import Streams.Conn
 
 A session of ARCHITECTURE §3.3 has one reader task. It turns each
 connection read into an event for the loop, and the end of the
-connection into a last event. The yamux, mplex, and Noise shells run
-the same task, so it lives here, beside `Connection` (§3.8). Each shell
+connection into a last event. The muxer shells run the same task, so
+it lives here, beside `Connection` (§3.8). The Noise shell runs a
+reader of its own, which posts whole frames. Each shell
 supplies its own posts, since each has its own `Event` type.
 
 The reader takes a credit before each read. The loop hands the credits
