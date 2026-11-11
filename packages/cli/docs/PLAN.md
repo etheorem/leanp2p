@@ -53,9 +53,10 @@ the same pattern, a live run against foreign nodes.
   dials Lean. The script writes the records and a results table in
   the test plan's `name,outcome` shape.
 - The matrix cells for mplex are skipped against go v0.50, which
-  removed mplex upstream (the mux pair's record). The Lean side's
-  mplex identity stays covered in-process, as the spike's
-  `Tests/Interop.lean` does.
+  removed mplex from its defaults (the mux pair's record).
+  `scripts/mplex-interop.sh` runs `Mux.mplex` against go-mplex v0.7.0
+  over loopback TCP, in both directions, and the mux suite covers the
+  identity rule in-process.
 - The silent-peer scenario, the carried regression (PRINCIPLES 5.4):
   a raw connection that sends nothing fails the upgrade at the
   deadline (§5.4), and teardown closes the pending connection and

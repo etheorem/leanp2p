@@ -4,23 +4,30 @@
 lists of §3.1 carry. The seam types live in `libp2p/core`, and this
 package fills them (§3.1, §9, delta 10). yamux is the P0 value:
 `Mux.yamux` assigns the `/yamux/1.0.0` id to the session of
-`net/yamux`, a session that knows no libp2p (§4.9). mplex is the P2
-value, later in the same package, kept for go interop. The eth2
-networking spec removed mplex, so no consensus unit waits on it (§8).
-The spike validated the yamux parity rule live against go-libp2p, and
-the mplex identity rule against the go-mplex spec and in-process (go
-v0.50 removed mplex, so the matrix's mplex cells were skipped). The
-same node code ran under both muxers in-process and over loopback TCP
+`net/yamux`, a session that knows no libp2p (§4.9). mplex is the
+second P0 value, `Mux.mplex` (root PLAN W5.10). The consensus
+networking spec requires mplex of every TCP client, and it makes yamux
+take precedence during negotiation
+(`vendor/consensus-specs/specs/phase0/p2p-interface.md`, lines 210 to
+215). So every host offers `[Mux.yamux, Mux.mplex]`, in that order.
+The spike validated the yamux parity rule live against go-libp2p. go
+v0.50 removed mplex from its defaults, so the go-libp2p matrix skips
+the mplex cells. `scripts/mplex-interop.sh` runs `Mux.mplex` against
+go-mplex v0.7.0 itself over loopback TCP, in both directions. The same
+node code runs under both muxers in-process and over loopback TCP
 (PRINCIPLES 1.3).
 
 ## Modules
 
 | Module | Holds, and why |
 |---|---|
-| `Libp2p/Mux.lean` | the root module. It imports `Constants.lean`, `Yamux.lean`, and `Test.lean` |
+| `Libp2p/Mux.lean` | the root module. It imports `Constants.lean`, `Yamux.lean`, `Test.lean`, and `Mplex.lean` |
 | `Libp2p/Mux/Constants.lean` | `Mux.yamuxId` (`/yamux/1.0.0`), `Mux.mplexId` (`/mplex/6.7.0`), `Mux.testId` (`/leanp2p/test-mux/1.0.0`), and `Mux.mplexMessageCap` (1 MiB). The ids are `Libp2p.Core.ProtocolId` values. One home per fact (§3.4, §3.8) |
 | `Libp2p/Mux/Yamux.lean` | public `Mux.yamux`, the yamux `Muxer` over `Yamux.Session`. The adapter described below |
-| `Libp2p/Mux/Mplex.lean` | the mplex message codec and `Mux.mplex` (P2, §8). Not in the tree. The spike reference is `Conn/Mplex.lean` (§10 row 15, §7 row 10) |
+| `Libp2p/Mux/Mplex.lean` | public `Mux.mplex : Muxer`. `open` calls `Mplex.Session.start` and returns that session on the seam. The spike reference is `Conn/Mplex.lean` (§10 row 15, §7 row 10) |
+| `Libp2p/Mux/Mplex/Wire.lean` | the mplex message codec: the `Flag` inductive, the `List Nat` model `decode?` with its round-trip and cap theorems, and the production `decodeAtB?` over `ByteArray`. An implementation detail under `Libp2p.Mux.Mplex.Wire` |
+| `Libp2p/Mux/Mplex/State.lean` | the pure stream table: `Key` (`(id, initiator)`), `classify` (flag to key), `Halves` (the two directions), and the table transitions. An implementation detail under `Libp2p.Mux.Mplex.State` |
+| `Libp2p/Mux/Mplex/Session.lean` | the runtime shell: one reader task and one writer task over the connection. An implementation detail under `Libp2p.Mux.Mplex.Session` |
 | `Libp2p/Mux/Test.lean` | public `Mux.test : Muxer`. `open` calls `Session.start` and returns that session on the seam |
 | `Libp2p/Mux/Test/Wire.lean` | the header, frame, and incremental parser. An unsupported implementation detail under `Libp2p.Mux.Test.Wire`. Tests import it directly |
 | `Libp2p/Mux/Test/State.lean` | the pure owner-loop state and its transitions. An unsupported implementation detail under `Libp2p.Mux.Test.State`. A transition returns actions for the runtime shell |
@@ -32,8 +39,8 @@ same node code ran under both muxers in-process and over loopback TCP
 ## Public surface
 
 The supported names in `Libp2p.Mux` are the mux values and constants:
-`Mux.yamux`, `Mux.yamuxId`, `Mux.test`, `Mux.testId`, `Mux.mplexId`,
-and `Mux.mplexMessageCap`. Callers use the `Muxer` and `MuxSession`
+`Mux.yamux`, `Mux.yamuxId`, `Mux.test`, `Mux.testId`, `Mux.mplex`,
+`Mux.mplexId`, and `Mux.mplexMessageCap`. Callers use the `Muxer` and `MuxSession`
 operations owned by `Libp2p.Core`: `open`, `openStream`, `accept`,
 `close`, and `join`.
 
@@ -49,10 +56,10 @@ load under `Libp2p.Mux.Test.*`. Those declarations stay unsupported.
   leftover bytes, and returns that session on the seam. The lift
   adds no error arm. `openStream` takes a `ProtocolId`. The private
   frame has no field for it.
-- `Mux.mplex : Muxer` is the P2 surface: `id := Mux.mplexId`, the
-  message codec, and a session that keys streams by
-  `(id, initiator)`. A declared message length is capped at
-  `Mux.mplexMessageCap` (§5.1).
+- `Mux.mplex : Muxer` has `id = Mux.mplexId`. `open` calls
+  `Mplex.Session.start` with the connection and the leftover bytes,
+  and returns that session on the seam. The mplex value below
+  records the session.
 
 ### The yamux value
 
@@ -83,6 +90,56 @@ A thrown connection `IO.Error` propagates to the caller.
 
 Frames, windows, flow control, keepalive, and the session tasks stay
 in `net/yamux`. That package imports no libp2p module.
+
+### The mplex value
+
+The wire format is `vendor/specs/mplex/README.md`. A message is a
+header varint (`id * 8 + flag`), a length varint, and the data.
+`Mplex/Wire.lean` decodes both varints within the 9-byte budget of
+`codec/varint`. A varint that cannot end within 9 bytes is a protocol
+error. A shorter open prefix waits for more bytes. A flag code of 7
+and a declared length above `Mux.mplexMessageCap` are protocol errors.
+The cap check comes straight after the length varint, before the
+reader waits for the data.
+
+Both sides number their streams from zero, so `open` ignores the
+role. The stream table keys each stream by `(id, initiator)`.
+`classify` maps each inbound flag to the key it names: `NewStream`
+and the `*Initiator` flags name a stream the peer opened, and the
+`*Receiver` flags name a stream we opened.
+
+`openStream` writes the protocol id as the NewStream name, a label the
+spec gives no meaning. A close sends the close flag and ends the
+local write direction only. A reset sends the reset flag, retires the
+stream, and makes the next read answer `Streams.Error.reset`. A write
+larger than the cap goes out as several messages of at most the cap.
+
+The session runs one reader task and one writer task, and a `TaskSet`
+owns both. Every local operation goes through the writer queue, so a
+close follows the writes queued before it. The reader never parks on
+the writer. A session that ends reads `Streams.Error.closed` on every
+stream whose peer direction was open. `join` answers
+`Core.Error.protocol` with an `mplex:` detail for a protocol error.
+
+Three bounds hold each peer's input: `inboxCap` messages per stream,
+`acceptCap` streams waiting for `accept`, and `liveStreamCap` live
+streams. A full inbox blocks the reader until the application reads,
+resets the stream, or closes the session. The spec allows that
+answer ("Implementation notes"), and TCP then slows the peer. An
+inbound open over `liveStreamCap` gets a reset.
+
+#### Differences with go-mplex v0.7.0
+
+- go-mplex resets a stream whose reader stays slow for 5 seconds
+  (`ReceiveTimeout`). This session blocks the reader instead, the
+  first answer of the spec.
+- go-mplex skips a message with flag code 7, and resets the stream if
+  it is live. This session ends with a protocol error: the spec names
+  seven flags.
+- go-mplex sets no cap on live streams. This session holds
+  `liveStreamCap`.
+- go-mplex ends the session on a NewStream for a live stream
+  (`ErrInvalidState`). This session does the same.
 
 ## Core boundary
 
@@ -561,13 +618,17 @@ leaves the session open.
    (§4.9). Both sides number their streams from zero, so an id alone
    names no stream, and the session keys every stream by
    `(id, initiator)`. The flag bit routes each inbound message to the
-   key it names. The spike validated the rule against the go-mplex
-   spec and in-process. The unit 2 suite will keep that validation.
+   key it names. `Mplex/State.lean` proves that each outbound flag
+   reaches the mirror key at the peer. The unit 2 suite checks the rule
+   between two sessions, and `scripts/mplex-interop.sh` checks it
+   against go-mplex.
 6. **The 1 MiB cap is checked before allocation** (§5.1,
    PRINCIPLES 2.3). `Mux.mplexMessageCap` names that 1 MiB limit.
    `Constants.lean` owns it, beside the ids. A declared length over
-   the cap is a protocol error, and it tears the session down. The
-   P2 value `Mux.mplex` will reject that length before allocation.
+   the cap is a protocol error, and it tears the session down.
+   `Mplex/Wire.lean` rejects that length straight after the length
+   varint, before the reader waits for or copies any data, and
+   `decodeOverCap` proves it for the model.
 
 ## Decisions
 
@@ -592,11 +653,15 @@ leaves the session open.
   field for it. The test session drops the id. The mplex wire
   label is the id's string form: the frame carries the name as its
   data, a label the spec gives no semantic value.
-- **mplex is P2 and stays in this package's plan** (§8). The eth2 spec
-  removed it, so consensus never waits, and older go-libp2p peers and
-  other stacks still speak it, so the interop surface of §4.9 stays
-  real. Root PLAN W5.4 carries the unit, and §7 row 10 puts mplex last
-  inside the libp2p row.
+- **mplex is P0** (§8, root PLAN W5.10). The consensus networking
+  spec requires it of every TCP client, and older go-libp2p peers and
+  other stacks still speak it. Every host offers it after yamux, as the
+  spec's precedence rule asks. §7 row 10 puts mplex last inside the
+  libp2p row.
+- **The mplex session lives in this package.** mplex has no session
+  outside libp2p to reuse, and it is small. The codec, the pure table,
+  and the shell are three modules under `Libp2p/Mux/Mplex/`, in the
+  shape of the test session.
 
 ## What the package must not depend on
 

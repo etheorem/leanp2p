@@ -14,7 +14,7 @@ session over the `SecureConn`, through `SecureConn.toConnection`.
 
 `Muxer` is the seam (§3.1), and `MuxSession` is the uniform view of
 one running session. yamux fills the seam in `libp2p/mux`, over the
-session of `net/yamux`; mplex follows in the same package. The muxer
+session of `net/yamux`, and `Mux.mplex` fills it in the same package. The muxer
 session is a pure core and one loop task (§3.3). This view talks to
 the loop and holds no state of its own (owned contract 5).
 

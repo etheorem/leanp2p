@@ -28,7 +28,7 @@ so it goes first inside its wave.
 - `libp2p/security` (W5.3) fills `SecurityProtocol` with the Noise
   value and the fixed-key test value (§4.9).
 - `libp2p/mux` (W5.4) fills `Muxer` with the yamux value over W4.3;
-  mplex follows in the same package (P2, §8).
+  `Mux.mplex` fills it in the same package (W5.10).
 - `libp2p/negotiate` (W5.5) runs the upgrader over the core seams. It
   imports `core` and no implementation (§2, §3.1). The leftover
   hand-over between its stages travels in the `ByteArray` arguments

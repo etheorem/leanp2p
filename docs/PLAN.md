@@ -38,7 +38,7 @@ W0 scaffold
  └── track C (net):         W1.1 (+W1.2, W2.1, W2.3) → W4.1 → {W4.2, W4.3}
 W5 joins all three tracks (identity needs A+B, security needs B+C, mux/negotiate need C)
  └── W5.1 → W5.2 → {W5.3, W5.4} → W5.5 → W5.6 → W5.7 → W5.8 → W5.9
-      (mplex, P2, can follow W5.4 at any time)
+      (W5.10 mplex follows W5.4)
 W6 consensus extension
  └── {W6.1 enr, W6.2 snappy} → W6.3 req/resp → W6.4 gossipsub
 ```
@@ -100,12 +100,13 @@ vendor verify included.
 | W5.1 | `libp2p/identity` | P0 | W2.2, W2.3, W3.3 | four key types, deterministic marshalings, strict unmarshal (per-type `Data` length), peer id (identity inlining ≤ 42 B), the key-marshal forms that the backend does not own |
 | W5.2 | `libp2p/core` | P0 | W4.1, W5.1 | `ProtocolId`, `Core.Error`, the seam structures (`SecurityProtocol`/`SecureConn`, `Muxer`/`MuxSession`, `StreamHandler`, gater/resource-manager/address-ranker); types only, with no protocol logic (ARCHITECTURE §3.1, §4.9) |
 | W5.3 | `libp2p/security` (Noise) | P0 | W4.2, W3.3, W5.2 | XX handshake as a pure `step` + transport; leftover hand-over as data; an AEAD failure is a protocol error, distinct from EOF; 8 KiB pre-auth payload cap; the `SecurityProtocol` value plus a fixed-key test value |
-| W5.4 | `libp2p/mux` | P0 (mplex **P2**) | W4.3, W5.2 | the yamux `Muxer` value over W4.3; mplex later in the same package: go-compatible `(id, initiator)` identity, half-close rules |
+| W5.4 | `libp2p/mux` | P0 | W4.3, W5.2 | the yamux `Muxer` value over W4.3; mplex follows as W5.10 in the same package |
 | W5.5 | `libp2p/negotiate` | P0 | W5.2, W5.3, W5.4 | multistream-select as a pure `step` (1 KiB cap, `na`, `ls`, lazy) + upgrader over the `core` seams with leftover hand-over between stages |
 | W5.6 | `libp2p/host` | P0 | W5.5, W5.1, W1.1 | host/swarm, per-peer dedup + simultaneous-dial rule as a pure table update, handler registry, peerstore, shutdown order (§5.5), `Host.Error`, policy seam values |
 | W5.7 | `libp2p/protocols` | P0 | W5.6 | identify (+ push), ping |
 | W5.8 | `cli/` | P0 | W5.7 | demo node + ping node binaries: the composition wiring, as running code that documents it |
 | W5.9 | `cli/` interop | P0 | W5.8 | transport-interop harness; **gate**: go-libp2p matrix `tcp + /noise + yamux`, dial and listen, plus silent-peer and slow-reader scenarios |
+| W5.10 | `libp2p/mux` | P0 | W2.1, W5.2, W5.4 | the mplex `Muxer` value (`/mplex/6.7.0`): the message codec, the go-compatible `(id, initiator)` identity, the half-close rules, and the 1 MiB cap before allocation. The consensus networking spec requires mplex of every TCP client and puts yamux first (`p2p-interface.md`, lines 210 to 215), so every host offers `[Mux.yamux, Mux.mplex]`; go-mplex loopback interop in both directions |
 
 ## W6: consensus extension (P0/P1; see ARCHITECTURE.md §8)
 
@@ -120,7 +121,6 @@ vendor verify included.
 
 - TLS 1.3 and the X.509 extension (next to W5; the spike has a
   reference)
-- mplex interop beyond W5.4
 - QUIC and WebTransport transports (behind `Transport`)
 - kad-dht, peer routing, rendezvous, fetch, mDNS
 - relay and circuit, DCUtR, AUTONAT
