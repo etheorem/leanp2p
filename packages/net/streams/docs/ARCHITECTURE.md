@@ -249,7 +249,10 @@ The names are §7 row 8's. The types follow §3.1.
   suite touches real TCP (PRINCIPLES 1.4). Its byte-splitting mode
   keeps write-boundary coupling visible; a sim that preserved write
   boundaries once hid a per-chunk cipher bug until TCP coalesced the
-  bytes (PRINCIPLES 1.6). The listener registry changes through
+  bytes (PRINCIPLES 1.6). The reading end does the split: the pipe
+  carries each write whole, and each read returns one byte of the held
+  chunk. One pipe value per byte made two tasks hand over each byte
+  through the shared pool, which cost more with more workers. The listener registry changes through
   `OnceRef.update`, never get-then-set (PRINCIPLES 3.3).
 - **`close` resolves the parked read's promise itself.** The runtime
   drops cancelled promises, so a cancel strands the waiter forever
