@@ -45,6 +45,13 @@ path = "packages/cli/hostname"
 name = "Backend"
 path = "packages/crypto/backend"
 
+# `net/tls/native` is a nested Lake package for the same reason: the
+# libssl shim of `net/tls`. It links against the toolchain's static
+# `libssl.a` and `libcrypto.a`.
+[[require]]
+name = "TlsNative"
+path = "packages/net/tls/native"
+
 # `net/streams/shim` is a nested Lake package for the same reason. Its
 # `lakefile.lean` builds the C abort of the TCP transport. It provides
 # the `StreamsShim` library, and it links against the toolchain's own
@@ -157,6 +164,12 @@ roots = ["Yamux"]
 globs = ["Yamux.*"]
 
 [[lean_lib]]
+name = "Tls"
+srcDir = "packages/net/tls"
+roots = ["Tls"]
+globs = ["Tls.*"]
+
+[[lean_lib]]
 name = "Libp2pIdentity"
 srcDir = "packages/libp2p/identity"
 roots = ["Libp2p.Identity"]
@@ -243,6 +256,13 @@ root = "Tests.Interop.Mplex"
 [[lean_exe]]
 name = "noise-interop"
 root = "Tests.Interop.Noise"
+
+# The Lean side of the TLS interop check against go-libp2p's TLS
+# transport; run it through `scripts/tls-interop.sh`. Like
+# `noise-interop`, it is not part of `lake test`.
+[[lean_exe]]
+name = "tls-interop"
+root = "Tests.Interop.Tls"
 
 [[lean_exe]]
 name = "gossipsub-interop"

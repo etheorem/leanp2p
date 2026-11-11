@@ -1,13 +1,22 @@
 # leanp2p security: architecture
 
-`libp2p/security` implements Noise XX
-(`Noise_XX_25519_ChaChaPoly_SHA256`), the only security protocol the
-eth2 networking spec names (§8). The handshake is a pure `step` (§3.3),
-and a `SecurityProtocol` value wraps it (§4.9). A second value with
-fixed keys is the test value (§3.1, §4.9). The noise suite is the
-package's share of the libp2p row (§7 row 10). The TLS extension stays
-deferred (§8): the spike's `Conn/TlsExt.lean` maps here (§10 row 13),
-and no work is planned for it.
+`libp2p/security` implements the two security protocols of the eth2
+networking spec. Noise XX (`Noise_XX_25519_ChaChaPoly_SHA256`) secures
+the TCP transport. The libp2p TLS handshake (`vendor/specs/tls/tls.md`)
+secures the QUIC transport
+(`vendor/consensus-specs/specs/phase0/p2p-interface.md`, lines 179 to
+180: "The QUIC transport is secured using TLS 1.3, configured
+according to the libp2p TLS specification"). This package runs it over
+TCP as `/tls/1.0.0`, and the QUIC transport (W4.4,
+etheorem/leanp2p#92) is to reuse its certificate and its checks. The
+Noise handshake is a pure `step` (§3.3), and a `SecurityProtocol`
+value wraps it (§4.9). A second value with fixed keys is the test
+value (§3.1, §4.9). The TLS
+1.3 engine is `net/tls`, and this package holds the libp2p part of TLS:
+the certificate, its checks, and the seam value. The spike's
+`Conn/TlsExt.lean` maps to `Libp2p/Security/Tls/` (§10 row 13). The
+noise and TLS suites are the package's share of the libp2p row (§7
+row 10).
 
 ## Modules
 
@@ -19,13 +28,18 @@ and no work is planned for it.
 | `Libp2p/Security/Payload.lean` | the `NoiseHandshakePayload` protobuf, its `ProtoMessage` instance (§3.2), the signature input, and the 8 KiB gate |
 | `Libp2p/Security/Transport.lean` | the framed AEAD reads and writes over the two cipher states of `split`, wrapped as the `SecureConn` surface |
 | `Libp2p/Security/Noise.lean` | `Noise.securityProtocol`, the fixed-key test value, and the `Except.mapError` into `Core.Error` (§3.5) |
+| `Libp2p/Security/Tls/Constants.lean` | the `/tls/1.0.0` id, the extension OID, the signature prefix, the ALPN name, the certificate times, and the DER length cap; one home per fact (§3.8) |
+| `Libp2p/Security/Tls/SignedKey.lean` | the `SignedKey` DER codec over the byte model, with the round trip as a theorem |
+| `Libp2p/Security/Tls/Certificate.lean` | `Tls.verify`, the libp2p checks of a peer certificate, with `Tls.CertError`; `Tls.Identity`, our issued certificate, with `Tls.IssueError` |
+| `Libp2p/Security/Tls/Protocol.lean` | `Tls.Config`, `Tls.certificateCheck`, the check the engine runs, `Tls.securityProtocol`, the seam value over the engine of `net/tls`, and the fixed-key test value `Tls.fixedKeyProtocol` |
 
 All declarations live in the `Libp2p.Security` namespace, and the root
 module re-exports the public submodules. §3.1 names the production
 value `Noise.securityProtocol`, and the fixed-key test value beside it
-is `Noise.fixedKeyProtocol`. The spike reference is `Conn/Noise.lean` (§10 row 13); the
-target keeps its wire bytes, framing, and tests, and replaces the code
-shape (§9, delta 8).
+is `Noise.fixedKeyProtocol`. TLS has the same pair,
+`Tls.securityProtocol` and `Tls.fixedKeyProtocol`. The spike reference
+is `Conn/Noise.lean` (§10 row 13); the target keeps its wire bytes,
+framing, and tests, and replaces the code shape (§9, delta 8).
 
 ## Public surface
 
@@ -47,6 +61,21 @@ shape (§9, delta 8).
   and the leftover.
 - The constants of §3.8: the protocol id, the protocol name string,
   and the two caps.
+- The TLS value `Tls.securityProtocol cfg`, with the `/tls/1.0.0` id
+  and the same §4.9 handshake signature. A `Tls.Config` holds the
+  peer id of the host key, our certificate, the engine context, the
+  wall clock of the validity check, and the monotonic clock of the
+  `close_notify` bound. `Config.generate` draws the certificate key;
+  `Config.ofCertKey` takes one. The test value is
+  `Tls.fixedKeyProtocol key certKey now`, over `Config.fixed`: fixed
+  keys, and a wall clock fixed at `now`.
+- `Tls.verify der now`: the libp2p checks of a peer certificate, with
+  one `Tls.CertError` arm per check. The QUIC transport (W4.4) is to
+  call it too. `Tls.certificateCheck now` is the same check in the
+  form the engine takes, `ByteArray → Option String`.
+  `Tls.Identity.issue` and `Identity.generate`: our certificate, with
+  `Tls.IssueError` for a failed issue. `Tls.SignedKey`: the extension
+  value.
 
 The later sections carry the details; the surface names the entry
 points.
@@ -203,6 +232,67 @@ so this package imports it and proves it a second time nowhere
    byte allocates past its cap: the framed read takes the 65535 cap
    before any payload allocation, and the payload decode runs only
    under the 8 KiB gate.
+9. **Every MUST of the TLS spec's "Peer Authentication" has a check.**
+   The engine checks the version, the client certificate, the chain of
+   one, and the ALPN name (`net/tls`, owned contract 1). `Tls.verify`
+   checks the extension, a repeated extension, the unknown critical
+   extensions, the self-signature, the validity window, and the host
+   key's signature. The backend names the extension rule that a
+   refused certificate broke (`Crypto.CertificateRejection`), so each
+   check has its own `CertError` arm.
+   The upgrader compares the derived peer id with the expected one, as
+   for Noise (contract 4).
+10. **No TLS byte reaches a caller before the certificate check.** The
+    engine runs `Tls.verify` inside the handshake, and the seam value
+    builds the `SecureConn` only when it accepted the peer's
+    certificate. A refused certificate sends the peer the alert
+    `bad_certificate` and is `Core.Error.authentication`, with the
+    reason of the check, whether the engine refused it (a chain of
+    more than one, no client certificate) or `Tls.verify` did. A
+    failed read of the wall clock is a refusal too, before the first
+    byte of the handshake: the validity window cannot be checked, and
+    the spec says to abort. A peer that uses no ALPN at all reads as
+    `libp2p`, as the references read it over TCP (the decision "ALPN
+    `libp2p` alone").
+11. **The `SignedKey` decode is capped** (§5.1). A DER length takes at
+    most two bytes, `maxDerLength`, and the contents come from a
+    certificate the engine has already bounded.
+
+## The libp2p TLS handshake
+
+The TLS spec authenticates a peer through a self-signed X.509
+certificate. The certificate's own key is a fresh P-256 key, and the
+host key travels in the libp2p Public Key Extension
+(`1.3.6.1.4.1.53594.1.1`) as a `SignedKey`: the marshaled host public
+key, and the host key's signature over `libp2p-tls-handshake:` and the
+certificate's SubjectPublicKeyInfo.
+
+The work splits in three, by what each part needs:
+
+- **The engine** is `net/tls`: TLS 1.3 only, the client certificate,
+  the one-certificate chain, the ALPN name, and no server name. It
+  knows no libp2p.
+- **The certificate** is `Tls/Certificate.lean`, over the X.509
+  helpers of the `Crypto` facade (§3.6). `Identity.issue` signs our
+  certificate key with the host key and has the backend issue the
+  certificate. `Tls.verify` runs the checks of the spec in order, one
+  error arm per check: the parse, the missing extension, the repeated
+  extension, the unknown critical extension, the self-signature, the
+  validity window, the `SignedKey` decode, the public key, the
+  signature, and the peer id.
+- **The seam value** is `Tls/Protocol.lean`. It reads the wall clock,
+  hands the engine `certificateCheck now`, the pure check over
+  `Tls.verify`, and builds the `SecureConn` from the peer that check
+  accepted.
+
+The `SignedKey` codec is pure and proved: `decode_encode` states that
+every value under the cap reads back from its encoding, over the
+`List Nat` byte model (CLAUDE.md, "Proofs and tests"). The decoder
+refuses every DER form but the shortest, and every trailing byte.
+
+The QUIC transport (W4.4, etheorem/leanp2p#92) is to call the same
+`Tls.verify` on the certificate its own handshake receives, and to
+issue its certificate with the same `Identity`.
 
 ## The handshake extensions
 
@@ -281,6 +371,64 @@ the spike's own recorded rule.
   (r5) defines none. Each transport cipher state runs its counter
   toward 2^64 − 1 nonces and never reaches them in a session's life.
 
+### TLS
+
+- **The certificate check runs inside the handshake, as go-libp2p's
+  does.** go-libp2p checks in `VerifyPeerCertificate`
+  (`vendor/go-libp2p/p2p/security/tls/crypto.go`, lines 119 to 154),
+  and Go sends `bad_certificate` when it fails. The engine runs
+  `Tls.verify` from libssl's verify callback, which sends the same
+  alert (`net/tls`, "The certificate check"). RFC 8446 §6.2 asks for
+  the alert ("SHOULD send an appropriate fatal alert").
+- **The `SignedKey` decoder refuses trailing bytes; go's does not.**
+  go-libp2p reads the value with `asn1.Unmarshal` and drops what
+  follows it (`crypto.go`, line 191). The spec defines the value as
+  one DER `SEQUENCE`, every implementation writes it with a DER
+  encoder, and the four spec certificates hold no trailing byte. So
+  the strict rule refuses no real certificate, and it keeps one parse
+  per value (PRINCIPLES 2.1).
+- **The validity window is checked, against the spike.** The spike's
+  `TlsExt.validateCert` left it out. The spec: "an endpoint MUST check
+  these conditions and abort the connection attempt if (a) the
+  presented certificate is not yet valid, OR (b) if it is expired".
+- **The wall clock is a seam of its own.** The validity times are
+  calendar times, and the `Clock` seam of §3.1 is monotonic. So
+  `Tls.Config.now` reads the wall clock, and a test fixes it. The value
+  reads it once, before the first byte of the handshake, since the
+  check inside the handshake is a pure function (`net/tls`, "The
+  certificate check"); the handshake's deadline bounds how far the
+  time lies from the certificate's arrival. A failed read refuses the
+  peer before the handshake, with a detail that names the clock.
+- **ALPN `libp2p` alone, and the muxer from multistream-select.** The
+  spec allows muxer ids in the client's ALPN offer ("Inlined Muxer
+  Negotiation"). A muxer chosen there would skip the upgrader's muxer
+  stage, and the upgrader imports no implementation (§2, §9 delta 10).
+  So this value offers `libp2p` alone, as it advertises no muxer in
+  the Noise payload. go-libp2p offers its muxers and `libp2p`, and its
+  server takes `libp2p` from our offer
+  (`vendor/go-libp2p/p2p/security/tls/transport.go`, lines 65 to 123).
+  `scripts/tls-interop.sh` checks that no inlined muxer is chosen in
+  either direction. A peer that uses no ALPN reads as `libp2p` too.
+  The spec asks a server to abort only when it supports none of the
+  offered protocols, which libssl does (`net/tls`, the settings), and
+  the references accept a missing ALPN over TCP: Go's `crypto/tls`
+  in both roles (`checkALPN` and `negotiateALPN`), rustls under
+  rust-libp2p in both roles (`process_alpn_protocol`, and the server's
+  `NoApplicationProtocol` only on a failed overlap), and js-libp2p's
+  client, which reads no `alpnProtocol` as no early muxer. Go and
+  rustls require ALPN for QUIC alone, by RFC 9001 §8.1, and
+  nim-libp2p runs TLS inside QUIC only.
+- **The extension is non-critical**, as go-libp2p marks it
+  (`extensionCritical`, `crypto.go`, line 30). The spec allows both,
+  and the suite checks that a critical one is accepted.
+- **The test value fixes the keys and the wall clock.** libssl draws
+  the handshake randomness, and the backend draws the certificate's
+  serial number and its ECDSA nonce, so no handshake byte repeats.
+  `Tls.fixedKeyProtocol` takes a fixed host key, a fixed certificate
+  key, and a fixed time, so the peer ids and every validity answer
+  repeat, which is what a suite above the transport predicts. The
+  suites above the transport run on Noise's fixed-key value (§3.1).
+
 ## What the package must not depend on
 
 - Inside libp2p, `core` and `identity` only (§2: identity → core →
@@ -290,9 +438,13 @@ the spike's own recorded rule.
   `libp2p/host`, or `libp2p/protocols`. The modules import the core
   submodules they name: `Role`, `ProtocolId`, and `Security`.
 - Crypto reaches the package through the `Crypto` facade only (§3.6):
-  SHA-256, HKDF, X25519, and ChaCha20-Poly1305. No `crypto/backend` and
-  no `crypto/pure` import. The signature checks go through the sign
-  and verify dispatch of `libp2p/identity`.
+  SHA-256, HKDF, X25519, and ChaCha20-Poly1305 for Noise, and the
+  P-256 key, the X.509 helpers (`inspect`, `selfSigned`, `issue`) for
+  TLS. No `crypto/backend` and no `crypto/pure` import.
+- From the net group, `net/tls`: the TLS 1.3 engine, which the TLS
+  value calls as `_root_.Tls` (its namespace is `Tls`, and this
+  package's TLS namespace is `Libp2p.Security.Tls`). The signature
+  checks go through the sign and verify dispatch of `libp2p/identity`.
 - From `net/streams`, `Connection`, `BufReader` and `Framing.read` for
   the handshake reads, and `Completions` for the write tags of the
   transport shell. The shell's reader is its own task, since it posts

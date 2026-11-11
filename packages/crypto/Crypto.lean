@@ -36,7 +36,7 @@ namespace Crypto
 
 /-! ## Types and errors -/
 
-export Backend (CryptoError Key32 Digest32 Nonce12 Key32.ofByteArray?
+export Backend (CryptoError CertificateRejection Key32 Digest32 Nonce12 Key32.ofByteArray?
   Digest32.ofByteArray? Nonce12.ofByteArray? Certificate Certificate.validAt)
 
 /-! ## Randomness and key generation: the backend -/
@@ -85,6 +85,6 @@ abbrev secp256k1Recover : ByteArray → ByteArray → ByteArray → UInt32 → B
 
 /-! ## X.509: the backend -/
 
-export Backend (inspect selfSigned)
+export Backend (inspect selfSigned issue)
 
 end Crypto

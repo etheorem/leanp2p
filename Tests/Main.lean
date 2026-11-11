@@ -30,6 +30,7 @@ import Tests.Yamux
 import Tests.Identity
 import Tests.Core
 import Tests.Noise
+import Tests.Tls
 import Tests.Rlp
 import Tests.Enr
 import Tests.Negotiate
@@ -94,6 +95,7 @@ def main : IO UInt32 := do
   Tests.Identity.run r
   Tests.Core.run r
   Tests.Noise.run r
+  Tests.TlsSuite.run r
   Tests.Rlp.run r
   Tests.Enr.run r
   Tests.Negotiate.run r

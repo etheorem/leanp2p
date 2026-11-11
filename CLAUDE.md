@@ -163,10 +163,11 @@ packages/
   net/
     streams/                   Connection, BufReader, Framing, Stream, tcp
     yamux/                     the stream muxer
+    tls/                       TLS 1.3 over a Connection (libssl shim)
   libp2p/
     identity/                  keys, peer ids
     core/                      ProtocolId, Core.Error, the libp2p seam types
-    security/                  Noise XX as a SecurityProtocol value
+    security/                  Noise XX and libp2p TLS as SecurityProtocol values
     mux/                       Muxer values: yamux, mplex
     negotiate/                 multistream-select, upgrader
     host/                      host, peerstore, dedup, deadlines
@@ -278,11 +279,11 @@ spec, the spec wins, and we record the discrepancy rather than paper
 over it.
 
 In scope for v1 (P0 in ARCHITECTURE.md §8): tcp transport, Noise XX,
-yamux, mplex, multistream-select, identity (keys, peer id), identify,
-host and upgrader, req/resp (`ssz_snappy`), gossipsub v1.1, and the ENR
-codec. Deferred to seams only: TLS and the X.509 extension,
-QUIC/WebTransport, kad-dht, mDNS, relay and circuit, hole punching,
-WebSockets, WebRTC, pnet, peer records.
+yamux, mplex, the libp2p TLS handshake and its X.509 extension,
+multistream-select, identity (keys, peer id), identify, host and
+upgrader, req/resp (`ssz_snappy`), gossipsub v1.1, and the ENR codec.
+Deferred to seams only: QUIC/WebTransport, kad-dht, mDNS, relay and
+circuit, hole punching, WebSockets, WebRTC, pnet, peer records.
 
 ## Don'ts
 

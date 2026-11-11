@@ -121,12 +121,22 @@ private def specCertificates (r : Runner) : IO Unit := do
   -- A truncated certificate does not parse.
   let some first := (← jArr file j "cases").head? | throw <| IO.userError s!"{file}: no cases"
   let der ← unhex file (← jStr file first "certHex")
-  r.check "a truncated certificate is invalidCertificate"
-    (failsWith .invalidCertificate (inspect (der.extract 0 (der.size - 1)) oid))
+  r.check "a truncated certificate is malformed"
+    (failsWith (.invalidCertificate .malformed) (inspect (der.extract 0 (der.size - 1)) oid))
   r.check "a truncated certificate fails the self-signature check"
     (!selfSigned (der.extract 0 (der.size - 1)))
-  r.check "a certificate with a trailing byte is invalidCertificate"
-    (failsWith .invalidCertificate (inspect (der.push 0) oid))
+  r.check "a certificate with a trailing byte is malformed"
+    (failsWith (.invalidCertificate .malformed) (inspect (der.push 0) oid))
+  r.check "a required OID that does not parse is invalidInput"
+    (failsWith .invalidInput (inspect der "not an oid"))
+
+/-- The rule a `reject` fixture breaks, by the fixture's name
+(`scripts/gen-backend-fixtures.py`). -/
+private def rejectionOfFixture : String → Option CertificateRejection
+  | "unknownCritical" => some .unknownCriticalExtension
+  | "missingExtension" => some .missingExtension
+  | "duplicateExtension" => some .duplicateExtension
+  | _ => none
 
 private def fixtureCertificates (r : Runner) : IO Unit := do
   let file := "backend-strictness.json"
@@ -141,8 +151,11 @@ private def fixtureCertificates (r : Runner) : IO Unit := do
     let why ← jStr file c "why"
     match ← jStr file c "expect", inspect der oid with
     | "reject", res =>
-      r.check s!"X.509 fixture {name}: invalidCertificate ({why})"
-        (failsWith .invalidCertificate res)
+      match rejectionOfFixture name with
+      | some rule =>
+        r.check s!"X.509 fixture {name}: invalidCertificate {repr rule} ({why})"
+          (failsWith (.invalidCertificate rule) res)
+      | none => r.check s!"X.509 fixture {name}: no rule names this reject fixture" false
     | "accept", .ok cert =>
       r.check s!"X.509 fixture {name}: accepted, value and times match ({why})"
         (cert.extension == value && cert.notBefore == nb && cert.notAfter == na &&

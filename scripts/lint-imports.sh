@@ -18,13 +18,13 @@
 # under `packages/<group>/<leaf>/` belongs to that leaf. An import of
 # leaf M by a file of leaf L is allowed when M is L itself or M's rank
 # is below L's; imports point downward along the chain arrows of §2:
-# net streams < yamux; codec varint = snappy < proto = multiformats;
-# crypto pure = backend < the Crypto facade; libp2p identity < core <
-# security = mux < negotiate < host < protocols. Siblings have no
-# edge, so an equal-rank import is a violation either way. The ranks
-# state an order, and §2's arrows state the order; an import the order
-# allows but no docs row names is headroom, and the docs win on a
-# conflict. A file directly
+# net streams < yamux = tls; codec varint = snappy < proto =
+# multiformats; crypto pure = backend < the Crypto facade; libp2p
+# identity < core < security = mux < negotiate < host < protocols.
+# Siblings have no edge, so an equal-rank import is a violation either
+# way. The ranks state an order, and §2's arrows state the order; an
+# import the order allows but no docs row names is headroom, and the
+# docs win on a conflict. A file directly
 # under the group directory is the group root (today the Crypto facade
 # and `CliHarness.lean`); it may import every leaf of its group. The
 # module `Cli` is the parser package, and it sits at this end of the
@@ -72,6 +72,7 @@ leafrank() {
   case $1 in
     net/streams)        lrank=1 ;;
     net/yamux)          lrank=2 ;;
+    net/tls)            lrank=2 ;;
     codec/varint)       lrank=1 ;;
     codec/snappy)       lrank=1 ;;
     codec/proto)        lrank=2 ;;
@@ -151,7 +152,7 @@ while IFS= read -r -d '' f; do
         seg=${mod%%.*}
         case $seg in
           Cli|CliHarness|Interop) gname=cli; grank=0 ;;
-          Streams|StreamsShim|Yamux) gname=net;    grank=2 ;;
+          Streams|StreamsShim|Yamux|Tls|TlsNative) gname=net;    grank=2 ;;
           Crypto|CryptoPure|Backend) gname=crypto; grank=3 ;;
           Varint|Multiformats|Proto|Snappy) gname=codec; grank=4 ;;
           Conc|Bytes) gname=base;   grank=5 ;;
@@ -196,6 +197,7 @@ while IFS= read -r -d '' f; do
           case $seg in
             Streams|StreamsShim) mleaf=streams ;;
             Yamux)        mleaf=yamux        ;;
+            Tls|TlsNative) mleaf=tls          ;;
             Varint)       mleaf=varint       ;;
             Proto)        mleaf=proto        ;;
             Multiformats) mleaf=multiformats ;;

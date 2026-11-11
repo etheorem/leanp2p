@@ -107,6 +107,7 @@ vendor verify included.
 | W5.8 | `cli/` | P0 | W5.7 | demo node + ping node binaries: the composition wiring, as running code that documents it |
 | W5.9 | `cli/` interop | P0 | W5.8 | transport-interop harness; **gate**: go-libp2p matrix `tcp + /noise + yamux`, dial and listen, plus silent-peer and slow-reader scenarios |
 | W5.10 | `libp2p/mux` | P0 | W2.1, W5.2, W5.4 | the mplex `Muxer` value (`/mplex/6.7.0`): the message codec, the go-compatible `(id, initiator)` identity, the half-close rules, and the 1 MiB cap before allocation. The consensus networking spec requires mplex of every TCP client and puts yamux first (`p2p-interface.md`, lines 210 to 215), so every host offers `[Mux.yamux, Mux.mplex]`; go-mplex loopback interop in both directions |
+| W5.11 | `net/tls` + `libp2p/security` (TLS) | P0 | W3.2, W5.1, W5.2 | the libp2p TLS handshake: the TLS 1.3 engine over libssl (`net/tls`), the `SignedKey` codec with its round-trip theorem, the certificate and its checks (every MUST of the spec's "Peer Authentication"), and `/tls/1.0.0` as a `SecurityProtocol` value with its fixed-key test value; **gate**: the four spec certificates, and go-libp2p's TLS transport over loopback TCP in both directions |
 
 ## W6: consensus extension (P0/P1; see ARCHITECTURE.md §8)
 
@@ -119,8 +120,6 @@ vendor verify included.
 
 ## Deferred (P2: seams only, no scheduled work)
 
-- TLS 1.3 and the X.509 extension (next to W5; the spike has a
-  reference)
 - QUIC and WebTransport transports (behind `Transport`)
 - kad-dht, peer routing, rendezvous, fetch, mDNS
 - relay and circuit, DCUtR, AUTONAT

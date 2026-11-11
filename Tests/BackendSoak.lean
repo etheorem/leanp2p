@@ -81,7 +81,7 @@ def BackendSoak.run (r : Runner) : IO Unit := do
       -- The input is no certificate: an answer other than the error
       -- counts as an error of the soak.
       match inspect input "1.3.6.1.4.1.53594.1.1" with
-      | .error .invalidCertificate => checksum := checksum + 1
+      | .error (.invalidCertificate .malformed) => checksum := checksum + 1
       | _ => errors := errors + 1
     | _ => checksum := checksum + (selfSigned input).toNat
   let some after ← rssKiB | r.check "soak: RSS readable after the run" false
