@@ -18,9 +18,9 @@ test-plan peer is the model on the other side of the wire
 (`vendor/go-libp2p/test-plans/cmd/ping/main.go`).
 
 Both sides read the configuration, connect to Redis, and start a host
-with the TCP transport, Noise, and yamux. `libp2p/mux` holds no mplex
-value (P2, the mux PLAN, unit 2), so a run with `muxer=mplex` exits
-nonzero at the host start.
+with the TCP transport and Noise. The host offers the one muxer the
+test plan configures: `Mux.yamux` for `muxer=yamux`, `Mux.mplex` for
+`muxer=mplex` (root PLAN W5.10).
 
 * **The listener** listens, publishes its address with the `/p2p/<id>`
   suffix through `RPUSH`, and sleeps for the test timeout. The runner
@@ -104,12 +104,12 @@ def generateKey : Run PrivKey := do
   orFail "identity key" (fun e => reprStr e) (PrivKey.ofData? .ed25519 seed.bytes)
 
 /-- The host of one run: TCP, Noise with a static key from the system
-generator, yamux, and the ping handler (root §3.1: the ordered lists
-are assembled here). -/
+generator, the configured muxer, and the ping handler (root §3.1: the
+ordered lists are assembled here). -/
 def startHost (cfg : Config) : Run Host := do
   let muxer ← match cfg.muxer with
     | .yamux => pure Libp2p.Mux.yamux
-    | .mplex => throw "muxer mplex: libp2p/mux holds no mplex value (P2, the mux PLAN, unit 2)"
+    | .mplex => pure Libp2p.Mux.mplex
   let key ← generateKey
   let noise ← orFail "noise static key" (fun e => reprStr e)
     (← (Libp2p.Security.Noise.Config.generate key).run)

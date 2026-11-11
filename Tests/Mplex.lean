@@ -293,7 +293,7 @@ private def ends : Async Ends := do
 /-- The session `Mux.mplex.open` returns. -/
 private def openSession (role : Role) (conn : Connection)
     (leftover : ByteArray := .empty) : Async MuxSession := do
-  match ← (mplex.open role conn leftover).run with
+  match ← (mplex.open role conn leftover Conc.Clock.system).run with
   | .ok sess => return sess
   | .error e => throw <| IO.userError s!"mplex open failed: {repr e}"
 

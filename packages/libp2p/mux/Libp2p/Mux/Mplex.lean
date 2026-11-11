@@ -23,10 +23,12 @@ namespace Libp2p.Mux
 open Libp2p.Core
 
 /-- The mplex muxer. `id` is `mplexId`. `open` starts the session.
-The leftover bytes are the reader's first input. -/
+The leftover bytes are the reader's first input. The role has no part:
+both sides number from zero. The clock has no part either: the session
+holds no timer. -/
 def mplex : Muxer where
   id := mplexId
-  «open» := fun _ connection leftover =>
+  «open» := fun _ connection leftover _clock =>
     ExceptT.lift (Mplex.Session.start connection leftover)
 
 end Libp2p.Mux

@@ -71,7 +71,7 @@ def joinOk (s : MuxSession) : Async Unit := do
 
 /-- The session `Mux.mplex.open` returns. -/
 def openSession (role : Role) (conn : Connection) : Async MuxSession := do
-  match ← (mplex.open role conn .empty).run with
+  match ← (mplex.open role conn .empty Conc.Clock.system).run with
   | .ok s => return s
   | .error e => fail s!"open: {repr e}"
 
