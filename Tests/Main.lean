@@ -38,6 +38,7 @@ import Tests.Host
 import Tests.Protocols
 import Tests.ReqResp
 import Tests.Interop
+import Tests.Cli
 
 /-!
 # Test entry point
@@ -91,4 +92,5 @@ def main : IO UInt32 := do
   Tests.Protocols.run r
   Tests.ReqResp.run r
   Tests.Interop.run r
+  Tests.Cli.run r
   r.summary

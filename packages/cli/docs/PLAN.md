@@ -31,8 +31,9 @@ the same pattern, a live run against foreign nodes.
 The executable roots are `Demo` and `PingNode`, in `packages/cli`.
 `Main` stays the root of `gossipsub-interop`. The lib is
 `CliHarness`. Its globs include `Demo` and `PingNode`, and the
-lakefile names the `demo` and `pingnode` executables. Each entry
-prints `not implemented` and exits 1. The W5.8 behavior section
+lakefile names the `demo` and `pingnode` executables. A usage
+error exits 2. A valid list prints `not implemented` and exits 1.
+The W5.8 behavior section
 of the package architecture is the contract those binaries implement,
 including the argument table, the exit codes, the ping and identify
 deadlines, the
@@ -60,8 +61,12 @@ an answer.
   `scripts/park-threads.lean` measures `IO.wait`.
 - A usage error exits 2 before a host exists: a `demo` argument, a
   missing or unknown `pingnode` subcommand, an extra operand, a port
-  outside 0..65535, a multiaddr that fails `Multiaddr.parse?`, and a
-  dial address that `Host.splitPeer` rejects.
+  outside 0..65535, a multiaddr that fails `Multiaddr.parse?`, a
+  dial address that `Host.splitPeer` rejects, and a dial address
+  whose transport prefix still contains a `p2p` component. A line
+  break in an operand stays inside that one stderr line.
+  `Tests/Cli.lean` runs the built binaries for these cases. A valid
+  list still exits 1 with the unfinished diagnostic.
 - `pingnode dial` against `pingnode serve` prints `PING OK`, and both
   processes close their hosts on the failure paths of the behavior
   section. The run uses the exchange deadline after `newStream`

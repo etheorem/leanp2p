@@ -27,7 +27,9 @@ row 18).
 | `Interop/Redis.lean` | the harness coordination client, private to the `interop` executable: `PING`, `RPUSH`, and `BLPOP` over one connection; the spike's `LeanP2P/Interop/Redis.lean` mapped here |
 
 `Demo.lean` and `PingNode.lean` are the executable roots. Each
-`main` prints `not implemented` to stderr and exits 1. `Main.lean`
+`main` checks its arguments with `Cmd.parse`. A usage error exits 2.
+A valid list prints `not implemented` to stderr and exits 1.
+`Main.lean`
 stays the gossipsub participant. The Lake lib is `CliHarness`.
 `CliHarness.lean` declares no API, and the lib exists so the suite
 can import the harness (see Decisions). Its globs include `Demo`
@@ -142,9 +144,9 @@ above stays in force.
 Both files sit in `packages/cli`. The namespaces are `Cli.Demo` and
 `Cli.PingNode`, the shape `Cli.GossipsubSession` already uses.
 `gossipsub-interop` keeps the root `Main`. `interop` keeps the root
-`Interop.Main`. `lakefile.toml` names `demo` and `pingnode`. Each
-entry prints `not implemented` to stderr and exits 1. The argument
-table below is the contract for the later slice.
+`Interop.Main`. `lakefile.toml` names `demo` and `pingnode`. The
+argument table below is in force. A valid list then prints
+`not implemented` to stderr and exits 1.
 
 ### Arguments
 
@@ -168,13 +170,26 @@ is a usage error. The stderr line is the failure text and the
 operand.
 
 The last component of a dial address is `/p2p/<id>`.
-`Host.splitPeer` returns the transport address and a `PeerId`. A
-missing final component, a peer component in another position, an
-address whose only component is `/p2p/<id>`, and any other
-`splitPeer` failure are usage errors. The dial then uses that peer
-id as the expected identity. A port of 0 inside a parsed dial
-address reaches the transport, and the transport reports the result
-as a runtime failure.
+`Host.splitPeer` returns the transport address and a `PeerId`.
+`splitPeer` removes only that trailing component. A `p2p` component
+that remains in the transport prefix is a usage error. A missing
+final component, a peer component in another position, an address
+whose only component is `/p2p/<id>`, and any other `splitPeer`
+failure are usage errors. The dial then uses that peer id as the
+expected identity. A port of 0 inside a parsed dial address reaches
+the transport, and the transport reports the result as a runtime
+failure. This slice accepts that address and then takes the
+unfinished path.
+
+The commands are `Cmd.init` values with an empty flag list, so help
+and version flags are absent. `Cmd.parse` answers the parser error.
+A usage line is that message, `reprStr` of a `Multiaddr.parse?`
+error followed by the operand, `Host.Error.render` of a `splitPeer`
+error followed by the operand, or `dial address has an earlier /p2p
+peer:` followed by the operand. `.ok (_, none)` from `splitPeer` is
+a usage error. A newline in an operand is written as `\n`, and a
+carriage return as `\r`, before the line is printed. The process
+creates no host.
 
 ### Exit status
 
