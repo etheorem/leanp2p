@@ -2,6 +2,7 @@ import Libp2p.Negotiate.Constants
 import Libp2p.Negotiate.Message
 import Libp2p.Negotiate.Step
 import Libp2p.Negotiate.Upgrade
+import Libp2p.Negotiate.Secured
 
 /-!
 # Libp2p.Negotiate

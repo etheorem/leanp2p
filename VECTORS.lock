@@ -60,7 +60,7 @@ dir = "vendor/specs"
 repo = "https://github.com/libp2p/specs"
 commit = "78e75c6f4e5dd9de4bc1524c686c0f45df4b461a"
 branch = "master"
-used-for = "peer-ids, tls, noise, multistream-select, RFC 0002/0003 spec examples (tier B)"
+used-for = "peer-ids, tls, noise, multistream-select, RFC 0002/0003 spec examples (tier B); quic/README.md: the QUIC transport, its ALPN and its peer authentication (W4.4)"
 
 [[vendor]]
 dir = "vendor/test-plans"
@@ -88,7 +88,7 @@ dir = "vendor/go-libp2p"
 repo = "https://github.com/libp2p/go-libp2p"
 commit = "3c2c902122cb6fae3897f729a3dbb9d4665ae90d"
 branch = "master"
-used-for = "core/crypto/test_data fixtures (rsa/secp256k1/ecdsa key protobufs + signatures over a fixed message) and crypto/fixture_test.go TestFixtures; core/crypto/pb/crypto.proto and core/peer/pb/peer_record.proto: authoritative field tables (phase 2)"
+used-for = "core/crypto/test_data fixtures (rsa/secp256k1/ecdsa key protobufs + signatures over a fixed message) and crypto/fixture_test.go TestFixtures; core/crypto/pb/crypto.proto and core/peer/pb/peer_record.proto: authoritative field tables (phase 2); p2p/security/tls: the certificate shape and the checks (W5.11); p2p/transport/quicreuse/config.go, p2p/transport/quic/conn.go, go.mod, and core/transport/transport.go: the QUIC parameters, the orderly close, the quic-go pin, and the secured transport seam (W4.4)"
 
 [[vendor]]
 dir = "vendor/go-yamux"
@@ -137,8 +137,8 @@ dir = "vendor/lean4"
 repo = "https://github.com/leanprover/lean4"
 commit = "293d5d0c0c3f3dded4688b3ccd6a33939ac5102b"
 branch = "master"
-paths = ["/src/runtime/uv/tcp.h", "/src/runtime/uv/tcp.cpp", "/LICENSE"]
-used-for = "v4.34.0, the pinned toolchain: the libuv TCP binding of the runtime, the socket layout and the request references that the net/streams shim relies on"
+paths = ["/src/runtime/uv/tcp.h", "/src/runtime/uv/tcp.cpp", "/src/runtime/uv/udp.h", "/src/runtime/uv/udp.cpp", "/LICENSE"]
+used-for = "v4.34.0, the pinned toolchain: the libuv TCP and UDP bindings of the runtime. The net/streams shim relies on the TCP socket layout and its request references; the net/quic shim relies on the UDP socket layout, the descriptor that uv_udp_init leaves unopened, and the reuse flag of the UDP bind"
 
 [[vendor]]
 dir = "vendor/protobuf-go"
@@ -202,7 +202,7 @@ repo = "https://github.com/ethereum/consensus-specs"
 commit = "0216d01ba3215a169953f8783444b8ddaee51ed8"
 branch = "master"
 paths = ["/specs/phase0/p2p-interface.md", "/specs/altair/p2p-interface.md", "/LICENSE"]
-used-for = "the Req/Resp domain: the ssz_snappy encoding, the response chunk, the result codes, the context bytes, and the size caps (W6.3)"
+used-for = "the Req/Resp domain: the ssz_snappy encoding, the response chunk, the result codes, the context bytes, and the size caps (W6.3); the transports, QUIC first, and their encryption, TLS for QUIC (W4.4, W5.11)"
 
 [[vendor]]
 dir = "vendor/snappy"

@@ -39,6 +39,7 @@ W0 scaffold
 W5 joins all three tracks (identity needs A+B, security needs B+C, mux/negotiate need C)
  └── W5.1 → W5.2 → {W5.3, W5.4} → W5.5 → W5.6 → W5.7 → W5.8 → W5.9
       (W5.10 mplex follows W5.4)
+      (W5.11 TLS follows W5.2; W4.4 QUIC follows W5.9 and W5.11)
 W6 consensus extension
  └── {W6.1 enr, W6.2 snappy} → W6.3 req/resp → W6.4 gossipsub
 ```
@@ -92,13 +93,14 @@ vendor verify included.
 | W4.1 | `net/streams` core | P0 | W1.1, W1.2, W2.1, W2.3 | `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` (+`prependBytes`) as the seam over a loop (ARCHITECTURE §3.3), the in-memory sim as the second `Transport` value; W2.1 gives `Framing` its `uvarint` prefix, and W2.3 gives the seam its `Multiaddr` |
 | W4.2 | `net/streams` tcp | P0 | W4.1, W1.1 | libuv transport with the close-wakes discipline, failed-write teardown, deadline wiring for §5.4 |
 | W4.3 | `net/yamux` | P0 | W4.1 | header codec (a proved `LawfulCodec`), session as a pure `step` + one loop task (ARCHITECTURE §3.3), flow control, hostile-frame rules (caps, SYN-only + parity, stream retirement, wake hand-off, capped control queue) |
+| W4.4 | `net/quic` + `libp2p/quic` | P0 | W4.1, W5.2, W5.6, W5.9, W5.11 | the QUIC transport (RFC 9000, `quic-v1`): ngtcp2 pinned and bound FFI first, one loop task per UDP socket over the `Clock` seam, the stream views, the bounds of new connections (a cap on handshakes, a Retry past half of it, the owner's admission before each handshake), the `SecuredTransport` seam in `libp2p/core` with its sim value in `libp2p/negotiate`, the host's secured transports and its QUIC-first ranker, and the certificate check of W5.11 inside the handshake. The consensus networking spec makes QUIC a MUST and the primary transport (`p2p-interface.md`, lines 154 to 161); **gate**: go-libp2p's QUIC transport in both directions, with the "Peer Authentication" refusals, and the `quic-v1` cells of the W5.9 matrix |
 
 ## W5: libp2p (joins the tracks)
 
 | Unit | Pkg | P | deps | Deliverable |
 |---|---|---|---|---|
 | W5.1 | `libp2p/identity` | P0 | W2.2, W2.3, W3.3 | four key types, deterministic marshalings, strict unmarshal (per-type `Data` length), peer id (identity inlining ≤ 42 B), the key-marshal forms that the backend does not own |
-| W5.2 | `libp2p/core` | P0 | W4.1, W5.1 | `ProtocolId`, `Core.Error`, the seam structures (`SecurityProtocol`/`SecureConn`, `Muxer`/`MuxSession`, `StreamHandler`, gater/resource-manager/address-ranker); types only, with no protocol logic (ARCHITECTURE §3.1, §4.9) |
+| W5.2 | `libp2p/core` | P0 | W4.1, W5.1 | `ProtocolId`, `Core.Error`, the seam structures (`SecurityProtocol`/`SecureConn`, `Muxer`/`MuxSession`, `StreamHandler`, gater/resource-manager/address-ranker; `SecuredTransport`/`SecuredSession` arrives with W4.4); types only, with no protocol logic (ARCHITECTURE §3.1, §4.9) |
 | W5.3 | `libp2p/security` (Noise) | P0 | W4.2, W3.3, W5.2 | XX handshake as a pure `step` + transport; leftover hand-over as data; an AEAD failure is a protocol error, distinct from EOF; 8 KiB pre-auth payload cap; the `SecurityProtocol` value plus a fixed-key test value |
 | W5.4 | `libp2p/mux` | P0 | W4.3, W5.2 | the yamux `Muxer` value over W4.3; mplex follows as W5.10 in the same package |
 | W5.5 | `libp2p/negotiate` | P0 | W5.2, W5.3, W5.4 | multistream-select as a pure `step` (1 KiB cap, `na`, `ls`, lazy) + upgrader over the `core` seams with leftover hand-over between stages |
@@ -120,7 +122,7 @@ vendor verify included.
 
 ## Deferred (P2: seams only, no scheduled work)
 
-- QUIC and WebTransport transports (behind `Transport`)
+- WebTransport (over QUIC, behind `SecuredTransport`)
 - kad-dht, peer routing, rendezvous, fetch, mDNS
 - relay and circuit, DCUtR, AUTONAT
 - WebSockets, WebRTC, pnet, libp2p-HTTP

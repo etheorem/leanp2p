@@ -8,7 +8,7 @@ Lean later"; PRINCIPLES 4.1). The package knows no protocol above TLS
 certificate and its key, and gives the check of the peer's certificate,
 which the engine runs inside the handshake. The libp2p TLS handshake
 (`libp2p/security`, root PLAN W5.11) is its caller, and the QUIC
-transport (W4.4, etheorem/leanp2p#92) is to be the second.
+transport (`net/quic`, root PLAN W4.4) is the second.
 
 ## Modules
 
@@ -109,10 +109,10 @@ from it.
 ## One context for both transports
 
 QUIC runs TLS 1.3 inside its own packets (RFC 9001). The QUIC
-transport (W4.4, etheorem/leanp2p#92) is to drive an `SSL` from its
-own shim, and that `SSL` comes from the same `SSL_CTX`. The TLS
-settings of the table above then have one home for both transports
-(PRINCIPLES 1.5). `tls_shim.h` gives that shim what it needs:
+transport (`net/quic`) drives an `SSL` from its own shim, and that
+`SSL` comes from the same `SSL_CTX`. The TLS settings of the table
+above have one home for both transports (PRINCIPLES 1.5). `tls_shim.h`
+gives that shim what it needs:
 
 - the context and the ALPN list of a `Tls.Context` object;
 - `leanp2p_tls_attach_check`, which hands its `SSL` the caller's

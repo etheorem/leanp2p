@@ -5,6 +5,7 @@ import Libp2p.Core.Security
 import Libp2p.Core.Mux
 import Libp2p.Core.Handler
 import Libp2p.Core.Policy
+import Libp2p.Core.Transport
 
 /-!
 # Libp2p.Core

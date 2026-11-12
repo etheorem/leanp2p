@@ -9,8 +9,9 @@ The in-suite checks of `packages/cli/docs/PLAN.md`, "Test milestones
 (unit 2)": the parts of the harness that run without a peer. The live
 matrix runs outside the suite, in `scripts/interop-matrix.sh`.
 
-* The configuration, read from a table in place of the environment, and
-  the timing record with the test plan's keys.
+* The configuration, read from a table in place of the environment:
+  `tcp` with each security and muxer, and `quic-v1`, which skips both.
+  Then the timing record with the test plan's keys.
 * The RESP2 header parse and its caps.
 * The Redis client against a scripted server over the sim transport. The
   server's reply waits in the pipe before the client sends its command,
@@ -49,22 +50,34 @@ private def configChecks (r : Runner) : IO Unit := do
       (c.listenAddr.describe == "/ip4/0.0.0.0/tcp/0")
     r.check "config: redis_addr reads as a TCP address" (c.redisAddr.describe == "/ip4/10.0.0.5/tcp/6379")
     r.check "config: the timeout defaults to 180 s" (c.timeoutSec == 180)
-    r.check "config: yamux" (c.muxer == .yamux)
+    r.check "config: tcp, noise, yamux" (c.transport == .tcp .noise .yamux)
   | .error e => r.check s!"config: a valid table parses ({e})" false
   match Config.parse (envOf (("is_dialer", "true") :: ("muxer", "mplex") :: ("ip", "127.0.0.1") ::
       ("test_timeout_seconds", "30") :: base)) with
   | .ok c =>
     r.check "config: is_dialer=true picks the dialer" c.isDialer
-    r.check "config: mplex" (c.muxer == .mplex)
+    r.check "config: mplex" (c.transport == .tcp .noise .mplex)
     r.check "config: ip" (c.listenAddr.describe == "/ip4/127.0.0.1/tcp/0")
     r.check "config: test_timeout_seconds" (c.timeoutSec == 30)
   | .error e => r.check s!"config: the dialer table parses ({e})" false
   match Config.parse (envOf (("test_timeout_seconds", "soon") :: base)) with
   | .ok c => r.check "config: a timeout that is no numeral keeps the default, as go does" (c.timeoutSec == 180)
   | .error e => r.check s!"config: a bad timeout still parses ({e})" false
+  match Config.parse (envOf (("security", "tls") :: base.filter (·.1 != "security"))) with
+  | .ok c => r.check "config: tls over tcp" (c.transport == .tcp .tls .yamux)
+  | .error e => r.check s!"config: the tls table parses ({e})" false
+  -- `quic-v1` skips the security and the muxer, as the go peer does: an
+  -- unsupported value of either still parses.
+  match Config.parse (envOf ([("transport", "quic-v1"), ("security", "plaintext"),
+      ("muxer", "mux9")] ++ base.filter (·.1 == "redis_addr"))) with
+  | .ok c =>
+    r.check "config: quic-v1" (c.transport == .quicV1)
+    r.check "config: quic-v1 listens on UDP, port 0"
+      (c.listenAddr.describe == "/ip4/0.0.0.0/udp/0/quic-v1")
+  | .error e => r.check s!"config: the quic-v1 table parses ({e})" false
   -- Each unsupported value, and each address the harness cannot take,
   -- is an error.
-  for (k, v) in [("transport", "quic-v1"), ("security", "tls"), ("muxer", "mux9"),
+  for (k, v) in [("transport", "webtransport"), ("security", "plaintext"), ("muxer", "mux9"),
       ("redis_addr", "redis:6379"), ("redis_addr", "10.0.0.5"), ("ip", "::1")] do
     r.check s!"config: {k}={v} is an error"
       ((Config.parse (envOf ((k, v) :: base.filter (·.1 != k)))) matches .error _)

@@ -346,17 +346,26 @@ private def failHandler : StreamHandler where
 /-- A host of the suite on `net`, its peer id, and the channel its
 failures arrive on. -/
 private def mkHost (net : Sim.Net) (idByte : UInt8) (tc : TestClock)
-    (gater : ConnectionGater := Policy.permissiveGater) :
+    (gater : ConnectionGater := Policy.permissiveGater)
+    (resources : ResourceManager := Policy.unlimited) :
     Async (Host × Chan Failure) := do
   let cfg ← cfgOf idByte
   let failures : Chan Failure ← Chan.new 16
+  let noise ← noiseOf idByte
+  let some localPeer := (cfg.identity.toPublic.bind PeerId.ofPubKey).toOption
+    | throw <| IO.userError "test peer id does not build"
   let config : Config := {
     identity := cfg.identity
     transports := [net.transport]
-    security := [← noiseOf idByte]
+    -- The sim value of the secured seam takes the `quic-v1` addresses of
+    -- the net, so every host of the suite has a secured path too.
+    securedTransports := [Libp2p.Negotiate.securedOver net.transport Policy.isQuic localPeer
+      [noise] [Libp2p.Mux.yamux] tc.clock]
+    security := [noise]
     muxers := [Libp2p.Mux.yamux, Libp2p.Mux.mplex]
     handlers := [echoHandler, failHandler]
     gater
+    resources
     clock := tc.clock
     onFailure := fun f => discard (failures.trySend f) }
   match ← (Host.new config : BaseIO _) with
@@ -665,6 +674,160 @@ private def mplexChecks (r : Runner) : Async Unit := do
   a.close
   tc.close
 
+/-! ## The secured paths
+
+Every host of the suite holds the sim value of the secured seam
+(`Libp2p.Negotiate.securedOver`, root ARCHITECTURE §3.1) for the
+`quic-v1` addresses of the net, beside the sim transport for the rest.
+So the host's secured paths run with no socket (PRINCIPLES 1.4), the
+same paths a QUIC connection takes. -/
+
+/-- A resource manager that limits nothing and counts the scopes it
+opened and the scopes released, each release once. -/
+private def countingResources (opened released : OnceRef Nat) : ResourceManager where
+  openConnection _ _ _ := do
+    opened.update (· + 1)
+    let once ← OnceRef.new false
+    return some {
+      setPeer := fun _ => pure true
+      reserveStream := pure (some { release := pure () })
+      reserveMemory := fun _ => pure (some { release := pure () })
+      release := do
+        if !(← once.updateGet fun d => (d, true)) then released.update (· + 1) }
+
+/-- The secured pipeline: a dial to a `quic-v1` address takes the
+secured path, proves the peer, and serves streams both ways. A peer
+with a TCP address and a QUIC address in the peerstore is dialed over
+QUIC (`Policy.quicFirst`): the stream context of the dialer names the
+QUIC address. A dial over both paths at once ends with the peer served,
+whichever session the dedup keeps. -/
+private def securedChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let (a, _) ← mkHost net 31 tc
+  let (b, _) ← mkHost net 32 tc
+  let quicA ← listenOn a "/ip4/127.0.0.1/udp/4101/quic-v1"
+  let tcpA ← listenOn a "/memory/201"
+  match ← b.dial (← withPeer quicA a.localPeer) with
+  | .ok p => r.check "host secured: a dial over the secured path proves the peer" (p == a.localPeer)
+  | .error e => r.check s!"host secured: a dial over the secured path succeeds ({e})" false
+  r.check "host secured: the dialer's stream echoes" (← echoOnce b a.localPeer "secured")
+  r.check "host secured: the listener's stream echoes" (← echoOnce a b.localPeer "back")
+  -- The ranker: TCP first in the peerstore, QUIC first in the dial.
+  let (c, _) ← mkHost net 33 tc
+  c.addAddrs a.localPeer [tcpA, quicA]
+  r.check "host secured: dialPeer reaches the peer" ((← c.dialPeer a.localPeer) matches .ok _)
+  -- A serves a stream of C's only once it has registered C's session, so
+  -- after this echo A's stream to C takes that session, and dials nothing.
+  r.check "host secured: the ranked dial's session serves a stream" (← echoOnce c a.localPeer "warm")
+  let seen : Chan StreamContext ← Chan.new 1
+  c.setHandler { id := ctxId, handle := fun ctx s => do discard <| seen.send ctx; s.close }
+  let opened ← a.newStream c.localPeer [ctxId]
+  r.check "host secured: the listener opens a stream back" (opened matches .ok _)
+  -- Park: the handler's send wakes it; a stream that failed to open
+  -- sends nothing, so the receive waits only when the open passed.
+  if opened matches .ok _ then
+    match ← seen.recv with
+    | some ctx =>
+      r.check "host secured: the ranker dials the QUIC address first" (ctx.remoteAddr == quicA)
+    | none => r.check "host secured: the dialer's handler saw a context" false
+  -- One peer over both paths at once.
+  let (e, _) ← mkHost net 34 tc
+  let viaTcp ← (Conc.Wrap.spawn (e.dial tcpA) :
+    BaseIO (Task (Except IO.Error (Except Libp2p.Host.Error PeerId))))
+  let viaQuic ← (Conc.Wrap.spawn (e.dial quicA) :
+    BaseIO (Task (Except IO.Error (Except Libp2p.Host.Error PeerId))))
+  let both := (← Conc.Wrap.await viaTcp, ← Conc.Wrap.await viaQuic)
+  r.check "host secured: dials over both paths both reach the peer"
+    (both matches (.ok (.ok _), .ok (.ok _)))
+  r.check "host secured: the peer stays served after the dedup" (← echoOnce e a.localPeer "one")
+  e.close
+  c.close
+  b.close
+  a.close
+  tc.close
+
+/-- The policy on the secured paths. A gater that refuses the inbound
+connection refuses it before its upgrade, so its scope never opens. A
+gater that refuses the proved peer refuses after the handshake, and the
+host releases the scope. By the end, the hosts have released every
+scope they opened. -/
+private def securedPolicyChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let opened ← OnceRef.new (0 : Nat)
+  let released ← OnceRef.new (0 : Nat)
+  let (dialer, _) ← mkHost net 41 tc
+  let (shut, failsShut) ← mkHost net 42 tc (gater := Policy.denyingGater)
+    (resources := countingResources opened released)
+  let addrShut ← listenOn shut "/ip4/127.0.0.1/udp/4201/quic-v1"
+  let refused ← try pure ((← dialer.dial addrShut) matches .error _) catch _ => pure true
+  r.check "host secured: a denying gater refuses an inbound connection" refused
+  r.check "host secured: the refusal opens no scope" ((← (opened.get : BaseIO Nat)) == 0)
+  r.check "host secured: the refusal is no failure" (← (failsShut.tryRecv : BaseIO _)).isNone
+  let (picky, failsPicky) ← mkHost net 43 tc (gater := securedOnlyGater)
+    (resources := countingResources opened released)
+  let addrPicky ← listenOn picky "/ip4/127.0.0.1/udp/4202/quic-v1"
+  -- A secured transport finishes the whole handshake, the muxer's
+  -- included, before the listener's checkpoint runs. So the dialer may
+  -- hold a session when the refusal comes, and the refusal then closes
+  -- it. go-libp2p's QUIC listener closes a connection its gater refuses
+  -- the same way (`InterceptSecured`, then `CloseWithError`). Real time:
+  -- the close has 5 s to reach the dialer.
+  discard <| try (some <$> dialer.dial addrPicky) catch _ => pure none
+  let mut gone := false
+  for _ in List.range 250 do
+    if !(← (dialer.connected picky.localPeer : BaseIO Bool)) then
+      gone := true
+      break
+    select #[← Park.sleep 20 ()]
+  r.check "host secured: the secured checkpoint refuses an inbound peer, and the dialer's session ends"
+    gone
+  r.check "host secured: the inbound secured refusal leaves no session"
+    !(← (picky.connected dialer.localPeer : BaseIO Bool))
+  r.check "host secured: the secured refusal is no failure"
+    (← (failsPicky.tryRecv : BaseIO _)).isNone
+  -- The outbound checkpoint: the proved peer is refused before the
+  -- session is served.
+  let (open_, _) ← mkHost net 44 tc
+  let addrOpen ← listenOn open_ "/ip4/127.0.0.1/udp/4203/quic-v1"
+  r.check "host secured: the secured checkpoint refuses an outbound peer"
+    ((← picky.dial addrOpen) matches .error (.gated .secured))
+  picky.close
+  shut.close
+  open_.close
+  dialer.close
+  r.check "host secured: every scope opened is released"
+    ((← (opened.get : BaseIO Nat)) == (← (released.get : BaseIO Nat)))
+  tc.close
+
+/-- The close reaches the secured paths in their handshakes (root
+§5.5), with no time passing on the test clock. A raw connection to a
+secured listener sends nothing, so the listener's accept parks in its
+upgrade; the host's close ends that upgrade. A secured dial to a raw
+listener that answers nothing parks in its upgrade; the dialer's close
+ends that dial with `closing`. -/
+private def securedShutdownChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let (a, _) ← mkHost net 51 tc
+  let addrA ← listenOn a "/ip4/127.0.0.1/udp/4301/quic-v1"
+  let some raw ← net.transport.dial addrA | throw <| IO.userError "raw dial failed"
+  a.close
+  r.check "host secured: close reaches an accept in its upgrade, and returns" (← endsSoon raw)
+  let (b, _) ← mkHost net 52 tc
+  let silent ← net.transport.listen (← ma "/ip4/127.0.0.1/udp/4302/quic-v1")
+  let pending ← (Conc.Wrap.spawn (b.dial silent.addr) :
+    BaseIO (Task (Except IO.Error (Except Libp2p.Host.Error PeerId))))
+  -- The silent listener takes the connection, and answers nothing.
+  let some held ← silent.accept | throw <| IO.userError "raw accept failed"
+  b.close
+  r.check "host secured: close ends a secured dial in its upgrade with closing"
+    ((← Conc.Wrap.await pending) matches .ok (.error .closing))
+  held.closeQuietly
+  silent.close
+  tc.close
+
 end Swarm
 
 def Host.run (r : Runner) : IO Unit := do
@@ -678,7 +841,9 @@ def Host.run (r : Runner) : IO Unit := do
   for (label, act) in [("pipeline", pipelineChecks r), ("answers", answerChecks r),
       ("policy", policyChecks r), ("silent peer", silentPeerChecks r),
       ("shutdown", shutdownChecks r), ("hand-over", handOverChecks r),
-      ("mplex", mplexChecks r)] do
+      ("mplex", mplexChecks r), ("secured", securedChecks r),
+      ("secured policy", securedPolicyChecks r),
+      ("secured shutdown", securedShutdownChecks r)] do
     try act.run
     catch e => r.check s!"host {label}: runs ({e})" false
 

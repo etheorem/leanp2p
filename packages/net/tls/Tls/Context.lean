@@ -13,9 +13,9 @@ ARCHITECTURE, "The settings").
 
 Another shim can run its own handshake on the same context
 (`Context.native`, through `native/c/tls_shim.h`), as the QUIC
-transport (W4.4, etheorem/leanp2p#92) is to. The TLS settings then
-have one home for both transports (the package ARCHITECTURE, "One
-context for both transports").
+transport of `net/quic` does. The TLS settings have one home for both
+transports (the package ARCHITECTURE, "One context for both
+transports").
 -/
 
 set_option autoImplicit false

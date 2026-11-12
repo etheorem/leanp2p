@@ -40,10 +40,10 @@ interop check of the vector stance runs through
 - The fixed-key test value serves every suite above the transport
   (§3.1): negotiate, host, protocols, and the `cli/` binaries run over
   it instead of random keys.
-- The QUIC transport (W4.4, etheorem/leanp2p#92) is to issue its
-  certificate with `Tls.Identity` and check the peer's with
-  `Tls.verify`, since QUIC runs the libp2p TLS handshake inside its
-  own packets.
+- The QUIC transport (W4.4, `libp2p/quic`) issues its certificate with
+  `Tls.Identity`, checks the peer's with `Tls.verify` inside the
+  handshake, and reads the peer after it with `Tls.identity`, since
+  QUIC runs the libp2p TLS handshake inside its own packets.
 
 ## Test milestones (unit 1a)
 
