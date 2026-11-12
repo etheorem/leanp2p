@@ -148,10 +148,10 @@ hosts. `pingnode serve` and `pingnode dial` are implemented.
   module files, with 0 violations. `git diff --check` reported no
   whitespace errors. The 121-check command above is the serve
   slice. The full `lake test` was not rerun. Its recorded baseline
-  still has one failure in `Tests/Streams.lean`: `the teardown
-  aborted the stuck write: the peer meets a reset`. That slice left
-  the demo executable unfinished. The bidirectional gate remains
-  unfinished. Echo support is `Libp2p.Protocols.TestSupport.Echo`.
+   still has one failure in `Tests/Streams.lean`: `the teardown
+   aborted the stuck write: the peer meets a reset`. That slice left
+   the demo executable unfinished. The W5.9 gate remains
+   unit 2. Echo support is `Libp2p.Protocols.TestSupport.Echo`.
 - Go-to-Lean ping is in this slice. The Go peer dials `pingnode
   serve`. `scripts/ping-go/main.go` dials one multiaddr over TCP,
   Noise, and yamux, prints `PING OK rtt=<duration>`, and waits for
@@ -213,11 +213,11 @@ hosts. `pingnode serve` and `pingnode dial` are implemented.
   `gofmt -l scripts/ping-go/main.go` printed nothing. `CGO_ENABLED=0
   go build` from `scripts/ping-go` completed. `bash -n
   scripts/ping-go-interop.sh` completed. `git diff --check` reported
-  no whitespace errors. Lean sources are unchanged, so the 138-check
-  result above stands. That slice left the demo executable unfinished.
-  The bidirectional gate remains unfinished. Echo support is
-  `Libp2p.Protocols.TestSupport.Echo`. The demo command is recorded
-  in the unit 1 demo bullet.
+   no whitespace errors. Lean sources are unchanged, so the 138-check
+   result above stands. That slice left the demo executable unfinished.
+   The W5.9 gate remains unit 2. Echo support is
+   `Libp2p.Protocols.TestSupport.Echo`. The demo command is recorded
+   in the unit 1 demo bullet.
   This check stays outside `lake test`.
 - The in-suite legs pass under `+RTS -N1` (§6; PRINCIPLES 5.3).
 
@@ -316,6 +316,28 @@ The local `lake test` baseline remains `Tests/Streams.lean` line 985,
 callback-testing limitation stays. Echo stays one chunk. The three
 working decisions stay contributor-selected. W5.9 is unit 2, and it
 follows this unit.
+
+## Linux gates on `d4c4de4`
+
+Commit `d4c4de405e37ccd4deba4422d3fd1888cce2d09c` is `fix(cli): keep
+demo usage errors on one line`. It is the head of this pull request.
+GitHub Actions run `43151637523` records `headSha` as that commit:
+https://github.com/etheorem/leanp2p/actions/runs/43151637523. The
+review independently reproduced each number below on the same commit.
+
+- `Run lake build` passed. The log ends with `Build completed
+  successfully (458 jobs).`
+- `Run lake test` passed. The summary is 28107 passed, 0 failed, 0
+  todo, and 4 skipped.
+- `Run lake test -- +RTS -N1 -RTS` passed. The summary is the same
+  28107 passed, 0 failed, 0 todo, and 4 skipped.
+- `Run the import lint` passed. It printed `lint-imports: checked
+  190 module files, 0 violations`.
+- `snappy-native-hardening` passed in the same workflow run.
+  `License acceptance guard` passed in run `43151637206`, and
+  `AI co-author guard` passed in run `43151637230`. Each run records
+  the same `headSha`. Two later body edits reran the license guard as
+  `43152763254` and `43153354414` on that same head.
 
 ## Test milestones (unit 2)
 

@@ -499,8 +499,8 @@ failure in `Tests/Streams.lean`: `the teardown aborted the stuck
 write: the peer meets a reset`.
 
 `demo` runs the two-host loop and exits 0. The Lean-to-Go ping
-check is recorded in the Go-helper decision. The bidirectional
-gate stays unfinished. The abrupt Go-first close stays the historical
+check is recorded in the Go-helper decision. The W5.9 gate stays
+unit 2. The abrupt Go-first close stays the historical
 case in the Go-helper decision.
 
 ### Stream retirement
@@ -759,6 +759,32 @@ stuck write: the peer meets a reset`. The callback-testing limitation
 stays. Echo stays one chunk. The three working decisions stay
 contributor-selected. W5.9 is unit 2, and it follows this unit.
 
+### Linux gates on `d4c4de4`
+
+Commit `d4c4de405e37ccd4deba4422d3fd1888cce2d09c` is `fix(cli): keep
+demo usage errors on one line`. It is the head of this pull request.
+GitHub Actions run `43151637523` records `headSha` as that commit:
+https://github.com/etheorem/leanp2p/actions/runs/43151637523. The
+review independently reproduced each number below on the same commit.
+
+`Run lake build` passed. The log ends with `Build completed
+successfully (458 jobs).`
+
+`Run lake test` passed. The summary is 28107 passed, 0 failed, 0
+todo, and 4 skipped.
+
+`Run lake test -- +RTS -N1 -RTS` passed. The summary is the same
+28107 passed, 0 failed, 0 todo, and 4 skipped.
+
+`Run the import lint` passed. It printed `lint-imports: checked 190
+module files, 0 violations`.
+
+`snappy-native-hardening` passed in the same workflow run.
+`License acceptance guard` passed in run `43151637206`, and
+`AI co-author guard` passed in run `43151637230`. Each run records
+the same `headSha`. Two later body edits reran the license guard as
+`43152763254` and `43153354414` on that same head.
+
 ## Decisions
 
 - **A nominal lib, and no public API.** §2 gives `cli/` no public
@@ -843,9 +869,9 @@ contributor-selected. W5.9 is unit 2, and it follows this unit.
   `gofmt -l scripts/ping-go/main.go` printed nothing. `CGO_ENABLED=0
   go build` from `scripts/ping-go` completed. `bash -n
   scripts/ping-go-interop.sh` completed. Lean sources are unchanged
-  in this slice, so the 138-check result above stands. That slice
-  left the demo executable unfinished. The bidirectional gate stays
-  unfinished. Echo support is `Libp2p.Protocols.TestSupport.Echo`.
+   in this slice, so the 138-check result above stands. That slice
+   left the demo executable unfinished. The W5.9 gate stays
+   unit 2. Echo support is `Libp2p.Protocols.TestSupport.Echo`.
   The demo command is the Demo lifetime section. The
   spike also kept a
   test-plans runner image, `interop/leanp2p/{Makefile,Dockerfile}`.
