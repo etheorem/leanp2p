@@ -669,7 +669,9 @@ success check and the closed-stdout check stay in that run. The
 callback examples are checked when `demo` builds. The 80-check
 result stays the echo suite's record. That callback correction did
 not rerun the full `lake test`. The gate record for `f994be4`
-records the later full runs. The W5.9 gate and issue #22 stay open.
+records the later full runs. The Linux gates section records the
+verified W5.8 run. Maintainer review of that run is pending. W5.9
+is unit 2.
 
 ### Gate record for `f994be4`
 
@@ -691,6 +693,59 @@ demo flush.
 `scripts/ping-go-interop.sh` exited 0 with `PASS go-to-lean PING OK
 rtt=710.459µs`. `scripts/ping-go-interop.sh lean-to-go` exited 0 with
 `PASS lean-to-go PING OK rtt=0ms`.
+
+### Linux gates on `57c696a`
+
+Commit `57c696a25c205805ab67971cbe0f8323cf8e4c40` flushes the demo's
+four contract lines. GitHub Actions run `43145740577` records
+`headSha` as that commit:
+https://github.com/etheorem/leanp2p/actions/runs/43145740577.
+The W5.8 implementation and these required gates are verified.
+Maintainer review is pending.
+
+`Run lake build` passed. The log ends with `Build completed
+successfully (458 jobs).` The build step has no warning line.
+
+`Run lake test` passed. The summary is 28101 passed, 0 failed, 0
+todo, and 4 skipped. The log contains no `FAIL` line. Run
+`43118933597` on `f994be4` failed `demo closed stdout exits` and
+`demo closed stdout stderr`:
+https://github.com/etheorem/leanp2p/actions/runs/43118933597.
+That summary was 28099 passed, 2 failed, 0 todo, and 4 skipped. This
+run passes 28101 checks. Both names are absent from this failure log
+and from this skip list.
+
+`Run lake test -- +RTS -N1 -RTS` passed. The summary is 28101 passed,
+0 failed, 0 todo, and 4 skipped. The log contains no `FAIL` line.
+Both closed-stdout names are absent from that failure log and from
+that skip list.
+
+Both runs skip these four checks: `documented memory text
+divergence`, `documented memory component divergence`, `mss generic
+model pin`, and `upgrade noise yamux matrix over tcp`.
+
+`Run the import lint` passed. It printed `lint-imports: checked 190
+module files, 0 violations`.
+
+`Verify vector provenance` passed. `scripts/vendor-pull.sh --verify`
+printed `OK` for each pin and then `done`. `python3
+scripts/extract-vectors.py` wrote the vector files. The step's
+`git status --porcelain -- Tests/vectors` check then passed.
+
+`snappy-native-hardening` passed in run `43145740577`. `License
+acceptance guard` passed in run `43145740639`:
+https://github.com/etheorem/leanp2p/actions/runs/43145740639.
+`AI co-author guard` passed in run `43145740610`:
+https://github.com/etheorem/leanp2p/actions/runs/43145740610.
+Each run records the same `headSha`. A later body edit reran the
+license guard as `43146878809` on that same head:
+https://github.com/etheorem/leanp2p/actions/runs/43146878809.
+
+The local gate record above stays in place. Local `lake test` still
+exits 1 on `Tests/Streams.lean` line 985, `the teardown aborted the
+stuck write: the peer meets a reset`. The callback-testing limitation
+stays. Echo stays one chunk. The three working decisions stay
+contributor-selected. W5.9 is unit 2, and it follows this unit.
 
 ## Decisions
 

@@ -81,10 +81,11 @@ hosts. `pingnode serve` and `pingnode dial` are implemented.
   .lake/build/bin/tests +RTS -N1 -RTS` passed 140 checks, with 0
   failed, 0 todo, and 0 skipped. The 138-check result stays the dial
   slice's record. The 80-check result stays the echo suite's record.
-  The full `lake test` was not rerun. Its recorded baseline still has
-  one failure in `Tests/Streams.lean`: `the teardown aborted the stuck
-  write: the peer meets a reset`. The W5.9 gate and issue #22 stay
-  open.
+  The full `lake test` was not rerun for that callback correction.
+  Its recorded local baseline still has one failure in
+  `Tests/Streams.lean`: `the teardown aborted the stuck write: the
+  peer meets a reset`. The Linux gates section records the verified
+  W5.8 run. Maintainer review of that run is pending. W5.9 is unit 2.
 - `pingnode serve` prints the bound address, flushes it, and stays up
   until stdin EOF while an inbound dial still completes.
   `Tests/CliLive.lean` runs that check with `LEAN_NUM_THREADS=1`.
@@ -229,15 +230,15 @@ Focused CLI counts above are not these gates.
 - The loopback demo dials, runs ping, identify, and echo, then closes
   the dialer and the listener with `Host.close`. `Tests/CliLive.lean`
   checks the four stdout lines, empty stderr, and exit 0.
-- The carried suite is `lake test`. It is not green. The command
+- The local carried suite is the macOS baseline. `lake test`
   exited 1. The summary was 28095 passed, 1 failed, 0 todo, and 7
   skipped. The failure is `Tests/Streams.lean` line 985, the check
   `the teardown aborted the stuck write: the peer meets a reset`.
   The peer's raw read ended without the reset error. That failure is
   the recorded baseline. It is separate from the CLI checks. The same
   command under `lake test -- +RTS -N1 -RTS` exited 1 with the same
-  summary and the same failure. These two results do not satisfy the
-  full-suite requirement.
+  summary and the same failure. These two local commands remain that
+  baseline. The required gates are the Linux run below.
 - `lake build` exited 0. The captured log has no warning line.
   `scripts/lint-imports.sh` exited 0 and checked 190 module files,
   with 0 violations. A search of the Lean sources found no `sorry`.
@@ -255,10 +256,59 @@ Focused CLI counts above are not these gates.
 - `scripts/ping-go-interop.sh` exited 0 and printed `PASS go-to-lean
   PING OK rtt=710.459µs`. `scripts/ping-go-interop.sh lean-to-go`
   exited 0 and printed `PASS lean-to-go PING OK rtt=0ms`. These
-  checks stay outside `lake test`. The W5.9 matrix, the silent-peer
-  gate, and the slow-reader gate stay open. Issue #22 stays open.
+  checks stay outside `lake test`. W5.9 is unit 2. This snapshot
+  predates the verified Linux gates below.
 
-The unit is not done while `lake test` fails.
+The local `lake test` record above still fails. The flush commit's
+Linux gates follow.
+
+## Linux gates on `57c696a`
+
+Commit `57c696a25c205805ab67971cbe0f8323cf8e4c40` is `fix(cli): flush
+demo contract output`. GitHub Actions run `43145740577` records
+`headSha` as that commit:
+https://github.com/etheorem/leanp2p/actions/runs/43145740577.
+These results are the Linux run. They are separate from the local
+snapshot above. The W5.8 implementation and these required gates are
+verified. Maintainer review is pending.
+
+- `Run lake build` passed. The log ends with `Build completed
+  successfully (458 jobs).` The build step has no warning line.
+- `Run lake test` passed. The summary is 28101 passed, 0 failed, 0
+  todo, and 4 skipped. The log contains no `FAIL` line. Run
+  `43118933597` on `f994be4` failed `demo closed stdout exits` and
+  `demo closed stdout stderr`:
+  https://github.com/etheorem/leanp2p/actions/runs/43118933597.
+  That summary was 28099 passed, 2 failed, 0 todo, and 4 skipped.
+  This run passes 28101 checks. Both names are absent from this
+  failure log and from this skip list.
+- `Run lake test -- +RTS -N1 -RTS` passed. The summary is 28101
+  passed, 0 failed, 0 todo, and 4 skipped. The log contains no
+  `FAIL` line. Both closed-stdout names are absent from that failure
+  log and from that skip list.
+- Both runs skip `documented memory text divergence`, `documented
+  memory component divergence`, `mss generic model pin`, and
+  `upgrade noise yamux matrix over tcp`.
+- `Run the import lint` passed. It printed `lint-imports: checked
+  190 module files, 0 violations`.
+- `Verify vector provenance` passed. `scripts/vendor-pull.sh
+  --verify` printed `OK` for each pin and then `done`. `python3
+  scripts/extract-vectors.py` wrote the vector files. The step's
+  `git status --porcelain -- Tests/vectors` check then passed.
+- `snappy-native-hardening` passed in the same workflow run.
+  `License acceptance guard` passed in run `43145740639`:
+  https://github.com/etheorem/leanp2p/actions/runs/43145740639.
+  `AI co-author guard` passed in run `43145740610`:
+  https://github.com/etheorem/leanp2p/actions/runs/43145740610.
+  Each run records the same `headSha`. A later body edit reran the
+  license guard as `43146878809` on that same head:
+  https://github.com/etheorem/leanp2p/actions/runs/43146878809.
+
+The local `lake test` baseline remains `Tests/Streams.lean` line 985,
+`the teardown aborted the stuck write: the peer meets a reset`. The
+callback-testing limitation stays. Echo stays one chunk. The three
+working decisions stay contributor-selected. W5.9 is unit 2, and it
+follows this unit.
 
 ## Test milestones (unit 2)
 
