@@ -16,6 +16,7 @@ defaultTargets = [
   "CryptoPure",
   "Streams",
   "Yamux",
+  "Tls",
   "Libp2pIdentity",
   "Libp2pCore",
   "Libp2pSecurity",
