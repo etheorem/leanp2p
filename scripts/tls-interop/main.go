@@ -28,9 +28,9 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
-	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
-	tptu "github.com/libp2p/go-libp2p/p2p/net/upgrader"
 	yamux "github.com/libp2p/go-libp2p/p2p/muxer/yamux"
+	tptu "github.com/libp2p/go-libp2p/p2p/net/upgrader"
+	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 )
 
 // The identity seeds: 32 bytes of 'G' for this side, 32 bytes of 'L'
@@ -169,6 +169,8 @@ func main() {
 		err = dialNoExt(net.JoinHostPort("127.0.0.1", os.Args[2]))
 	case len(os.Args) == 3 && os.Args[1] == "dial-chain":
 		err = dialChain(net.JoinHostPort("127.0.0.1", os.Args[2]))
+	case len(os.Args) == 3 && os.Args[1] == "dial-nocert":
+		err = dialNoCert(net.JoinHostPort("127.0.0.1", os.Args[2]))
 	case len(os.Args) == 3 && os.Args[1] == "dial-noalpn":
 		err = dialNoALPN(net.JoinHostPort("127.0.0.1", os.Args[2]))
 	case len(os.Args) == 2 && os.Args[1] == "listen-expired":
@@ -177,9 +179,12 @@ func main() {
 		err = listenRefuse()
 	case len(os.Args) == 2 && os.Args[1] == "listen-noalpn":
 		err = listenNoALPN()
+	case len(os.Args) == 2 && os.Args[1] == "listen-nosni":
+		err = listenNoSNI()
 	default:
 		err = fmt.Errorf("usage: tls-interop listen | dial PORT | dial-noext PORT | " +
-			"dial-chain PORT | dial-noalpn PORT | listen-expired | listen-refuse | listen-noalpn")
+			"dial-chain PORT | dial-nocert PORT | dial-noalpn PORT | listen-expired | " +
+			"listen-refuse | listen-noalpn | listen-nosni")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "go:", err)

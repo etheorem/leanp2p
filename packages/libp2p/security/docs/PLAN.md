@@ -40,10 +40,10 @@ interop check of the vector stance runs through
 - The fixed-key test value serves every suite above the transport
   (§3.1): negotiate, host, protocols, and the `cli/` binaries run over
   it instead of random keys.
-- The QUIC transport (W4.4, etheorem/leanp2p#92) is to issue its
-  certificate with `Tls.Identity` and check the peer's with
-  `Tls.verify`, since QUIC runs the libp2p TLS handshake inside its
-  own packets.
+- The QUIC transport (W4.4, `libp2p/quic`) issues its certificate with
+  `Tls.Identity`, checks the peer's with `Tls.verify` inside the
+  handshake, and reads the peer after it with `Tls.identity`, since
+  QUIC runs the libp2p TLS handshake inside its own packets.
 
 ## Test milestones (unit 1a)
 
@@ -167,10 +167,14 @@ engine of `net/tls` (that pair's unit 1). The suite is
   over loopback TCP with no negotiation, in both directions: both
   certificates and peer ids check, 200000 bytes go each way, no
   inlined muxer is chosen though go offers yamux in ALPN, and the close
-  is orderly. Four refusal runs: go dials with a certificate that lacks
-  the extension and with a chain of two, and we dial a go server whose
-  certificate has expired and present one without the extension to
-  go-libp2p's server; each time the refusing side names its reason,
-  and the other side receives the alert `bad_certificate`. Two runs
-  with no ALPN, one per direction, finish the echo.
+  is orderly. Five refusal runs: go dials with a certificate that lacks
+  the extension, with a chain of two, and with no certificate, and we
+  dial a go server whose certificate has expired and present one
+  without the extension to go-libp2p's server. Each time the refusing
+  side names its reason, and the other side receives the alert
+  `bad_certificate`, or `certificate_required` for the client that
+  sent no certificate ("servers MUST require client authentication").
+  Two runs with no ALPN, one per direction, finish the echo. One run
+  against a go server that ends the handshake on a ClientHello with a
+  server name finishes the echo, so our client sends no SNI.
 - The suite passes with `LEAN_NUM_THREADS=1` (PRINCIPLES 5.3).

@@ -2,7 +2,8 @@
 # The W5.9 gate (root PLAN W5.9; packages/cli/docs/PLAN.md, "Test
 # milestones (unit 2)"): the transport-interop matrix against go-libp2p
 # over tcp + /noise + yamux, plus the silent-peer and slow-reader
-# scenarios. Docker appears here and nowhere else (cli ARCHITECTURE,
+# scenarios, and the cells of tcp + /tls + yamux (W5.11) and quic-v1
+# (W4.4). Docker appears here and nowhere else (cli ARCHITECTURE,
 # "Decisions").
 #
 # The go side is go-libp2p's own test-plan peer, built from the vendored
@@ -76,9 +77,17 @@ until docker exec "$redis" redis-cli PING >/dev/null 2>/dev/null; do
   waited=$((waited + 1))
 done
 
+# The stack of the cell that runs: the test plan's transport, security,
+# and muxer. `cell` sets them; the silent peer and the slow reader run
+# on the gate's stack. quic-v1 ignores the security and the muxer, as
+# both peers do.
+transport=tcp
+security=noise
+muxer=yamux
+
 # The test plan's variables, for one side. $1 is_dialer, $2 redis_addr.
 plan_env() {
-  echo "transport=tcp muxer=yamux security=noise is_dialer=$1 redis_addr=$2 test_timeout_seconds=$timeout_s"
+  echo "transport=$transport muxer=$muxer security=$security is_dialer=$1 redis_addr=$2 test_timeout_seconds=$timeout_s"
 }
 
 start_lean_listener() {
@@ -89,7 +98,7 @@ start_lean_listener() {
 
 start_go_listener() {
   docker run -d --rm --name "$go_listener" --network "$net" \
-    -e transport=tcp -e muxer=yamux -e security=noise -e is_dialer=false \
+    -e transport="$transport" -e muxer="$muxer" -e security="$security" -e is_dialer=false \
     -e redis_addr="$redis:6379" -e test_timeout_seconds="$timeout_s" "$go_image" >/dev/null
 }
 
@@ -105,7 +114,7 @@ run_lean_dialer() {
 
 run_go_dialer() {
   timeout $((timeout_s + 10)) docker run --rm --network "$net" \
-    -e transport=tcp -e muxer=yamux -e security=noise -e is_dialer=true \
+    -e transport="$transport" -e muxer="$muxer" -e security="$security" -e is_dialer=true \
     -e redis_addr="$redis:6379" -e test_timeout_seconds="$timeout_s" "$go_image" \
     >"$out/$1.json" 2>"$out/$1.dialer.log"
 }
@@ -116,7 +125,7 @@ csv() { local v=${1//\"/\"\"}; printf '"%s"' "$v"; }
 # Record one result. $1 the file stem, $2 the name, $3 the exit status,
 # then the JSON keys the output line must carry. A pass needs exit 0
 # and every key.
-verdict() {
+record_result() {
   local file=$1 name=$2 status=$3 line= key ok=1 outcome=success
   shift 3
   [ "$status" = 0 ] || ok=0
@@ -132,14 +141,20 @@ verdict() {
   echo "$(csv "$name"),$outcome,$(csv "$line")" >>"$results"
 }
 
-# One cell of the matrix: $1 dialer (lean|go), $2 listener (lean|go).
+# One cell of the matrix: $1 dialer (lean|go), $2 listener (lean|go),
+# $3 the transport, $4 the security, $5 the muxer (the gate's stack when
+# absent).
 cell() {
-  local file="$1-x-$2" status=0
+  transport=${3:-tcp} security=${4:-noise} muxer=${5:-yamux}
+  local stack="$transport, $security, $muxer"
+  [ "$transport" = quic-v1 ] && stack=quic-v1
+  local file="$1-x-$2-${stack//, /-}" status=0
   docker exec "$redis" redis-cli FLUSHALL >/dev/null
   "start_$2_listener" "$file"
   "run_$1_dialer" "$file" || status=$?
   stop_listeners
-  verdict "$file" "$1 x $2 (tcp, noise, yamux)" "$status" handshakePlusOneRTTMillis pingRTTMilllis
+  record_result "$file" "$1 x $2 ($stack)" "$status" handshakePlusOneRTTMillis pingRTTMilllis
+  transport=tcp security=noise muxer=yamux
 }
 
 # The listener's published address, once it is in Redis.
@@ -163,7 +178,7 @@ silent_peer() {
   if [ -z "$addr" ]; then
     echo "$name: the Lean listener published no address" >&2
     stop_listeners
-    verdict "$name" "$name" 1
+    record_result "$name" "$name" 1
     return
   fi
   IFS=/ read -r _ _ ip _ port _ <<<"$addr"
@@ -183,7 +198,7 @@ silent_peer() {
   else
     echo "$name: the silent connection closed after ${elapsed}s" >&2
   fi
-  verdict "$name" "$name" "$status" handshakePlusOneRTTMillis pingRTTMilllis
+  record_result "$name" "$name" "$status" handshakePlusOneRTTMillis pingRTTMilllis
 }
 
 # The slow reader: a go peer that writes on a ping stream and never reads
@@ -196,14 +211,23 @@ slow_reader() {
     -e redis_addr="$redis:6379" -e test_timeout_seconds="$timeout_s" "$slow_image" \
     >"$out/$name.json" 2>"$out/$name.dialer.log" || status=$?
   stop_listeners
-  verdict "$name" "$name" "$status" stalledAfterBytes pingRTTMillis
+  record_result "$name" "$name" "$status" stalledAfterBytes pingRTTMillis
 }
 
-# The go x go cell checks the setup itself.
+# The go x go cell checks the setup itself. The gate's stack first, then
+# TLS over TCP (root PLAN W5.11), then QUIC (root PLAN W4.4). mplex has
+# no go cell: go-libp2p v0.50 removed it.
 cell go go
 cell lean go
 cell go lean
 cell lean lean
+cell lean go tcp tls yamux
+cell go lean tcp tls yamux
+cell lean lean tcp tls yamux
+cell go go quic-v1
+cell lean go quic-v1
+cell go lean quic-v1
+cell lean lean quic-v1
 silent_peer
 slow_reader
 

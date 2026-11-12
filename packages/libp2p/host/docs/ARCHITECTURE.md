@@ -21,9 +21,9 @@ libp2p group is §7, row 10).
 | `Libp2p/Host/Dedup.lean` | the dedup rule as one pure function over the session table |
 | `Libp2p/Host/Peerstore.lean` | the third registry, addresses by peer, deduplicated at add (§3.8) |
 | `Libp2p/Host/Gate.lean` | `Gate`, a task group that refuses new tasks once its owner closes it, for the tasks that start outside any task the host owns |
-| `Libp2p/Host/Swarm.lean` | `Config`, the `Host` state, `dial`, `dialPeer`, `startListening`, `newStream`, the accept loop, the upgrade pipeline, and stream serving |
+| `Libp2p/Host/Swarm.lean` | `Config`, the `Host` state, `dial`, `dialPeer`, `startListening`, `newStream`, the accept loops, the upgrade pipeline, the secured sessions, and stream serving |
 | `Libp2p/Host/Shutdown.lean` | `Host.close`, the §5.5 sequence |
-| `Libp2p/Host/Policy.lean` | the permissive default gater, and the permissive and denying test doubles the core pair assigned here; the default resource manager (admits everything) and the default ranker (keeps the order, no delay) |
+| `Libp2p/Host/Policy.lean` | the permissive default gater, and the permissive and denying test doubles the core pair assigned here; the default resource manager (admits everything); `admission`, the gater's `allowInbound` and the resource manager's scope before a handshake, one function for TCP and secured connections; the default ranker, QUIC first with no delay, with its theorems, and the ranker that keeps the order |
 | `Libp2p/Host/Upgrade.lean` | `upgrade` and `Upgraded`: the stages of `libp2p/negotiate`, with the peer checkpoint between the handshake and the muxer stage, under one deadline |
 | `Libp2p/Host/StreamSelect.lean` | `negotiateStream`, multistream-select on a muxed stream, a shell over the pure core of `libp2p/negotiate` |
 
@@ -33,10 +33,10 @@ module re-exports the public submodules.
 ## Public surface
 
 - `Host.new` takes the configuration: the ordered `Transport`,
-  `SecurityProtocol`, and `Muxer` lists (§3.1), the host identity as a
-  private key from `libp2p/identity`, the initial handler set, and the
-  policy values. The lists are parameters, and no host module names a
-  concrete seam value.
+  `SecuredTransport`, `SecurityProtocol`, and `Muxer` lists (§3.1),
+  the host identity as a private key from `libp2p/identity`, the
+  initial handler set, and the policy values. The lists are
+  parameters, and no host module names a concrete seam value.
 - `dial` dials one address or reuses a live session. A trailing
   `/p2p/<id>` component supplies the expected `PeerId` when the
   argument gives none (the spike's rule, kept). `dialPeer` takes the
@@ -76,7 +76,46 @@ module re-exports the public submodules.
 - The policy values: `Policy.permissiveGater` is the default gater,
   and it allows everything. The permissive and denying gaters are the
   test doubles. The limiting implementations of §9, delta 4, land
-  later behind the same seam.
+  later behind the same seam. `Policy.quicFirst` is the default
+  ranker, and `Policy.keepOrder` keeps the order given.
+
+### Secured transports
+
+A `SecuredTransport` (`libp2p/core`) answers a `SecuredSession`: a
+connection its transport has already secured and muxed, such as QUIC.
+The host serves it as it serves an upgraded connection:
+
+- **Dial.** An address that a secured transport handles goes to it
+  before the `Transport` list. The dial passes the gater's
+  `allowDial`, opens a resource scope, and asks the transport to prove
+  the expected peer. The session then meets the checkpoint of the
+  upgrade (`allowSecured` and the scope's `setPeer`) at its own
+  addresses, and the dedup and the serve task of any session. A
+  refusal closes the session and releases the scope.
+- **Listen.** `startListening` hands such an address to the transport
+  with the host's admission: `Policy.admission` of its gater and its
+  resource manager. It registers the `SecuredListener` and spawns its
+  accept loop. The transport runs the admission on each connection
+  before its handshake, as the host runs it on a TCP connection before
+  the upgrade. So a refused peer costs no handshake. Each session
+  arrives with its scope and meets the checkpoint of the upgrade.
+- **Shutdown.** Stage 2 closes the secured listeners with the others,
+  and the final stage joins them. A secured listener's join waits for
+  the sessions it gave, which stage 4 closed.
+- **Deadline and shutdown.** A secured dial registers no pending
+  connection. The transport itself bounds its handshake with the
+  unauthenticated deadline of root §5.4 (`net/quic`, "The parameters").
+  The dial gets the host's shutdown channel as its `abort`, and stage 1
+  closes that channel. So a close ends a secured dial still in its
+  handshake, as stage 3 ends the pending connections of TCP (root
+  §5.5).
+- **Ranking.** The consensus networking spec: "When a peer is
+  reachable over both TCP and QUIC, clients SHOULD prioritise peer's
+  QUIC addresses" (`vendor/consensus-specs/specs/phase0/p2p-interface.md`,
+  lines 160 and 161). The default ranker `Policy.quicFirst` puts the
+  `quic-v1` addresses first and keeps the order within each group. Its
+  theorems state that the schedule puts every QUIC address before every
+  other, loses and adds no address, and sets no delay.
 
 ## Owned contracts and how the package keeps them
 

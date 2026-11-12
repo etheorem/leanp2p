@@ -22,11 +22,11 @@ rules were missing, and the review found the rest.
 ## 1. Goal and non-goals
 
 Goal: a libp2p node in Lean 4. It interoperates with go-libp2p on
-`tcp + /noise + /yamux`. It is safe against hostile peers on every
-pre-authentication byte. It shuts down deterministically. Its protocol
+`tcp + /noise + /yamux`, and on `quic-v1`. It is safe against hostile
+peers on every pre-authentication byte. It shuts down deterministically. Its protocol
 cores are machine-checked.
 
-Non-goals for v1: QUIC and WebTransport transports, kad-dht, NAT
+Non-goals for v1: the WebTransport transport, kad-dht, NAT
 traversal, and browser dialing.
 Gossipsub is in scope, and §8 ranks it. The layering leaves room for
 every non-goal, and no part of the design depends on their absence.
@@ -58,12 +58,14 @@ packages/
                                Framing, Stream, tcp transport
     yamux/                     the stream muxer
     tls/                       TLS 1.3 over a Connection (libssl shim)
+    quic/                      QUIC over UDP (ngtcp2 shim)
   libp2p/                      the protocol stack
     identity/                  keys, peer ids
     core/                      ProtocolId, Core.Error, the libp2p seam types
     security/                  Noise XX and libp2p TLS as SecurityProtocol values
     mux/                       Muxer values: yamux (over net/yamux), mplex
     negotiate/                 multistream-select, upgrader
+    quic/                      QUIC as a SecuredTransport value
     host/                      swarm/host, peerstore, dedup, deadlines
     protocols/                 identify, ping, req/resp, gossipsub
   cli/                         command-line executables: demo node,
@@ -75,11 +77,13 @@ them:
 
 - **Between groups**: `cli → libp2p → net → crypto → codec → base`. A
   group imports only the groups to its right.
-- **Within groups, downward only**: `{net/yamux, net/tls} → net/streams`,
+- **Within groups, downward only**: `net/quic → net/tls`,
+  `{net/yamux, net/tls} → net/streams`,
   `codec/{proto,multiformats} → codec/varint`, and inside `libp2p`
-  `identity → core → {security, mux} → negotiate → host → protocols`.
-  Implementations import `core`. `negotiate` and `host` import `core`
-  and no implementation (§3.1).
+  `identity → core → {security, mux} → {negotiate, quic} → host →
+  protocols`. Implementations import `core`. `negotiate` and `host`
+  import `core` and no implementation (§3.1); `cli/` hands the host the
+  `quic` value.
 - No package left of `libp2p` mentions libp2p, so other projects can
   use these packages.
 
@@ -178,21 +182,22 @@ Choose the mechanism with these questions, in order:
 ### 3.1 Seams: structure values for runtime choices
 
 A seam is a `structure` whose fields are the operations of one role in
-the stack. `Transport`, `SecurityProtocol`, `Muxer`, `StreamHandler`,
-the policy hooks (connection gater, resource manager, address ranker),
-`Clock`, and `Rng` are seams. libp2p picks one of each per address or
+the stack. `Transport`, `SecuredTransport`, `SecurityProtocol`,
+`Muxer`, `StreamHandler`, the policy hooks (connection gater, resource
+manager, address ranker), `Clock`, and `Rng` are seams. libp2p picks one of each per address or
 per negotiation. The host holds them in lists ordered by preference. A
 typeclass needs existential packaging to hold an ordered list of unlike
 implementations. That packaging *is* a structure, so the seam uses a
 structure directly.
 
 **Where the types live.** `Transport`, `Connection`, and `Stream` live
-in `net/streams`. `SecurityProtocol`, `Muxer`, `StreamHandler`, and the
-policy hooks live in `libp2p/core` (§4.9). `Clock` lives in
-`base/conc`, and `Rng` lives in the `Crypto` facade (§3.6). The values
-live with their implementations: `Noise.securityProtocol` in
-`libp2p/security`, `Mux.yamux` in `libp2p/mux`. The upgrader imports
-the types only.
+in `net/streams`. `SecuredTransport`, `SecurityProtocol`, `Muxer`,
+`StreamHandler`, and the policy hooks live in `libp2p/core` (§4.9).
+`Clock` lives in `base/conc`, and `Rng` lives in the `Crypto` facade
+(§3.6). The values live with their implementations:
+`Noise.securityProtocol` in `libp2p/security`, `Mux.yamux` in
+`libp2p/mux`, `Libp2p.Quic.transport` in `libp2p/quic`. The upgrader
+imports the types only.
 
 Rules:
 
@@ -558,8 +563,8 @@ reader must see every case.
 
 **Dependency strategy for external implementations.** Some
 dependencies already exist as mature implementations in another
-language: crypto backends today, and compression, TLS, or QUIC stacks
-later. We consume them in two phases: **FFI first, Lean later**. Phase
+language: crypto backends, compression, and the TLS and QUIC stacks.
+We consume them in two phases: **FFI first, Lean later**. Phase
 1 binds the existing library through a small C shim behind a Lean
 interface, as `crypto/backend` does with OpenSSL 3. Phase 2 happens
 only where it pays. It re-implements the dependency in pure Lean
@@ -613,9 +618,16 @@ ended task, so an owner with a long life pays only for its live tasks.
 Lean v4.34 ships the primitives: `Std.CloseableChannel` with a
 capacity, `Std.Async.Selectable`, and `Std.Async.Selector.sleep`.
 `conc` wraps them so that no other package imports `Std.Sync` or
-`Std.Async`. The one exception is `Std.Async.TCP` in `net/streams`
-(§9, delta 7). When the toolchain API moves, the wrapper is the one
-module to change.
+`Std.Async`. Two transports are the exceptions: `Std.Async.TCP` in
+`net/streams` (§9, delta 7), and `Std.Async.UDP` in `net/quic` (the
+quic ARCHITECTURE, "Decisions"). Each binding stays inside its
+package: `Streams/Tcp.lean`, and in `net/quic` the modules
+`Quic/Loop.lean` (the receive and the send), `Quic/Endpoint.lean` (the
+socket's creation), and `QuicNative.lean`. The `Std` bind of a UDP
+socket always sets SO_REUSEADDR, which lets two sockets share a port,
+so the QUIC shim binds the socket itself (the quic ARCHITECTURE,
+"Decisions", the exclusive bind). When the toolchain API moves, the
+wrapper and those modules are the ones to change.
 
 Every operation that can park runs in `Conc.Async`, the `Async` monad
 of `Std`. A parked `Async` computation is a continuation on a promise,
@@ -837,8 +849,10 @@ Everything with libp2p semantics, in subpackages:
   `timeout`, and `closed`. Each arm carries the error of the
   implementation, rendered for the log. `core/` also holds the seam
   structures that every implementation fills: `SecurityProtocol` with
-  `SecureConn`, `Muxer` with `MuxSession`, `StreamHandler`, and the
-  policy hooks. It depends on `identity` (for `PeerId`), on
+  `SecureConn`, `Muxer` with `MuxSession`, `StreamHandler`, the policy
+  hooks, and `SecuredTransport` with `SecuredSession`: the seam of a
+  transport whose connections arrive secured and muxed, such as QUIC.
+  It depends on `identity` (for `PeerId`), on
   `net/streams` (for `Connection` and `Stream`), and on `base/conc`
   (for `Async`, §4.1), and on nothing else.
 - **`security/`**: Noise XX (`Noise_XX_25519_ChaChaPoly_SHA256`) as a
@@ -857,7 +871,7 @@ Everything with libp2p semantics, in subpackages:
   The libp2p TLS handshake is the second value (`/tls/1.0.0`): the
   self-signed certificate with the libp2p Public Key Extension, its
   checks, and the seam value over the TLS 1.3 engine of `net/tls`. The
-  QUIC transport (W4.4) is to issue and check the same certificate.
+  QUIC transport (`quic/`) issues and checks the same certificate.
 - **`negotiate/`**: multistream-select (1 KiB cap, `na` retry, `ls`,
   lazy dialer) and the upgrader.
 - **`mux/`**: the `Muxer` values. yamux (P0) assigns the `/yamux/1.0.0`
@@ -867,8 +881,16 @@ Everything with libp2p semantics, in subpackages:
   by `(id, initiator)`. The spike already validated this against the
   go behavior. Half-close follows the spec. Close ends the write
   direction of the closer only, and reset aborts both directions.
+- **`quic/`**: the QUIC transport as a `SecuredTransport` value, over
+  the engine of `net/quic` (ngtcp2, bound FFI first per §4) and the
+  certificate of `security/`. A QUIC connection arrives secured by
+  TLS 1.3 and muxed natively, so it skips the upgrader's stages. The
+  certificate check runs inside the handshake, so the host sees no
+  connection whose certificate failed.
 - **`host/`**: the upgrader pipeline (security → identity check →
-  muxer) and per-peer connection dedup. Dedup follows the
+  muxer) and per-peer connection dedup. A secured transport's session
+  meets the same checkpoint and dedup with no stage to run, and the
+  default ranker dials QUIC addresses first (§8). Dedup follows the
   simultaneous-dial rule: during the race window, the connection that
   the larger id dialed loses. The rule is a pure update over the
   session table (§3.8). The package also holds the handler registry
@@ -1011,6 +1033,7 @@ interface seams exist, and no implementation work is scheduled.
 | Component | Why | Status in spike |
 |---|---|---|
 | TCP transport | consensus networking runs on TCP (and QUIC) | done |
+| **QUIC transport** (`quic-v1`) | "All implementations MUST support the QUIC (UDP) libp2p transport", and "clients SHOULD prioritise peer's QUIC addresses" (`vendor/consensus-specs/specs/phase0/p2p-interface.md`, lines 154 to 161) | **new work** (the spike had none; `net/quic` binds ngtcp2 FFI first per §4, `libp2p/quic` fills the `SecuredTransport` seam, W4.4) |
 | Noise XX (`/noise`) | the security protocol of the TCP transport (`vendor/consensus-specs/specs/phase0/p2p-interface.md`, lines 182 to 185) | done |
 | **libp2p TLS** (`/tls/1.0.0`, the X.509 extension) | "The QUIC transport is secured using TLS 1.3, configured according to the libp2p TLS specification" (the same spec, lines 179 to 180) | **new work** (the spike's `TlsExt` covered the certificate check; the engine binds libssl in `net/tls`, W5.11) |
 | yamux | the preferred muxer over TCP: the spec makes yamux take precedence over mplex during negotiation (QUIC muxes internally) | done, hardened |
@@ -1027,8 +1050,7 @@ interface seams exist, and no implementation work is scheduled.
 
 **Optional (the spec allows them; build them when cheap):**
 
-- QUIC transport. Many clients enable it, and it is the natural second
-  transport. WebTransport may follow it.
+- WebTransport, over the QUIC transport.
 - libp2p `/ipfs/ping/1.0.0` as a keepalive. It is cheap, and some
   clients use it. The consensus keepalive itself is the eth2 req/resp
   Ping.
@@ -1072,14 +1094,21 @@ them:
 3. Peerstore limits and TTLs. Address dedup is already done.
 4. The connection gater and resource manager seams, filled with limits
    per peer and per connection: stream count, buffered bytes, and a
-   memory ceiling.
+   memory ceiling. A QUIC listener runs the same admission before each
+   handshake, so these limits reach its connections too. The listener
+   itself bounds its connections in their handshake, with a Retry past
+   half the cap (the quic ARCHITECTURE, "Flow control and the bounds").
 5. A select primitive that replaces the polling deadline inside
    `withinDeadline`. The observable behavior stays the same.
-6. QUIC transport. It comes after the consensus-critical protocols and
-   before anything else in the optional list of §8.
+6. QUIC transport. The consensus spec requires it (§8), and root PLAN
+   W4.4 builds it: `net/quic` over ngtcp2, and `libp2p/quic` behind the
+   `SecuredTransport` seam.
 7. The TCP transport binds `Std.Async.TCP` (public in v4.34, over the
-   libuv of the toolchain) inside `net/streams` only. A second
-   transport or a toolchain API change then touches one module.
+   libuv of the toolchain) inside `net/streams` only. The QUIC
+   transport binds `Std.Async.UDP` inside `net/quic` only, the same
+   way, and its shim takes the bind itself, with no address reuse
+   (§4.1). A toolchain API change then touches one package per
+   transport.
 8. Sessions as pure cores with one loop task each (§3.3). The spike
    sessions hold their state in mutable fields and serialize writers
    with a mutex. The implementation keeps none of that shape.

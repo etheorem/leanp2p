@@ -42,14 +42,22 @@ its own error arm:
    connection attempt if signature verification fails".
 6. The peer id derives from the host key.
 
+`identity` runs every step but the third. A caller whose handshake
+already ran `verify` inside it reads the peer with `identity`, and
+`identity_of_verify` states that the two agree.
+
 The chain rule ("Endpoints MUST abort the connection attempt if more
 than one certificate is received") is the TLS engine's, since only the
 handshake sees the chain (`net/tls`, the verify callback). The check
 of the derived peer id against the expected one belongs to the
 upgrader, as for Noise (root §4.9).
 
-The spike's `Conn/TlsExt.lean` ran steps 1, 2, 4, 5, and 6. Step 3 is
-new here: the spike left the validity window out.
+The spike's `Conn/TlsExt.lean` ran these checks with two differences.
+Its shim checked the validity window against the process clock, with
+both ends outside the window. Here the caller gives the time, and both
+ends belong to the window (RFC 5280 §4.1.2.5). Its shim refused every
+critical extension but the libp2p one, the ones OpenSSL understands
+included. Here the backend accepts the understood ones.
 -/
 
 set_option autoImplicit false
@@ -125,19 +133,58 @@ structure Verified where
   /-- The peer id of the host key. -/
   peer : PeerId
 
-/-- Check a peer certificate (DER) at `now`, seconds since the Unix
-epoch (the module doc, "The checks, in order"). -/
-def verify (der : ByteArray) (now : Int) : Except CertError Verified := do
+/-- Steps 1 and 2: the certificate parses under the extension rules,
+and its self-signature verifies. -/
+private def parse (der : ByteArray) : Except CertError Crypto.Certificate := do
   let cert ← (Crypto.inspect der extensionOid).mapError CertError.ofInspect
   unless Crypto.selfSigned der do throw .selfSignature
+  return cert
+
+/-- Step 3: the time is inside NotBefore and NotAfter, both ends
+included. -/
+private def window (cert : Crypto.Certificate) (now : Int) : Except CertError Unit := do
   if now < cert.notBefore then throw .notYetValid
   if cert.notAfter < now then throw .expired
+
+/-- Steps 4 to 6: the `SignedKey`, the host key, its signature over the
+certificate key, and the peer id. -/
+private def identityOf (cert : Crypto.Certificate) : Except CertError Verified := do
   let some sk := SignedKey.decode? (Bytes.toNatList cert.extension) | throw .extension
   let pub ← (PubKey.unmarshal? (Bytes.ofNatList sk.publicKey)).mapError .publicKey
   unless pub.verify (signedData cert.spki) (Bytes.ofNatList sk.signature) do
     throw .signature
   let peer ← (PeerId.ofPubKey pub).mapError .peerId
   return { publicKey := pub, peer }
+
+/-- Check a peer certificate (DER) at `now`, seconds since the Unix
+epoch (the module doc, "The checks, in order"). -/
+def verify (der : ByteArray) (now : Int) : Except CertError Verified := do
+  let cert ← parse der
+  window cert now
+  identityOf cert
+
+/-- Every check of `verify` but the validity window: the peer a
+certificate proves, read after a handshake whose check ran `verify` at
+its own time. A caller that kept no time reads the peer with it, as the
+QUIC transport does for each listener connection. The answer is that of
+`verify` at the handshake's time, since the steps are the same
+functions. -/
+def identity (der : ByteArray) : Except CertError Verified := do
+  identityOf (← parse der)
+
+/-- A certificate that `verify` accepts at some time proves the same
+peer under `identity`: the check inside a handshake and the read after
+it agree. -/
+theorem identity_of_verify {der : ByteArray} {now : Int} {v : Verified}
+    (h : verify der now = .ok v) : identity der = .ok v := by
+  unfold verify at h
+  unfold identity
+  cases hp : parse der with
+  | error e => simp [hp, bind, Except.bind] at h
+  | ok cert =>
+    cases hw : window cert now with
+    | error e => simp [hp, hw, bind, Except.bind] at h
+    | ok u => simp_all [bind, Except.bind]
 
 /-- Why issuing our own certificate failed. -/
 inductive IssueError where
