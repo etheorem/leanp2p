@@ -245,11 +245,13 @@ so this package imports it and proves it a second time nowhere
 10. **No TLS byte reaches a caller before the certificate check.** The
     engine runs `Tls.verify` inside the handshake, and the seam value
     builds the `SecureConn` only when it accepted the peer's
-    certificate. A refused certificate sends the peer the alert
-    `bad_certificate` and is `Core.Error.authentication`, with the
-    reason of the check, whether the engine refused it (a chain of
-    more than one, no client certificate) or `Tls.verify` did. A
-    failed read of the wall clock is a refusal too, before the first
+    certificate. A refused certificate is `Core.Error.authentication`,
+    with the reason of the refusal, whether the engine refused it (a
+    chain of more than one, no client certificate) or `Tls.verify` did.
+    The peer gets the alert `bad_certificate` for a refused
+    certificate, and `certificate_required` when it was a client that
+    sent none (RFC 8446 §4.4.2.4; `net/tls`, "The certificate check").
+    A failed read of the wall clock is a refusal too, before the first
     byte of the handshake: the validity window cannot be checked, and
     the spec says to abort. A peer that uses no ALPN at all reads as
     `libp2p`, as the references read it over TCP (the decision "ALPN
@@ -380,6 +382,21 @@ the spike's own recorded rule.
   `Tls.verify` from libssl's verify callback, which sends the same
   alert (`net/tls`, "The certificate check"). RFC 8446 §6.2 asks for
   the alert ("SHOULD send an appropriate fatal alert").
+- **The expected peer id is the upgrader's check, after the
+  handshake; go checks it inside.** go-libp2p's `VerifyPeerCertificate`
+  also compares the derived peer id with the one the dialer intended
+  (`crypto.go`, lines 143 to 149), so a dial to the wrong peer fails
+  the handshake, and the server reads the alert. Here the engine's
+  check takes no expected id. Root §4.9 puts the identity check in the
+  upgrader, between the security and the muxer stages, as for Noise
+  (contract 4). So a dial to the wrong peer finishes the TLS
+  handshake, and the upgrader refuses it with `authentication`. It
+  closes the secure connection through the seam (`discardSecure`), and
+  the seam's close sends `close_notify`, so the server reads an orderly
+  end where go's would read `bad_certificate`. The spec asks only that
+  the client "MUST verify that the peer ID derived from the
+  certificate matches", and both places do that before any
+  application byte.
 - **The `SignedKey` decoder refuses trailing bytes; go's does not.**
   go-libp2p reads the value with `asn1.Unmarshal` and drops what
   follows it (`crypto.go`, line 191). The spec defines the value as
@@ -387,10 +404,16 @@ the spike's own recorded rule.
   encoder, and the four spec certificates hold no trailing byte. So
   the strict rule refuses no real certificate, and it keeps one parse
   per value (PRINCIPLES 2.1).
-- **The validity window is checked, against the spike.** The spike's
-  `TlsExt.validateCert` left it out. The spec: "an endpoint MUST check
-  these conditions and abort the connection attempt if (a) the
-  presented certificate is not yet valid, OR (b) if it is expired".
+- **The validity window includes both ends, and the caller gives the
+  time.** The spec: "an endpoint MUST check these conditions and abort
+  the connection attempt if (a) the presented certificate is not yet
+  valid, OR (b) if it is expired". The spike checked the window in its
+  shim, against the process clock, with both ends outside it
+  (`cert_valid_now` on the `spike` branch, `c/p2pcrypto.c`).
+  `Tls.verify` takes the time as an argument, and both NotBefore and
+  NotAfter belong to the window (RFC 5280 §4.1.2.5): it refuses a time
+  before NotBefore and a time after NotAfter, and the suite pins both
+  ends to the second (the unit 2 milestones).
 - **The wall clock is a seam of its own.** The validity times are
   calendar times, and the `Clock` seam of §3.1 is monotonic. So
   `Tls.Config.now` reads the wall clock, and a test fixes it. The value

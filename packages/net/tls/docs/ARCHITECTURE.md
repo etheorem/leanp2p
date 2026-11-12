@@ -15,10 +15,10 @@ transport (W4.4, etheorem/leanp2p#92) is to be the second.
 | Module | Holds, and why |
 |---|---|
 | `native/c/tls_shim.c` | the shim: one context (`SSL_CTX`) and one session (`SSL` over two memory BIOs) as external objects, each call under the session's mutex |
-| `native/c/tls_shim.h` | the two C entries for another shim: the `SSL_CTX` and the ALPN list of a context object |
+| `native/c/tls_shim.h` | the five C entries for another shim: the `SSL_CTX` and the ALPN list of a context object, the attach of a certificate check to an `SSL` of that context, the reason of its refusal, and the test that a failed step refused the peer's certificate |
 | `native/TlsNative.lean` | the `@[extern]` declarations of the shim, one per exported function |
 | `native/lakefile.lean` | the nested Lake package that compiles the shim (PRINCIPLES 4.2) |
-| `Tls/Constants.lean` | the record size of TLS 1.3, one home (§3.8) |
+| `Tls/Constants.lean` | the record size of TLS 1.3 and the bound of the `close_notify` write, one home each (§3.8) |
 | `Tls/Error.lean` | `Tls.Error`, the one error inductive of the package (§3.5) |
 | `Tls/Context.lean` | `Tls.Context`: the certificate, the key, and the ALPN name that every session of one identity shares |
 | `Tls/Conn.lean` | `Tls.handshake` and the secure connection it answers, `Tls.Secured` |
@@ -96,7 +96,9 @@ handshake then fails with `Error.peerCertificate`, whose text is the
 reason the check gave. The shim tells these refusals apart from the
 other handshake failures by the verify result, and a client with no
 certificate by libssl's reason `SSL_R_PEER_DID_NOT_RETURN_A_CERTIFICATE`
-(`tls_process_client_certificate`).
+(`tls_process_client_certificate`). That client gets the alert
+`certificate_required` instead, the alert RFC 8446 §4.4.2.4 names for a
+server that aborts on a missing client certificate.
 
 The check is a pure function, `ByteArray → Option String`. The shim
 calls it with `lean_apply_1` and reads an ordinary `Option` object
@@ -108,10 +110,22 @@ from it.
 
 QUIC runs TLS 1.3 inside its own packets (RFC 9001). The QUIC
 transport (W4.4, etheorem/leanp2p#92) is to drive an `SSL` from its
-own shim, and that `SSL` comes from the same `SSL_CTX`: `tls_shim.h`
-gives that shim the context and the ALPN list of a `Tls.Context`
-object. The TLS settings of the table above then have one home for
-both transports (PRINCIPLES 1.5).
+own shim, and that `SSL` comes from the same `SSL_CTX`. The TLS
+settings of the table above then have one home for both transports
+(PRINCIPLES 1.5). `tls_shim.h` gives that shim what it needs:
+
+- the context and the ALPN list of a `Tls.Context` object;
+- `leanp2p_tls_attach_check`, which hands its `SSL` the caller's
+  check. The context's verify callback finds the check in the `SSL`'s
+  ex_data, and an `SSL` with no check refuses every certificate,
+  fail-closed. A session attaches its own check the same way, so both
+  transports reach the check through one path;
+- `leanp2p_tls_refusal` and `leanp2p_tls_refused`, which tell a
+  refused certificate from another failed step and give its reason,
+  as the session's handshake step does.
+
+The `SSL` owns its check: the ex_data slot's free callback drops the
+check's reference in `SSL_free`.
 
 ## The order of the records
 
@@ -153,7 +167,8 @@ free.
    `Secured.join` joins it.
 7. **The shim borrows every argument** (PRINCIPLES 4.1), and a session
    holds a reference to its context, so the `SSL_CTX` outlives every
-   `SSL`.
+   `SSL` of a session. An `SSL` holds one reference to its check, which
+   `SSL_free` drops.
 
 ## Decisions
 

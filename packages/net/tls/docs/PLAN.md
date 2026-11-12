@@ -23,8 +23,10 @@ certificate check that completes a handshake lives there.
 
 - `libp2p/security` (W5.11): `/tls/1.0.0` over TCP runs its handshake
   and its records here, and gives the engine its certificate check.
-- The QUIC transport (W4.4, etheorem/leanp2p#92), to come: its shim
-  runs its handshake on a `Tls.Context`, through `tls_shim.h`.
+- The QUIC transport (W4.4, etheorem/leanp2p#92), to come: its shim is
+  to run its handshake on a `Tls.Context`, and to attach its check to
+  each of its `SSL`s, through `tls_shim.h` ("One context for both
+  transports").
 
 ## Test milestones (unit 1)
 
@@ -65,5 +67,7 @@ TLS 1.3 handshakes draw fresh randomness, so no byte transcript repeats,
 and the package carries no vector. The live check is the interop
 check of `libp2p/security` (`scripts/tls-interop.sh`) against
 go-libp2p's TLS transport over Go's `crypto/tls`, in both directions,
-with the refusals and their alerts and peers that use no ALPN. The
-QUIC transport adds its own interop check on the same context.
+with the refusals and their alerts, a client with no certificate, peers
+that use no ALPN, and a server that checks our client sends no server
+name. The QUIC transport is to add its own interop check on the same
+context.

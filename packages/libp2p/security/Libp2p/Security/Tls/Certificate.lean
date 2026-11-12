@@ -48,8 +48,12 @@ handshake sees the chain (`net/tls`, the verify callback). The check
 of the derived peer id against the expected one belongs to the
 upgrader, as for Noise (root §4.9).
 
-The spike's `Conn/TlsExt.lean` ran steps 1, 2, 4, 5, and 6. Step 3 is
-new here: the spike left the validity window out.
+The spike's `Conn/TlsExt.lean` ran these checks with two differences.
+Its shim checked the validity window against the process clock, with
+both ends outside the window. Here the caller gives the time, and both
+ends belong to the window (RFC 5280 §4.1.2.5). Its shim refused every
+critical extension but the libp2p one, the ones OpenSSL understands
+included. Here the backend accepts the understood ones.
 -/
 
 set_option autoImplicit false
