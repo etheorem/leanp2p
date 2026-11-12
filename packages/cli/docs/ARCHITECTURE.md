@@ -240,6 +240,64 @@ of §3.5. The demo prints one stderr line and exits 1.
 A thrown `IO.Error` stays a fault. The binary prints it, closes the
 hosts it created, and exits 1.
 
+### Usage
+
+`lake build` writes `.lake/build/bin/demo` and
+`.lake/build/bin/pingnode`.
+
+`demo` takes no arguments.
+
+```
+.lake/build/bin/demo
+```
+
+Success prints four lines and exits 0. The peer id and the round-trip
+time belong to that run.
+
+```
+dialed <peer id> (noise + yamux, remote verified)
+ping rtt: <ms> ms
+identified: <peer id>, 1 addr(s), 3 protocol(s)
+echo: echo-me
+```
+
+`pingnode serve 0` asks the kernel for a loopback port. The process
+prints one line and leaves stdin open.
+
+```
+.lake/build/bin/pingnode serve 0
+```
+
+```
+ADDR /ip4/127.0.0.1/tcp/<port> <peer id>
+```
+
+A second terminal builds the dial address from that line. The address
+is the `ADDR` address field, then `/p2p/`, then the peer field.
+
+```
+.lake/build/bin/pingnode dial /ip4/127.0.0.1/tcp/<port>/p2p/<peer id>
+```
+
+A successful dial prints one line and exits 0.
+
+```
+PING OK rtt=<ms>ms
+```
+
+The server keeps serving while its stdin stays open. EOF stops it.
+In a terminal, Ctrl-D sends that EOF. The server then calls
+`Host.close` and exits 0.
+
+The demo writes its four lines with `putStr` and `flush`. A closed
+stdout throws inside `demo`. `guarding` then closes both hosts and
+exits 1. `pingnode serve` flushes `ADDR` after listen, as the server
+lifetime section records.
+
+Exit 0 is success. Exit 2 is a usage error, and the process has
+created no host. Exit 1 is a runtime failure. Contract lines go to
+stdout. Diagnostics go to stderr.
+
 ### Composition
 
 Both binaries build one `Host.Config`.
@@ -609,10 +667,30 @@ callback correction, `lake build demo pingnode tests` completed.
 -RTS` passed 140 checks, with 0 failed, 0 todo, and 0 skipped. The
 success check and the closed-stdout check stay in that run. The
 callback examples are checked when `demo` builds. The 80-check
-result stays the echo suite's record. The full `lake test` was not
-rerun. Its recorded baseline still has one failure in
-`Tests/Streams.lean`: `the teardown aborted the stuck write: the
-peer meets a reset`. The W5.9 gate and issue #22 stay open.
+result stays the echo suite's record. That callback correction did
+not rerun the full `lake test`. The gate record for `f994be4`
+records the later full runs. The W5.9 gate and issue #22 stay open.
+
+### Gate record for `f994be4`
+
+This record is the local suite that included the demo flush, and the
+GitHub checks on `f994be4` before that flush was published. The
+140-check commands above run `Tests.Cli` and `Tests.CliLive` only.
+
+`lake build` exited 0. Its log has no warning line.
+`scripts/lint-imports.sh` exited 0 and checked 190 module files, with
+0 violations. `lake test` exited 1: 28095 passed, 1 failed, 0 todo,
+and 7 skipped. `lake test -- +RTS -N1 -RTS` exited 1 with the same
+summary. The failure is `Tests/Streams.lean` line 985, `the teardown
+aborted the stuck write: the peer meets a reset`. The CLI sections
+of those runs are not a full pass. GitHub `build-and-test` on
+`f994be4` failed `demo closed stdout exits` and `demo closed stdout
+stderr` during `lake test`, then skipped the one-worker suite, the
+import lint, and vector provenance. Those two checks predate the
+demo flush.
+`scripts/ping-go-interop.sh` exited 0 with `PASS go-to-lean PING OK
+rtt=710.459µs`. `scripts/ping-go-interop.sh lean-to-go` exited 0 with
+`PASS lean-to-go PING OK rtt=0ms`.
 
 ## Decisions
 

@@ -146,6 +146,15 @@ private def openHost (faults : IO.Ref CallbackState)
   | .error e => return .error (reprStr e)
   | .ok host => return .ok host
 
+/-- Print one contract line and flush it. `IO.println` can keep the
+bytes in the stdout buffer. A closed stdout then stays silent until
+process exit. The flush makes that fault a thrown `IO.Error` inside
+the command, which `guarding` records before it closes the hosts. -/
+private def writeLine (line : String) : IO Unit := do
+  let out ← IO.getStdout
+  out.putStr s!"{line}\n"
+  out.flush
+
 /-- Print `line` and exit 1. -/
 private def failLine (line : String) : IO UInt32 := do
   IO.eprintln line
@@ -276,7 +285,7 @@ private def runPing (dialer : Host) (peer : PeerId) : IO UInt32 :=
       catch e =>
         IO.eprintln s!"{e}"
         return 1
-      IO.println s!"ping rtt: {rtt} ms"
+      writeLine s!"ping rtt: {rtt} ms"
       return 0
 
 /-- The facts the demo checks after `Identify.client`. The client
@@ -316,7 +325,7 @@ private def runIdentify (dialer : Host) (peer : PeerId) (bound : Multiformats.Mu
         catch e =>
           IO.eprintln s!"{e}"
           return 1
-        IO.println s!"identified: {PeerId.toString pid}, {msg.listenAddrs.length} addr(s), {msg.protocols.length} protocol(s)"
+        writeLine s!"identified: {PeerId.toString pid}, {msg.listenAddrs.length} addr(s), {msg.protocols.length} protocol(s)"
         return 0
 
 /-- One echo exchange. The deadline starts after `newStream` returns.
@@ -371,7 +380,7 @@ private def runEcho (dialer : Host) (peer : PeerId) : IO UInt32 :=
       catch e =>
         IO.eprintln s!"{e}"
         return 1
-      IO.println "echo: echo-me"
+      writeLine "echo: echo-me"
       return 0
 
 /-- Listen, dial, and run ping, identify, and echo. The caller closes
@@ -391,7 +400,7 @@ private def runDemo (listener dialer : Host) : IO UInt32 := do
   let peer ← match ← Conc.Async.run (dialer.dialPeer listener.localPeer) with
     | .error e => return ← failHost e
     | .ok peer => pure peer
-  IO.println s!"dialed {PeerId.toString peer} (noise + yamux, remote verified)"
+  writeLine s!"dialed {PeerId.toString peer} (noise + yamux, remote verified)"
   let pingCode ← runPing dialer peer
   if pingCode != 0 then return pingCode
   let identifyCode ← runIdentify dialer peer bound

@@ -213,6 +213,53 @@ hosts. `pingnode serve` and `pingnode dial` are implemented.
   This check stays outside `lake test`.
 - The in-suite legs pass under `+RTS -N1` (§6; PRINCIPLES 5.3).
 
+## W5.8 acceptance
+
+Issue #22's definition of done is the measure. This section is the
+snapshot of the local gates that included the demo flush, and of the
+GitHub checks on commit `f994be4` before that flush was published.
+Focused CLI counts above are not these gates.
+
+- The public surface of `cli/` is the nominal lib. It declares no
+  API. The owned contracts are the W5.8 behavior section. `demo` and
+  `pingnode` implement that section, including echo and the callback
+  flag. `reportFailure`, `closeBoth`, and `guarding` stay private.
+  The executable has no injection flag, so the process checks do not
+  deliver a `Failure` through `onFailure`.
+- The loopback demo dials, runs ping, identify, and echo, then closes
+  the dialer and the listener with `Host.close`. `Tests/CliLive.lean`
+  checks the four stdout lines, empty stderr, and exit 0.
+- The carried suite is `lake test`. It is not green. The command
+  exited 1. The summary was 28095 passed, 1 failed, 0 todo, and 7
+  skipped. The failure is `Tests/Streams.lean` line 985, the check
+  `the teardown aborted the stuck write: the peer meets a reset`.
+  The peer's raw read ended without the reset error. That failure is
+  the recorded baseline. It is separate from the CLI checks. The same
+  command under `lake test -- +RTS -N1 -RTS` exited 1 with the same
+  summary and the same failure. These two results do not satisfy the
+  full-suite requirement.
+- `lake build` exited 0. The captured log has no warning line.
+  `scripts/lint-imports.sh` exited 0 and checked 190 module files,
+  with 0 violations. A search of the Lean sources found no `sorry`.
+- GitHub `build-and-test` on `f994be4` failed in `Run lake test`.
+  Its summary was 28099 passed, 2 failed, 0 todo, and 4 skipped.
+  The failures were `demo closed stdout exits` and `demo closed
+  stdout stderr`. The later CI steps, including `+RTS -N1`, the
+  import lint, and vector provenance, were skipped. The local
+  closed-stdout checks passed in the suite above. The demo's four
+  lines use `putStr` and `flush` in the flush commit. That Linux
+  result belongs to `f994be4` and stays the record of the unflushed
+  demo.
+- `snappy-native-hardening` passed. `License acceptance guard` passed.
+  `AI co-author guard` passed. All three ran on `f994be4`.
+- `scripts/ping-go-interop.sh` exited 0 and printed `PASS go-to-lean
+  PING OK rtt=710.459µs`. `scripts/ping-go-interop.sh lean-to-go`
+  exited 0 and printed `PASS lean-to-go PING OK rtt=0ms`. These
+  checks stay outside `lake test`. The W5.9 matrix, the silent-peer
+  gate, and the slow-reader gate stay open. Issue #22 stays open.
+
+The unit is not done while `lake test` fails.
+
 ## Test milestones (unit 2)
 
 - The gate: the interop matrix against go-libp2p v0.50.0, over
