@@ -27,7 +27,7 @@ the constraints of that split.
 | `Backend/Sized.lean` | `Key32`, `Digest32`, and `Nonce12`, the proof-carrying newtypes (§3.7) that cross the FFI edge. `Sym` and `Sign` both take them, so they sit below both. |
 | `Backend/Sym.lean` | random bytes, the SHA-1 and SHA-512 digest bindings, the interim SHA-256 binding, HMAC, HKDF, and ChaCha20-Poly1305 seal and open |
 | `Backend/Sign.lean` | X25519 derivation and DH. Derive, sign, and verify for Ed25519, RSA, secp256k1, and ECDSA P-256. The facade routes P-256 verification to `LeanHazmatP256`, and this verifier is the reference of the route's differential test. The secp256k1 compact signer over a caller's digest. The DER re-encode of an RSA or P-256 private key (`rsaPkcs1`, `p256Sec1`). Key generation for all five types. |
-| `Backend/X509.lean` | the certificate helpers of the tls.md shape. `inspect` reads the SPKI, the value of one extension the caller names by OID, and the validity times. `selfSigned` checks the signature. The helpers know no protocol, so the caller passes the libp2p OID. |
+| `Backend/X509.lean` | the certificate helpers of the tls.md shape. `inspect` reads the SPKI, the value of one extension the caller names by OID, and the validity times; a refusal names the broken rule (`CertificateRejection`). `selfSigned` checks the signature. `issue` makes a self-signed certificate that carries one extension. The helpers know no protocol, so the caller passes the libp2p OID. |
 | `Backend.lean` | the package root, one import line per submodule. Production callers import `Crypto` instead (§3.6). |
 
 The bindings split into three modules because they carry three
@@ -77,6 +77,7 @@ once, in this package.
 | SHA-1, SHA-512, the interim SHA-256, HMAC, HKDF | pure | deterministic (§3.6) |
 | ChaCha20-Poly1305 seal and open | pure | deterministic (§3.6) |
 | X.509 parse and extension helpers | pure | one certificate parses to the same answer every time |
+| X.509 issue | `IO` | the serial number and the ECDSA nonce are random (§3.6) |
 | random bytes, key generation | `IO` | randomness (§3.6) |
 
 Four families have etheorem hazmat packages: secp256k1
@@ -156,6 +157,17 @@ helpers reject any extension that appears twice (RFC 5280 §4.2). The
 self-signature check accepts SHA-256, SHA-384, SHA-512, and Ed25519
 signatures, the set Go accepts, and it applies the RSA range to an RSA
 subject key.
+
+`issue` makes the certificate a TLS endpoint presents (root PLAN
+W5.11). The caller gives a P-256 key from `p256Generate`, the OID and
+the DER value of the one extension, its critical flag, and the validity
+times. The shim signs with ECDSA over SHA-256. The serial number and
+the subject's serialNumber attribute are 62 random bits each, the
+shape of go-libp2p's `certTemplate`
+(`vendor/go-libp2p/p2p/security/tls/crypto.go`, lines 266 to 286), and
+its key and signature follow `keyToCertificate` (lines 242 to 263).
+`inspect` and `selfSigned` accept every certificate `issue` gives
+(`Tests/Tls.lean`).
 
 The helpers return the NotBefore and NotAfter times and do not judge
 them. The caller compares them against the `Clock` seam (§3.1), so the
@@ -267,7 +279,7 @@ this pair's plan is the backend side of it.
 - **Deterministic signing stays pure.** §3.6 fixes the split, and it
   matches the schemes. Ed25519 (RFC 8032) and RSASSA-PKCS1-v1_5 derive
   the signature from the key and the message alone. The ECDSA P-256
-  signer draws a nonce, so its binding takes the world.
+  signer draws a nonce, so its binding runs in `IO`.
 - **secp256k1 has one signing core, RFC 6979, behind two entry
   points.** The core signs a 32-byte digest with the RFC 6979 nonce
   (OpenSSL 3.2 and later) and sets S low, so both bindings are pure.

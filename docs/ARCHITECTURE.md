@@ -27,7 +27,7 @@ pre-authentication byte. It shuts down deterministically. Its protocol
 cores are machine-checked.
 
 Non-goals for v1: QUIC and WebTransport transports, kad-dht, NAT
-traversal, browser dialing, and TLS beyond its seam.
+traversal, and browser dialing.
 Gossipsub is in scope, and §8 ranks it. The layering leaves room for
 every non-goal, and no part of the design depends on their absence.
 
@@ -57,10 +57,11 @@ packages/
     streams/                   Connection/Listener/Transport, BufReader,
                                Framing, Stream, tcp transport
     yamux/                     the stream muxer
+    tls/                       TLS 1.3 over a Connection (libssl shim)
   libp2p/                      the protocol stack
     identity/                  keys, peer ids
     core/                      ProtocolId, Core.Error, the libp2p seam types
-    security/                  Noise XX as a SecurityProtocol value; TLS deferred
+    security/                  Noise XX and libp2p TLS as SecurityProtocol values
     mux/                       Muxer values: yamux (over net/yamux), mplex
     negotiate/                 multistream-select, upgrader
     host/                      swarm/host, peerstore, dedup, deadlines
@@ -74,7 +75,7 @@ them:
 
 - **Between groups**: `cli → libp2p → net → crypto → codec → base`. A
   group imports only the groups to its right.
-- **Within groups, downward only**: `net/yamux → net/streams`,
+- **Within groups, downward only**: `{net/yamux, net/tls} → net/streams`,
   `codec/{proto,multiformats} → codec/varint`, and inside `libp2p`
   `identity → core → {security, mux} → negotiate → host → protocols`.
   Implementations import `core`. `negotiate` and `host` import `core`
@@ -853,7 +854,10 @@ Everything with libp2p semantics, in subpackages:
     pre-authentication decode;
   - a failed seal tears the connection down.
 
-  The TLS extension is deferred (§8).
+  The libp2p TLS handshake is the second value (`/tls/1.0.0`): the
+  self-signed certificate with the libp2p Public Key Extension, its
+  checks, and the seam value over the TLS 1.3 engine of `net/tls`. The
+  QUIC transport (W4.4) is to issue and check the same certificate.
 - **`negotiate/`**: multistream-select (1 KiB cap, `na` retry, `ls`,
   lazy dialer) and the upgrader.
 - **`mux/`**: the `Muxer` values. yamux (P0) assigns the `/yamux/1.0.0`
@@ -1007,7 +1011,8 @@ interface seams exist, and no implementation work is scheduled.
 | Component | Why | Status in spike |
 |---|---|---|
 | TCP transport | consensus networking runs on TCP (and QUIC) | done |
-| Noise XX (`/noise`) | the only security protocol in the eth2 networking spec | done |
+| Noise XX (`/noise`) | the security protocol of the TCP transport (`vendor/consensus-specs/specs/phase0/p2p-interface.md`, lines 182 to 185) | done |
+| **libp2p TLS** (`/tls/1.0.0`, the X.509 extension) | "The QUIC transport is secured using TLS 1.3, configured according to the libp2p TLS specification" (the same spec, lines 179 to 180) | **new work** (the spike's `TlsExt` covered the certificate check; the engine binds libssl in `net/tls`, W5.11) |
 | yamux | the preferred muxer over TCP: the spec makes yamux take precedence over mplex during negotiation (QUIC muxes internally) | done, hardened |
 | mplex | the spec requires it of every TCP client (`vendor/consensus-specs/specs/phase0/p2p-interface.md`, lines 210 to 215). Every host offers `[Mux.yamux, Mux.mplex]`, in that order. go-libp2p v0.50 removed mplex from its defaults. This document records that as a difference with go, where the spec wins (PRINCIPLES 2.1) | done |
 | multistream-select | negotiation for security + muxer | done |
@@ -1034,9 +1039,6 @@ interface seams exist, and no implementation work is scheduled.
 
 **Not needed for consensus (defer, keep the seams only):**
 
-- **TLS 1.3 security and the X.509 libp2p extension.** The eth2 spec
-  names Noise only. The spike work is done, and no more work is
-  planned.
 - **RSA and ECDSA P-256 host keys.** Consensus clients use Ed25519 or
   secp256k1. RSA comes from the go-libp2p defaults, and the eth2 spec
   does not use it.
@@ -1107,7 +1109,7 @@ The map shows where the content of each spike module goes in the
 | `Conn/Yamux.lean` | `net/yamux` |
 | `Crypto/{Keys,PeerId}.lean` | `libp2p/identity` |
 | `Conn/Security.lean` (the seam shape), `Conn/Upgrade.lean` (`MuxHandle`, `MuxChoice` shapes) | `libp2p/core` (as `SecurityProtocol`, `Muxer`, `MuxSession`) |
-| `Conn/Noise.lean`, `Conn/TlsExt.lean` | `libp2p/security` (TlsExt deferred, §8) |
+| `Conn/Noise.lean`, `Conn/TlsExt.lean` | `libp2p/security` (`TlsExt` maps to `Libp2p/Security/Tls/`) |
 | `Protocol/Multiselect.lean`, `Conn/Upgrade.lean` | `libp2p/negotiate` |
 | `Conn/Mplex.lean` | `libp2p/mux` |
 | `Host.lean`, `Peer/Peerstore.lean` | `libp2p/host` |

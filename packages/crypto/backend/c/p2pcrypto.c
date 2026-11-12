@@ -20,8 +20,10 @@
  *   the Lean wrapper lifts it once into `Except CryptoError`. A verifier
  *   returns `uint8_t` (Lean `Bool`), and every malformed input or
  *   library fault folds into 0, fail-closed.
- * - A binding that draws randomness takes the IO world token and returns
- *   an IO result.
+ * - A binding that draws randomness runs in `IO`. Lean v4.34 calls an
+ *   `IO` extern with its declared arguments alone, no world token (the
+ *   prototypes in `.lake/build/ir`), and reads an IO result back
+ *   (`lean_io_result_mk_ok`).
  */
 
 #include <lean/lean.h>
@@ -87,8 +89,7 @@ static inline int fits_int(size_t n) { return n <= (size_t)INT_MAX; }
 /* ------------------------------------------------------------------ */
 
 /* `n` random bytes from the OpenSSL DRBG. The Lean side caps `n`. */
-LEAN_EXPORT lean_obj_res leanp2p_random_bytes(size_t n, lean_obj_arg w) {
-    (void)w;
+LEAN_EXPORT lean_obj_res leanp2p_random_bytes(size_t n) {
     lean_object *out = alloc_bytes(n);
     if (n > 0 && RAND_bytes(lean_sarray_cptr(out), (int)n) != 1) {
         lean_dec(out);
@@ -455,10 +456,8 @@ LEAN_EXPORT lean_obj_res leanp2p_p256_sec1(b_lean_obj_arg priv) {
     return r;
 }
 
-/* ECDSA draws a random nonce, so the binding takes the world. */
-LEAN_EXPORT lean_obj_res leanp2p_p256_sign(b_lean_obj_arg priv, b_lean_obj_arg msg,
-                                           lean_obj_arg w) {
-    (void)w;
+/* ECDSA draws a random nonce, so the binding runs in `IO`. */
+LEAN_EXPORT lean_obj_res leanp2p_p256_sign(b_lean_obj_arg priv, b_lean_obj_arg msg) {
     EVP_PKEY *k = load_private_der(EVP_PKEY_EC, priv);
     lean_object *r = (k != NULL && ec_group_is(k, "prime256v1")) ? sign_sha256(k, msg) : none();
     EVP_PKEY_free(k);
@@ -722,16 +721,14 @@ static lean_object *raw_private_of(EVP_PKEY *k) {
 }
 
 /* A 32-byte seed: any 32 bytes are a valid Ed25519 seed. */
-LEAN_EXPORT lean_obj_res leanp2p_ed25519_generate(lean_obj_arg w) {
-    (void)w;
+LEAN_EXPORT lean_obj_res leanp2p_ed25519_generate(void) {
     EVP_PKEY *k = EVP_PKEY_Q_keygen(NULL, NULL, "ED25519");
     lean_object *r = raw_private_of(k);
     EVP_PKEY_free(k);
     return lean_io_result_mk_ok(r);
 }
 
-LEAN_EXPORT lean_obj_res leanp2p_x25519_generate(lean_obj_arg w) {
-    (void)w;
+LEAN_EXPORT lean_obj_res leanp2p_x25519_generate(void) {
     EVP_PKEY *k = EVP_PKEY_Q_keygen(NULL, NULL, "X25519");
     lean_object *r = raw_private_of(k);
     EVP_PKEY_free(k);
@@ -739,8 +736,7 @@ LEAN_EXPORT lean_obj_res leanp2p_x25519_generate(lean_obj_arg w) {
 }
 
 /* The raw 32-byte scalar, in [1, n - 1] by construction. */
-LEAN_EXPORT lean_obj_res leanp2p_secp256k1_generate(lean_obj_arg w) {
-    (void)w;
+LEAN_EXPORT lean_obj_res leanp2p_secp256k1_generate(void) {
     EVP_PKEY *k = EVP_PKEY_Q_keygen(NULL, NULL, "EC", "secp256k1");
     BIGNUM *d = NULL;
     lean_object *out = alloc_bytes(32);
@@ -751,8 +747,7 @@ LEAN_EXPORT lean_obj_res leanp2p_secp256k1_generate(lean_obj_arg w) {
     return lean_io_result_mk_ok(some_or_free(ok, out));
 }
 
-LEAN_EXPORT lean_obj_res leanp2p_p256_generate(lean_obj_arg w) {
-    (void)w;
+LEAN_EXPORT lean_obj_res leanp2p_p256_generate(void) {
     EVP_PKEY *k = EVP_PKEY_Q_keygen(NULL, NULL, "EC", "P-256");
     lean_object *r = private_der_of(k);
     EVP_PKEY_free(k);
@@ -760,8 +755,7 @@ LEAN_EXPORT lean_obj_res leanp2p_p256_generate(lean_obj_arg w) {
 }
 
 /* `bits` is in [2048, 8192], checked on the Lean side. */
-LEAN_EXPORT lean_obj_res leanp2p_rsa_generate(size_t bits, lean_obj_arg w) {
-    (void)w;
+LEAN_EXPORT lean_obj_res leanp2p_rsa_generate(size_t bits) {
     EVP_PKEY *k = EVP_PKEY_Q_keygen(NULL, NULL, "RSA", bits);
     lean_object *r = private_der_of(k);
     EVP_PKEY_free(k);
@@ -803,51 +797,79 @@ static int posix_of(const ASN1_TIME *t, int64_t *out) {
     return ok;
 }
 
-/* The extension `oid` (dotted text) of `x`. NULL in three cases:
-   - the extension is missing,
+/* Why `leanp2p_x509_inspect` refused a certificate. The codes are the
+   constructor indices of `Backend.CertificateRejection`, and
+   `X509_BAD_OID` stands for a required OID that is no dotted OID (the
+   Lean side lifts it to `invalidInput`). */
+enum {
+    X509_MALFORMED = 0,
+    X509_MISSING_EXTENSION = 1,
+    X509_DUPLICATE_EXTENSION = 2,
+    X509_UNKNOWN_CRITICAL = 3,
+    X509_BAD_OID = 4,
+};
+
+/* The extension `oid` (dotted text) of `x`. NULL in four cases, each
+   with its code in `*why`:
+   - the OID does not parse (`X509_BAD_OID`),
    - any extension appears twice (RFC 5280 §4.2, and Go's parser rejects
      it too),
    - a critical extension is neither `oid` nor one that OpenSSL
-     understands.
+     understands,
+   - the extension is missing.
    The TLS spec asks an endpoint to abort only on the critical
    extensions it does not understand. The Go implementation leaves the
    known ones (basicConstraints, keyUsage, ...) to crypto/x509
    (vendor/go-libp2p/p2p/security/tls/crypto.go, lines 171 to 184). */
-static X509_EXTENSION *required_extension(X509 *x, const char *oid) {
+static X509_EXTENSION *required_extension(X509 *x, const char *oid, int *why) {
     ASN1_OBJECT *want = OBJ_txt2obj(oid, 1);
+    if (want == NULL) {
+        *why = X509_BAD_OID;
+        return NULL;
+    }
     X509_EXTENSION *found = NULL;
     int count = X509_get_ext_count(x);
-    int ok = want != NULL;
+    int ok = 1;
     for (int i = 0; ok && i < count; i++) {
         X509_EXTENSION *e = X509_get_ext(x, i);
         const ASN1_OBJECT *id = X509_EXTENSION_get_object(e);
         for (int j = 0; ok && j < i; j++)
-            if (OBJ_cmp(X509_EXTENSION_get_object(X509_get_ext(x, j)), id) == 0) ok = 0;
+            if (OBJ_cmp(X509_EXTENSION_get_object(X509_get_ext(x, j)), id) == 0) {
+                ok = 0;
+                *why = X509_DUPLICATE_EXTENSION;
+            }
+        if (!ok)
+            break;
         if (OBJ_cmp(id, want) == 0)
             found = e;
-        else if (X509_EXTENSION_get_critical(e) && !X509_supported_extension(e))
+        else if (X509_EXTENSION_get_critical(e) && !X509_supported_extension(e)) {
             ok = 0;
+            *why = X509_UNKNOWN_CRITICAL;
+        }
     }
     ASN1_OBJECT_free(want);
+    if (ok && found == NULL) *why = X509_MISSING_EXTENSION;
     return ok ? found : NULL;
 }
 
 /* Inspect a certificate: the subject key as SPKI DER, the value of the
    required extension `oid`, and the NotBefore and NotAfter times. The
-   Lean structure `Backend.CertificateRaw` has two object fields and two
-   `UInt64` scalars. Lean lays the scalars out after the objects, in
-   declaration order. The times cross as the two's-complement bits of an
-   int64_t. */
+   answer is a Lean `Except UInt8 Backend.CertificateRaw`: `error` (tag
+   0) holds the boxed code of the refusal, and `ok` (tag 1) holds the
+   structure. The structure has two object fields and two `UInt64`
+   scalars. Lean lays the scalars out after the objects, in declaration
+   order. The times cross as the two's-complement bits of an int64_t. */
 LEAN_EXPORT lean_obj_res leanp2p_x509_inspect(b_lean_obj_arg der, b_lean_obj_arg oid) {
     X509 *x = load_cert(der);
-    X509_EXTENSION *e = x != NULL ? required_extension(x, lean_string_cstr(oid)) : NULL;
+    int why = X509_MALFORMED;
+    X509_EXTENSION *e = x != NULL ? required_extension(x, lean_string_cstr(oid), &why) : NULL;
     int64_t nb = 0, na = 0;
     unsigned char *spki = NULL;
     int spki_len = -1;
     if (e != NULL && posix_of(X509_get0_notBefore(x), &nb)
         && posix_of(X509_get0_notAfter(x), &na))
         spki_len = i2d_X509_PUBKEY(X509_get_X509_PUBKEY(x), &spki);
-    lean_object *r = none();
+    lean_object *r;
     if (spki_len > 0) {
         const ASN1_OCTET_STRING *v = X509_EXTENSION_get_data(e);
         lean_object *c = lean_alloc_ctor(0, 2, 16);
@@ -855,11 +877,71 @@ LEAN_EXPORT lean_obj_res leanp2p_x509_inspect(b_lean_obj_arg der, b_lean_obj_arg
         lean_ctor_set(c, 1, mk_bytes(ASN1_STRING_get0_data(v), (size_t)ASN1_STRING_length(v)));
         lean_ctor_set_uint64(c, 2 * sizeof(void *), (uint64_t)nb);
         lean_ctor_set_uint64(c, 2 * sizeof(void *) + 8, (uint64_t)na);
-        r = some(c);
+        r = lean_alloc_ctor(1, 1, 0);
+        lean_ctor_set(r, 0, c);
+    } else {
+        /* A time or a key the shim cannot read leaves `why` at
+           `X509_MALFORMED`: `required_extension` found the extension. */
+        r = lean_alloc_ctor(0, 1, 0);
+        lean_ctor_set(r, 0, lean_box((size_t)why));
     }
     OPENSSL_free(spki);
     X509_free(x);
     return r;
+}
+
+/* Issue a self-signed X.509 v3 certificate for the P-256 key `priv`
+   (SEC1 DER, as `leanp2p_p256_generate` gives it). The certificate
+   carries one extension, `oid` (dotted text) with the DER `value`, and
+   `critical` marks it. NotBefore and NotAfter are seconds since the
+   Unix epoch, as two's-complement int64_t bits. The serial number is 62
+   random bits, and the subject and the issuer are one serialNumber
+   attribute of 62 more random bits, the shape of go-libp2p's
+   `certTemplate` (vendor/go-libp2p/p2p/security/tls/crypto.go, lines
+   266 to 286). The signature is ECDSA with SHA-256. IO: the serial and
+   the ECDSA nonce draw from the DRBG. `none` is a parse failure or a
+   library fault. */
+LEAN_EXPORT lean_obj_res leanp2p_x509_issue(b_lean_obj_arg priv, b_lean_obj_arg oid,
+                                            b_lean_obj_arg value, uint8_t critical,
+                                            uint64_t not_before, uint64_t not_after) {
+    EVP_PKEY *k = load_private_der(EVP_PKEY_EC, priv);
+    X509 *x = X509_new();
+    ASN1_OBJECT *id = OBJ_txt2obj(lean_string_cstr(oid), 1);
+    ASN1_OCTET_STRING *v = ASN1_OCTET_STRING_new();
+    BIGNUM *serial = BN_new(), *subject = BN_new();
+    char *subject_text = NULL;
+    X509_EXTENSION *e = NULL;
+    int ok = k != NULL && ec_group_is(k, "prime256v1") && x != NULL && id != NULL
+        && v != NULL && serial != NULL && subject != NULL && fits_int(blen(value))
+        && BN_rand(serial, 62, BN_RAND_TOP_ANY, BN_RAND_BOTTOM_ANY) == 1
+        && BN_rand(subject, 62, BN_RAND_TOP_ANY, BN_RAND_BOTTOM_ANY) == 1
+        && (subject_text = BN_bn2dec(subject)) != NULL
+        && X509_set_version(x, X509_VERSION_3) == 1
+        && BN_to_ASN1_INTEGER(serial, X509_get_serialNumber(x)) != NULL
+        && ASN1_TIME_set(X509_getm_notBefore(x), (time_t)(int64_t)not_before) != NULL
+        && ASN1_TIME_set(X509_getm_notAfter(x), (time_t)(int64_t)not_after) != NULL
+        && X509_NAME_add_entry_by_txt(X509_get_subject_name(x), "serialNumber",
+                                      MBSTRING_ASC, (const unsigned char *)subject_text,
+                                      -1, -1, 0) == 1
+        && X509_set_issuer_name(x, X509_get_subject_name(x)) == 1
+        && X509_set_pubkey(x, k) == 1
+        && ASN1_OCTET_STRING_set(v, bptr(value), (int)blen(value)) == 1
+        && (e = X509_EXTENSION_create_by_OBJ(NULL, id, critical ? 1 : 0, v)) != NULL
+        && X509_add_ext(x, e, -1) == 1
+        && X509_sign(x, k, EVP_sha256()) > 0;
+    unsigned char *der = NULL;
+    int n = ok ? i2d_X509(x, &der) : -1;
+    lean_object *r = n > 0 ? some(mk_bytes(der, (size_t)n)) : none();
+    OPENSSL_free(der);
+    X509_EXTENSION_free(e);
+    OPENSSL_free(subject_text);
+    BN_free(subject);
+    BN_free(serial);
+    ASN1_OCTET_STRING_free(v);
+    ASN1_OBJECT_free(id);
+    X509_free(x);
+    EVP_PKEY_free(k);
+    return lean_io_result_mk_ok(r);
 }
 
 /* True when the signature algorithm is one Go's crypto/x509 accepts for a

@@ -29,7 +29,7 @@ so those bindings are pure. Both secp256k1 signers derive the nonce
 by RFC 6979, so they are pure too. The shim keeps that promise. The
 same input gives the same output, and the call reads no global state
 and has no side effect. The P-256 signer draws a random nonce, so it
-takes the world. The key generators take it too.
+runs in `IO`. The key generators do too.
 
 **The ownership rule.** The shim borrows every `ByteArray` argument of
 an `@[extern]` declaration below. The declaration marks it `@&`, and
