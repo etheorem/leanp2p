@@ -1,0 +1,702 @@
+import Conc
+import Crypto
+import Streams
+import Multiformats
+import Libp2p.Identity
+import Libp2p.Security
+import Libp2p.Mux
+import Libp2p.Core
+import Libp2p.Host
+import Libp2p.Negotiate
+import Libp2p.Protocols.Ping
+import Libp2p.Protocols.Identify
+import Tests.Cli
+import Tests.Support
+
+/-!
+# The pingnode server
+
+The checks run the built `pingnode` with `LEAN_NUM_THREADS=1`. One
+client host dials it over TCP and Noise while stdin stays open. The
+other checks cover EOF, a busy port, a failed `ADDR` write, an inbound
+failure, a deadline that kills a sleeper, and a registered task that
+returns an error. The dial checks run the built `pingnode dial` against
+this server, a closed port, a different peer id, a peer that accepts
+the stream and stays silent, and a peer that reads the payload and
+does not echo it. The demo checks run the built `demo`. One check
+requires the four success lines. The other closes stdout and requires
+exit 1 inside 30 seconds.
+
+Each reader task belongs to the check that started it. The check wakes
+the task by closing the pipe it reads, and then joins it.
+-/
+
+set_option autoImplicit false
+
+namespace Tests.CliLive
+
+open Libp2p.Host (Host)
+open Libp2p.Identity (PeerId PrivKey)
+
+/-- The built server. -/
+private def bin : String := ".lake/build/bin/pingnode"
+
+/-- The built demo. -/
+private def demoBin : String := ".lake/build/bin/demo"
+
+/-- One worker in the server process. -/
+private def oneWorker : Array (String × Option String) :=
+  #[("LEAN_NUM_THREADS", some "1")]
+
+/-- Drop the trailing line break from `getLine`. -/
+private def stripNl (text : String) : String :=
+  let text := if text.endsWith "\n" then (text.dropEnd 1).copy else text
+  if text.endsWith "\r" then (text.dropEnd 1).copy else text
+
+/-- The port text of a loopback TCP address. -/
+private def portOf (addr : String) : Option String :=
+  let head := "/ip4/127.0.0.1/tcp/"
+  if addr.startsWith head then some (addr.drop head.length).copy else none
+
+/-- Keep the first fault. -/
+private def note (primary : IO.Ref (Option IO.Error)) (e : IO.Error) : IO Unit := do
+  if (← primary.get).isNone then primary.set (some e)
+
+/-- Read one stdout line. The task's owner is this function. A miss
+kills `child`, which closes the pipe and wakes the read, and then this
+function joins the task. -/
+private def getLineWithin {cfg : IO.Process.StdioConfig} (child : IO.Process.Child cfg)
+    (h : IO.FS.Handle) (ms : Nat) : IO String := do
+  let task ← IO.asTask h.getLine Task.Priority.dedicated
+  let mut timedOut := false
+  let mut fault : Option IO.Error := none
+  try
+    let start ← IO.monoMsNow
+    repeat
+      if ← IO.hasFinished task then
+        break
+      if (← IO.monoMsNow) - start ≥ ms then
+        timedOut := true
+        break
+      Tests.Cli.pause 20
+  catch e =>
+    fault := some e
+  if timedOut || fault.isSome then
+    Tests.Cli.reap child
+  let result ← IO.wait task
+  if let some e := fault then throw e
+  if timedOut then
+    throw <| IO.userError s!"no stdout line within {ms} ms"
+  IO.ofExcept result
+
+/-- Append stderr lines until EOF. The caller owns the task and joins
+it after the write end closes. -/
+private def collectLines (h : IO.FS.Handle) (lines : IO.Ref (Array String)) : IO Unit := do
+  repeat
+    let line ← h.getLine
+    if line.isEmpty then return
+    lines.modify (·.push (stripNl line))
+
+/-- A fresh host with the same stack as `pingnode serve`. `handlers`
+serves inbound streams. -/
+private def hosted (handlers : List Libp2p.Core.StreamHandler) : IO Host := do
+  let seed ← match ← Crypto.ed25519Generate.run with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok seed => pure seed
+  let key ← match PrivKey.ofData? .ed25519 seed.bytes with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok key => pure key
+  let noise ← match ← (Libp2p.Security.Noise.Config.generate key).run with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok noise => pure noise
+  match ← (Host.new {
+    identity := key
+    transports := [Streams.Tcp.transport]
+    security := [Libp2p.Security.Noise.securityProtocol noise]
+    muxers := [Libp2p.Mux.yamux, Libp2p.Mux.mplex]
+    handlers
+  } : BaseIO _) with
+  | .error e => throw <| IO.userError (reprStr e)
+  | .ok host => return host
+
+/-- A fresh client host with the same stack as `pingnode serve`. -/
+private def clientHost : IO Host :=
+  hosted []
+
+/-- Dial `peer`, ping once, and read its identify record. `host.close`
+finishes before this function returns, including when the exchange throws. -/
+private def exchange (addr : Multiformats.Multiaddr) (peer : PeerId) : IO Unit := do
+  let host ← clientHost
+  let mut primary : Option IO.Error := none
+  try
+    Conc.Async.run do
+      match ← host.dial addr (some peer) with
+      | .error e => throw <| IO.userError s!"dial: {e.render}"
+      | .ok got =>
+        if got.hash != peer.hash then
+          throw <| IO.userError "dial proved a different peer"
+      let payload ← match ← (Crypto.randomBytes Libp2p.Protocols.Ping.payloadSize).run with
+        | .error e => throw <| IO.userError (reprStr e)
+        | .ok payload => pure payload
+      match ← host.newStream peer [Libp2p.Protocols.Ping.protocolId] with
+      | .error e => throw <| IO.userError s!"ping stream: {e.render}"
+      | .ok (_, stream) =>
+        match ← Libp2p.Protocols.Ping.ping stream Conc.Clock.system payload with
+        | .error e =>
+          stream.reset
+          throw <| IO.userError s!"ping: {reprStr e}"
+        | .ok none =>
+          stream.reset
+          throw <| IO.userError "ping returned none"
+        | .ok (some _) => stream.close
+      match ← host.newStream peer [Libp2p.Protocols.Identify.protocolId] with
+      | .error e => throw <| IO.userError s!"identify stream: {e.render}"
+      | .ok (_, stream) =>
+        match ← Libp2p.Protocols.Identify.client stream Conc.Clock.system
+            Streams.unauthDeadlineMs (some peer) with
+        | .error e =>
+          stream.reset
+          throw <| IO.userError s!"identify: {reprStr e}"
+        | .ok none =>
+          stream.reset
+          throw <| IO.userError "identify returned none"
+        | .ok (some (msg, got)) =>
+          stream.close
+          if got.hash != peer.hash then
+            throw <| IO.userError "identify peer differs"
+          if msg.agentVersion != some "leanp2p" then
+            throw <| IO.userError s!"agent {repr msg.agentVersion}"
+          if !(msg.listenAddrs.any (· == addr.toBytes)) then
+            throw <| IO.userError "identify omitted the bound address"
+          let protocols := [
+            Libp2p.Protocols.Ping.protocolId.toString,
+            Libp2p.Protocols.Identify.protocolId.toString
+          ]
+          if msg.protocols != protocols then
+            throw <| IO.userError s!"protocols {msg.protocols}"
+  catch e =>
+    primary := some e
+  try
+    Conc.Async.run host.close
+  catch e =>
+    if primary.isNone then primary := some e
+  if let some e := primary then throw e
+
+/-- Open a TCP connection and close it, so the server records one inbound failure. -/
+private def disturb (addr : Multiformats.Multiaddr) : IO Unit := do
+  match ← Conc.Async.run ((Streams.Tcp.transport).dial addr) with
+  | none => throw <| IO.userError "disturb found no listener"
+  | some conn => conn.close
+
+/-- Run `act` on a task this function owns. A miss closes `stdin` and
+kills `child`, which wakes the dial, and then this function joins the
+task before it throws. -/
+private def tracked {cfg : IO.Process.StdioConfig} (child : IO.Process.Child cfg)
+    (stdinRef : IO.Ref (Option IO.FS.Handle))
+    (extra : IO.Ref (Array (Task (Except IO.Error Unit))))
+    (act : IO Unit) (ms : Nat) : IO Unit := do
+  let task ← IO.asTask act Task.Priority.dedicated
+  extra.modify (·.push task)
+  let mut timedOut := false
+  let mut fault : Option IO.Error := none
+  try
+    let start ← IO.monoMsNow
+    repeat
+      if ← IO.hasFinished task then
+        break
+      if (← IO.monoMsNow) - start ≥ ms then
+        timedOut := true
+        break
+      Tests.Cli.pause 20
+  catch e =>
+    fault := some e
+  if timedOut || fault.isSome then
+    stdinRef.set none
+    Tests.Cli.reap child
+  let result ← IO.wait task
+  if let some e := fault then throw e
+  if timedOut then
+    throw <| IO.userError s!"exchange missed {ms} ms"
+  IO.ofExcept result
+
+/-- The server after `ADDR` is visible. `stdin` is the last owner of
+the pipe. `lines` fills from the stderr task. -/
+private structure Session where
+  child : IO.Process.Child { stdin := .null, stdout := .piped, stderr := .piped }
+  stdin : IO.Ref (Option IO.FS.Handle)
+  lines : IO.Ref (Array String)
+  extra : IO.Ref (Array (Task (Except IO.Error Unit)))
+  addr : Multiformats.Multiaddr
+  peer : PeerId
+
+/-- Spawn `pingnode serve 0`, read `ADDR`, run `k`, then drop stdin,
+reap the child, and join every task `k` registered. The child dying
+wakes those tasks. `IO.wait` returns `Except`, so a `.error` is
+recorded here. The first fault is the one that propagates, and the
+throw follows the joins. -/
+private def withSession (k : Session → IO Unit) : IO Unit := do
+  let primary ← IO.mkRef (none : Option IO.Error)
+  let stdinRef ← IO.mkRef (none : Option IO.FS.Handle)
+  let lines ← IO.mkRef (#[] : Array String)
+  let extra ← IO.mkRef (#[] : Array (Task (Except IO.Error Unit)))
+  let child ← do
+    let (stdin, child) ← (← IO.Process.spawn {
+      cmd := bin
+      args := #["serve", "0"]
+      stdin := .piped
+      stdout := .piped
+      stderr := .piped
+      env := oneWorker
+    }).takeStdin
+    stdinRef.set (some stdin)
+    pure child
+  try
+    let errTask ← IO.asTask (collectLines child.stderr lines) Task.Priority.dedicated
+    extra.modify (·.push errTask)
+    let line ← getLineWithin child child.stdout 10000
+    let (addrText, peerText) ← match (stripNl line).splitOn " " with
+      | ["ADDR", addrText, peerText] => pure (addrText, peerText)
+      | _ => throw <| IO.userError s!"bad ADDR line: {line}"
+    let some port := portOf addrText | throw <| IO.userError s!"address {addrText}"
+    if port == "0" || !port.all Char.isDigit then
+      throw <| IO.userError s!"bound port {port}"
+    let addr ← match Multiformats.Multiaddr.parse? addrText with
+      | .ok addr => pure addr
+      | .error e => throw <| IO.userError (reprStr e)
+    let peer ← match PeerId.ofString? peerText with
+      | .ok peer => pure peer
+      | .error e => throw <| IO.userError (reprStr e)
+    k { child, stdin := stdinRef, lines, extra, addr, peer }
+  catch e =>
+    note primary e
+  stdinRef.set none
+  Tests.Cli.reap child
+  for task in ← extra.get do
+    try
+      match ← IO.wait task with
+      | .ok () => pure ()
+      | .error e => note primary e
+    catch e =>
+      note primary e
+  if let some e ← primary.get then throw e
+
+/-- `serve 0` accepts a ping and an identify while stdin stays open. -/
+private def live (runner : Runner) : IO Unit := do
+  withSession fun session => do
+    let some input ← session.stdin.get | throw <| IO.userError "stdin is already closed"
+    input.putStr "hello\n"
+    input.flush
+    tracked session.child session.stdin session.extra
+      (exchange session.addr session.peer) 20000
+    session.stdin.set none
+    let (code, killed) ← Tests.Cli.waitChild session.child 10000
+    let rest ← session.child.stdout.readToEnd
+    -- Join the stderr reader after the process is gone, so the list
+    -- holds every line it wrote. The checks below run only after
+    -- every joined result is `.ok`.
+    let mut fault : Option IO.Error := none
+    for task in ← session.extra.get do
+      try
+        match ← IO.wait task with
+        | .ok () => pure ()
+        | .error e =>
+          if fault.isNone then fault := some e
+      catch e =>
+        if fault.isNone then fault := some e
+    if let some e := fault then throw e
+    let lines ← session.lines.get
+    runner.check "serve live exit" (code == 0 && !killed)
+    runner.check "serve live stderr" (lines == #[])
+    runner.check "serve live no extra stdout" (rest == "")
+
+/-- One inbound failure, then a successful exchange on the same server. -/
+private def inboundThenServe (runner : Runner) : IO Unit := do
+  withSession fun session => do
+    disturb session.addr
+    let start ← IO.monoMsNow
+    let mut seen : Option String := none
+    repeat
+      let got ← session.lines.get
+      match got[0]? with
+      | some text =>
+        seen := some text
+        break
+      | none =>
+        if (← IO.monoMsNow) - start ≥ 5000 then
+          throw <| IO.userError "no inbound failure line"
+        Tests.Cli.pause 20
+    let some line := seen | throw <| IO.userError "no inbound failure line"
+    runner.check "serve inbound failure" (line.startsWith "upgrade failed:")
+    tracked session.child session.stdin session.extra
+      (exchange session.addr session.peer) 20000
+    session.stdin.set none
+    let (code, killed) ← Tests.Cli.waitChild session.child 10000
+    runner.check "serve continues after failure" (code == 0 && !killed)
+
+/-- Immediate EOF still prints `ADDR` and exits 0. -/
+private def immediateEof (runner : Runner) : IO Unit := do
+  let out ← Tests.Cli.capture bin #["serve", "0"] 10000 oneWorker
+  if out.timedOut then
+    runner.check "serve immediate EOF exited" false
+    return
+  let line := stripNl out.stdout
+  let ok := match line.splitOn " " with
+    | ["ADDR", addr, peer] =>
+      match portOf addr with
+      | some port => port != "0" && port.all Char.isDigit && peer != ""
+      | none => false
+    | _ => false
+  runner.check "serve immediate EOF" (out.exitCode == 0 && out.stderr == "" &&
+    out.stdout.endsWith "\n" && ok)
+
+/-- A port that is already bound exits 1 with no `ADDR` line. -/
+private def busyPort (runner : Runner) : IO Unit := do
+  let want ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/0" with
+    | .ok addr => pure addr
+    | .error e => throw <| IO.userError (reprStr e)
+  let listener ← Conc.Async.run ((Streams.Tcp.transport).listen want)
+  try
+    let some port := portOf listener.addr.toString
+      | throw <| IO.userError s!"listener {listener.addr}"
+    let out ← Tests.Cli.capture bin #["serve", port] 10000 oneWorker
+    if out.timedOut then
+      runner.check "serve busy exited" false
+      return
+    runner.check "serve busy exit" (out.exitCode == 1)
+    runner.check "serve busy stdout" (out.stdout == "")
+    runner.check "serve busy stderr"
+      (out.stderr != "" && (out.stderr.splitOn "ADDR").length == 1)
+  finally
+    listener.close
+    Conc.Async.run listener.join
+
+/-- A closed stdout fails the `ADDR` write, and the process still exits.
+The stderr reader is joined after the child is reaped, which wakes it. -/
+private def closedStdout (runner : Runner) : IO Unit := do
+  let child ← IO.Process.spawn {
+    cmd := "/bin/sh"
+    args := #["-c", "exec \"$1\" serve 0 >&-", "sh", bin]
+    stdin := .null
+    stdout := .null
+    stderr := .piped
+    env := oneWorker
+  }
+  let mut errTask : Option (Task (Except IO.Error String)) := none
+  let mut code : Option UInt32 := none
+  let mut fault : Option IO.Error := none
+  try
+    errTask := some (← IO.asTask child.stderr.readToEnd Task.Priority.dedicated)
+    let (got, killed) ← Tests.Cli.waitChild child 10000
+    code := if killed then none else some got
+  catch e =>
+    fault := some e
+  Tests.Cli.reap child
+  let err ← match errTask with
+    | none => pure ""
+    | some task =>
+      try
+        IO.ofExcept (← IO.wait task)
+      catch e =>
+        if fault.isNone then fault := some e
+        pure ""
+  if let some e := fault then
+    runner.check s!"serve closed stdout: {e}" false
+    return
+  runner.check "serve closed stdout exits" (code == some 1)
+  runner.check "serve closed stdout stderr" (err != "")
+
+/-- A registered task returns an error. Cleanup still reaps the child
+and joins the later task, and the error is the one that surfaces. -/
+private def registeredFault (runner : Runner) : IO Unit := do
+  let followed ← IO.mkRef false
+  let pid ← IO.mkRef (0 : UInt32)
+  let mut caught : Option String := none
+  try
+    withSession fun session => do
+      pid.set session.child.pid
+      let failed ← IO.asTask (throw <| IO.userError "registered task failed")
+        Task.Priority.dedicated
+      session.extra.modify (·.push failed)
+      -- This read parks on stdout. The reap closes that pipe, and the
+      -- join is what waits for the flag.
+      let later ← IO.asTask (do
+        discard <| session.child.stdout.readToEnd
+        followed.set true) Task.Priority.dedicated
+      session.extra.modify (·.push later)
+  catch e =>
+    caught := some (toString e)
+  let id ← pid.get
+  let probe ← Tests.Cli.capture "/bin/kill" #["-0", toString id] 1000
+  runner.check "registered task observed" (caught == some "registered task failed")
+  runner.check "registered sibling joined" (← followed.get)
+  runner.check "registered child reaped" (id != 0 && !probe.timedOut && probe.exitCode != 0)
+
+/-- A sleeper that ignores its deadline is killed, reaped, and its
+readers are joined by `capture`. -/
+private def timeoutCleanup (runner : Runner) : IO Unit := do
+  let start ← IO.monoMsNow
+  let out ← Tests.Cli.capture "/bin/sleep" #["30"] 500
+  let elapsed := (← IO.monoMsNow) - start
+  runner.check "timeout cleanup reaped" out.timedOut
+  runner.check "timeout cleanup bounded" (elapsed < 5000)
+  runner.check "timeout cleanup readers" (out.stdout == "" && out.stderr == "")
+
+/-- `stdout` is one `PING OK` line. -/
+private def pingStdout (stdout : String) : Bool :=
+  match stdout.splitOn "rtt=" with
+  | ["PING OK ", rest] => rest.endsWith "ms\n" && rest != "ms\n"
+  | _ => false
+
+/-- Close `host` and keep the earlier fault. -/
+private def closeHost (host : Host) (primary : Option IO.Error) : IO (Option IO.Error) := do
+  try
+    Conc.Async.run host.close
+    return primary
+  catch e =>
+    return primary <|> some e
+
+/-- `pingnode dial` against the live server prints one RTT and exits 0.
+The server then sees stdin EOF and exits 0. -/
+private def dialOk (runner : Runner) : IO Unit := do
+  withSession fun session => do
+    let target := s!"{session.addr}/p2p/{session.peer}"
+    let out ← Tests.Cli.capture bin #["dial", target] 20000 oneWorker
+    runner.check "dial ping exits" (!out.timedOut && out.exitCode == 0)
+    runner.check "dial ping stdout" (pingStdout out.stdout)
+    runner.check "dial ping stderr empty" (out.stderr == "")
+    session.stdin.set none
+    let (code, killed) ← Tests.Cli.waitChild session.child 10000
+    runner.check "dial server exits" (code == 0 && !killed)
+
+/-- A port this check bound and then closed refuses the dial. -/
+private def dialRefused (runner : Runner) : IO Unit := do
+  let loop ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/0" with
+    | .ok addr => pure addr
+    | .error e => throw <| IO.userError (reprStr e)
+  let listener ← Conc.Async.run (Streams.Tcp.listen loop)
+  listener.close
+  Conc.Async.run listener.join
+  let host ← clientHost
+  let mut fault : Option IO.Error := none
+  try
+    let target := s!"{listener.addr}/p2p/{host.localPeer}"
+    let out ← Tests.Cli.capture bin #["dial", target] 10000 oneWorker
+    runner.check "dial refused exits" (!out.timedOut && out.exitCode == 1)
+    runner.check "dial refused stdout" (out.stdout == "")
+    runner.check "dial refused stderr"
+      (out.stderr == s!"nobody listens at {listener.addr}\n")
+  catch e =>
+    fault := some e
+  fault ← closeHost host fault
+  if let some e := fault then throw e
+
+/-- The address is the server's, and the peer id is a different host. -/
+private def dialMismatch (runner : Runner) : IO Unit := do
+  let other ← clientHost
+  let mut fault : Option IO.Error := none
+  try
+    withSession fun session => do
+      let target := s!"{session.addr}/p2p/{other.localPeer}"
+      let out ← Tests.Cli.capture bin #["dial", target] 15000 oneWorker
+      runner.check "dial mismatch exits" (!out.timedOut && out.exitCode == 1)
+      runner.check "dial mismatch stdout" (out.stdout == "")
+      runner.check "dial mismatch stderr"
+        (out.stderr == "upgrade failed: authentication failure: remote peer id differs from the expected peer id\n")
+      session.stdin.set none
+      let (code, killed) ← Tests.Cli.waitChild session.child 10000
+      runner.check "dial mismatch server exits" (code == 0 && !killed)
+  catch e =>
+    fault := some e
+  fault ← closeHost other fault
+  if let some e := fault then throw e
+
+/-- Accept one connection, take the ping stream, and do not read it.
+The second accept parks until the dialer closes the session. -/
+private def stallSession (listener : Streams.Listener)
+    (sec : Libp2p.Core.SecurityProtocol) : IO Unit := do
+  Conc.Async.run do
+    match ← listener.accept with
+    | none => pure ()
+    | some conn =>
+      match ← (Libp2p.Negotiate.upgrade Libp2p.Core.Role.responder conn ByteArray.empty none
+          [sec] [Libp2p.Mux.yamux]).run with
+      | .error _ => pure ()
+      | .ok (session, _) =>
+        match ← session.accept with
+        | some _ => discard <| session.accept
+        | none => pure ()
+        session.close
+        discard <| session.join.run
+
+/-- The peer finishes Noise and yamux, then stays silent during
+protocol selection. The dialer's own budget ends the command. -/
+private def dialStall (runner : Runner) : IO Unit := do
+  let seed ← match ← Crypto.ed25519Generate.run with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok seed => pure seed
+  let key ← match PrivKey.ofData? .ed25519 seed.bytes with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok key => pure key
+  let noise ← match ← (Libp2p.Security.Noise.Config.generate key).run with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok noise => pure noise
+  let pub ← match key.toPublic with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok pub => pure pub
+  let peer ← match PeerId.ofPubKey pub with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok peer => pure peer
+  let loop ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/0" with
+    | .ok addr => pure addr
+    | .error e => throw <| IO.userError (reprStr e)
+  let listener ← Conc.Async.run (Streams.Tcp.listen loop)
+  let task ← IO.asTask
+    (stallSession listener (Libp2p.Security.Noise.securityProtocol noise))
+    Task.Priority.dedicated
+  let mut fault : Option IO.Error := none
+  try
+    let target := s!"{listener.addr}/p2p/{peer}"
+    let start ← IO.monoMsNow
+    let out ← Tests.Cli.capture bin #["dial", target] 50000 oneWorker
+    let elapsed := (← IO.monoMsNow) - start
+    runner.check "dial stall exits" (!out.timedOut && out.exitCode == 1)
+    runner.check "dial stall stdout" (out.stdout == "")
+    runner.check "dial stall stderr"
+      (out.stderr == "stream failed: timeout: the stream opening deadline expired\n")
+    runner.check "dial stall bounded" (elapsed ≥ 25000 && elapsed < 45000)
+  catch e =>
+    fault := some e
+  listener.close
+  try
+    match ← IO.wait task with
+    | .ok () => pure ()
+    | .error e =>
+      if fault.isNone then fault := some e
+  catch e =>
+    if fault.isNone then fault := some e
+  if let some e := fault then throw e
+
+/-- Read the payload and park. The handler does not write the echo. -/
+private def silentPing : Libp2p.Core.StreamHandler where
+  id := Libp2p.Protocols.Ping.protocolId
+  handle _ s := ExceptT.mk do
+    match ← s.read with
+    | .ok (some _) =>
+      match ← s.read with
+      | _ => return .ok ()
+    | _ => return .ok ()
+
+/-- The peer selects ping and does not return an echo. The exchange
+budget ends the command, and `Host.close` joins the parked handler. -/
+private def dialNoEcho (runner : Runner) : IO Unit := do
+  let host ← hosted [silentPing]
+  let mut fault : Option IO.Error := none
+  try
+    let loop ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/0" with
+      | .ok addr => pure addr
+      | .error e => throw <| IO.userError (reprStr e)
+    let bound ← match ← Conc.Async.run (host.startListening loop) with
+      | .error e => throw <| IO.userError e.render
+      | .ok bound => pure bound
+    let target := s!"{bound}/p2p/{host.localPeer}"
+    let start ← IO.monoMsNow
+    let out ← Tests.Cli.capture bin #["dial", target] 50000 oneWorker
+    let elapsed := (← IO.monoMsNow) - start
+    runner.check "dial no echo exits" (!out.timedOut && out.exitCode == 1)
+    runner.check "dial no echo stdout" (out.stdout == "")
+    runner.check "dial no echo stderr"
+      (out.stderr == "stream failed: timeout: the ping exchange deadline expired\n")
+    runner.check "dial no echo bounded" (elapsed ≥ 25000 && elapsed < 45000)
+  catch e =>
+    fault := some e
+  fault ← closeHost host fault
+  if let some e := fault then throw e
+
+/-- The text between `head` and `tail`, when both ends match. -/
+private def between (text head tail : String) : Option String :=
+  if text.startsWith head && text.endsWith tail then
+    some (((text.drop head.length).dropEnd tail.length).copy)
+  else none
+
+/-- True when `text` is `ping rtt: <digits> ms`. -/
+private def pingRtt (text : String) : Bool :=
+  match between text "ping rtt: " " ms" with
+  | some digits => digits != "" && digits.all Char.isDigit
+  | none => false
+
+/-- The four stdout lines of a successful demo, in order. -/
+private def demoStdout (stdout : String) : Bool :=
+  if !stdout.endsWith "\n" then false
+  else
+    match ((stdout.dropEnd 1).copy).splitOn "\n" with
+    | [dial, ping, identified, echo] =>
+      match between dial "dialed " " (noise + yamux, remote verified)",
+          between identified "identified: " ", 1 addr(s), 3 protocol(s)" with
+      | some dialed, some named =>
+        dialed != "" && dialed == named && pingRtt ping && echo == "echo: echo-me"
+      | _, _ => false
+    | _ => false
+
+/-- The demo completes ping, identify, and echo, and exits 0. -/
+private def demoOk (runner : Runner) : IO Unit := do
+  let out ← Tests.Cli.capture demoBin #[] 30000 oneWorker
+  runner.check "demo exits" (!out.timedOut && out.exitCode == 0)
+  runner.check "demo stdout" (demoStdout out.stdout)
+  runner.check "demo stderr empty" (out.stderr == "")
+
+/-- A closed stdout fails the first contract line, and the process still
+exits. The stderr reader is joined after the child is reaped. -/
+private def demoClosedStdout (runner : Runner) : IO Unit := do
+  let child ← IO.Process.spawn {
+    cmd := "/bin/sh"
+    args := #["-c", "exec \"$1\" >&-", "sh", demoBin]
+    stdin := .null
+    stdout := .null
+    stderr := .piped
+    env := oneWorker
+  }
+  let mut errTask : Option (Task (Except IO.Error String)) := none
+  let mut code : Option UInt32 := none
+  let mut fault : Option IO.Error := none
+  try
+    errTask := some (← IO.asTask child.stderr.readToEnd Task.Priority.dedicated)
+    let (got, killed) ← Tests.Cli.waitChild child 30000
+    code := if killed then none else some got
+  catch e =>
+    fault := some e
+  Tests.Cli.reap child
+  let err ← match errTask with
+    | none => pure ""
+    | some task =>
+      try
+        IO.ofExcept (← IO.wait task)
+      catch e =>
+        if fault.isNone then fault := some e
+        pure ""
+  if let some e := fault then
+    runner.check s!"demo closed stdout: {e}" false
+    return
+  runner.check "demo closed stdout exits" (code == some 1)
+  runner.check "demo closed stdout stderr" (err != "")
+
+/-- The server checks. -/
+def run (runner : Runner) : IO Unit := do
+  runner.section "pingnode serve" "packages/cli/PingNode.lean"
+  live runner
+  inboundThenServe runner
+  immediateEof runner
+  busyPort runner
+  closedStdout runner
+  timeoutCleanup runner
+  registeredFault runner
+  runner.section "pingnode dial" "packages/cli/PingNode.lean"
+  dialOk runner
+  dialRefused runner
+  dialMismatch runner
+  dialStall runner
+  dialNoEcho runner
+  runner.section "demo" "packages/cli/Demo.lean"
+  demoOk runner
+  demoClosedStdout runner
+
+end Tests.CliLive

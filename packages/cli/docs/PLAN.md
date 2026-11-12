@@ -13,7 +13,7 @@ W5.9 gate runs live, outside the suite runner.
 | Unit | Root deps | Deliverable | Done when |
 |---|---|---|---|
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
-| 1 | W5.7 | the demo node and the ping node binaries, with the composition wiring, as running code that documents it (root W5.8) | the root W5.8 row holds, and the unit 1 milestones pass |
+| 1 | W5.7 | the demo node and the ping node binaries, with the composition wiring, as running code that documents it (root W5.8) | the root W5.8 row holds, the W5.8 behavior section of the package architecture holds, and the unit 1 milestones pass |
 | 2 | 1 | the transport-interop harness, closed by its gate: the go-libp2p matrix `tcp + /noise + yamux`, dial and listen, plus the silent-peer and slow-reader scenarios (root W5.9) | the gate passes, and the unit 2 milestones pass |
 
 Unit 0 is done.
@@ -28,19 +28,316 @@ the same pattern, a live run against foreign nodes.
 
 ## Test milestones (unit 1)
 
+The executable roots are `Demo` and `PingNode`, in `packages/cli`.
+`Main` stays the root of `gossipsub-interop`. The lib is
+`CliHarness`. Its globs include `Demo` and `PingNode`, and the
+lakefile names the `demo` and `pingnode` executables. A usage
+error exits 2. An empty `demo` list runs the loopback exchange and
+exits 0. `pingnode serve` listens. `pingnode dial` dials the expected
+peer and prints one ping.
+The W5.8 behavior section
+of the package architecture is the contract those binaries implement,
+including the argument table, the exit codes, the ping and identify
+deadlines, the
+stream retirement, and the two-host close. Those deadlines start
+after `newStream` returns. This branch selects two contributor
+working decisions. The review context is
+https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
+One-shot `pingnode dial` and `demo` apply a 30 second budget around
+`Host.newStream`. Expiry fails the command and closes the owned
+host. `pingnode dial` implements that timer. The demo echo handler
+and client are `Libp2p.Protocols.TestSupport.Echo`. That module
+reads one chunk, echoes those bytes, and half-closes. An empty
+`demo` list runs ping, identify, and that echo, then closes both
+hosts. `pingnode serve` and `pingnode dial` are implemented.
+
 - The demo runs end to end over loopback: two hosts dial, complete the
-  upgrade, identify, and exchange pings and an echo. The spike's
-  node-suite legs are the carried tests (the spike's `Tests/Node.lean`
-  drives two hosts over loopback TCP through ping, identify, and
-  echo).
-- Ping interop with go (the spike's `ping-interop.sh` shape): the
-  script builds `pingd.go` in docker (go-libp2p v0.50.0, CGO off),
-  starts both nodes on loopback, and dials in both directions over
-  `tcp + /noise + yamux`: lean dials go, and go dials lean. The
-  spike selected the muxer from the Noise handshake extension. The
-  target advertises no muxers there, so both sides negotiate the
-  muxer on the wire (the negotiate pair's decision).
+  upgrade, identify, and exchange pings. The listener's identify
+  record carries the bound address and the registered protocol ids.
+  The echo leg uses `Libp2p.Protocols.TestSupport.Echo`. The payload
+  is the bytes of `echo-me`, and the reply must match. Stdout is the
+  dial line, `ping rtt: <ms> ms`, the identify summary
+  `1 addr(s), 3 protocol(s)`, and `echo: echo-me`. Stderr is empty.
+  Each `newStream` uses the exchange deadline after the call returns,
+  and the 30 second budget around the call. Identify passes that
+  duration to `Identify.client`, which validates the expected peer.
+  The demo then requires the bound address and the registered
+  protocol ids. A callback that runs, including one whose stderr
+  write succeeds, exits 1 after both closes. A thrown diagnostic
+  write is a separate `IO.Error` and also exits 1 after those closes.
+  `pingnode serve` does not keep the callback flag.
+  The spike's node-suite legs are the carried tests (the spike's
+  `Tests/Node.lean` drives two hosts over loopback TCP through ping,
+  identify, and echo). `lake build demo pingnode tests` completed.
+  `LEANP2P_SUITE=cli .lake/build/bin/tests` passed 140 checks, with
+  0 failed, 0 todo, and 0 skipped. `LEANP2P_SUITE=cli
+  LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1 -RTS` passed 140
+  checks, with 0 failed, 0 todo, and 0 skipped. A closed stdout exits
+  1 inside 30 seconds. `scripts/lint-imports.sh` checked 190 module
+  files, with 0 violations. `git diff --check` reported no whitespace
+  errors. The reviewer independently reproduced that 140-check
+  result. After the callback correction, `lake build demo pingnode
+  tests` completed. `LEANP2P_SUITE=cli LEAN_NUM_THREADS=1
+  .lake/build/bin/tests +RTS -N1 -RTS` passed 140 checks, with 0
+  failed, 0 todo, and 0 skipped. The 138-check result stays the dial
+  slice's record. The 80-check result stays the echo suite's record.
+  The usage-line escape then ran `lake build demo pingnode tests`,
+  which completed with 514 jobs. `LEANP2P_SUITE=cli
+  LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1 -RTS` passed 146
+  checks, with 0 failed, 0 todo, and 0 skipped. The 140-check result
+  stays the earlier demo record. This correction did not rerun the
+  full `lake test`.
+  The full `lake test` was not rerun for that callback correction.
+  Its recorded local baseline still has one failure in
+  `Tests/Streams.lean`: `the teardown aborted the stuck write: the
+  peer meets a reset`. The Linux gates section records the verified
+  W5.8 run. Maintainer review of that run is pending. W5.9 is unit 2.
+- `pingnode serve` prints the bound address, flushes it, and stays up
+  until stdin EOF while an inbound dial still completes.
+  `Tests/CliLive.lean` runs that check with `LEAN_NUM_THREADS=1`.
+  The server reads stdin with `Handle.getLine` in `IO`, outside
+  `Async`. The same file checks immediate EOF, a busy port, a failed
+  `ADDR` write, an inbound failure followed by a live exchange, and
+  a sleeper that misses its deadline, and a registered task that
+  returns an error. Each of those process checks reaps the child and
+  joins the readers it started. A task error from one of those joins
+  fails the check after the remaining joins. The focused command
+  `LEANP2P_SUITE=cli LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1 -RTS`
+  passed 121 checks, with 0 failed, 0 todo, and 0 skipped. That
+  command runs the CLI suites alone. The full `lake test` was not
+  rerun for this slice. Its recorded baseline still has one failure
+  in `Tests/Streams.lean`: `the teardown aborted the stuck write:
+  the peer meets a reset`.
+  `scripts/park-threads.lean` measures `IO.wait`.
+- A usage error exits 2 before a host exists: a `demo` argument, a
+  missing or unknown `pingnode` subcommand, an extra operand, a port
+  outside 0..65535, a multiaddr that fails `Multiaddr.parse?`, a
+  dial address that `Host.splitPeer` rejects, and a dial address
+  whose transport prefix still contains a `p2p` component. A line
+  break in a `demo` argument or a `pingnode` operand stays inside
+  that one stderr line, written as `\n` or `\r`.
+  `Tests/Cli.lean` runs the built binaries for these cases. The
+  successful `demo` run lives in `Tests/CliLive.lean` and uses
+  `capture` with a 30 second deadline. A dial to
+  port 0 uses `capture` with a 10 second deadline. The child exits
+  inside that deadline with code 1, empty stdout, and a nonempty
+  runtime diagnostic. A valid `pingnode serve` port reaches
+  `startListening`.
+- `pingnode dial` against `pingnode serve` prints `PING OK rtt=<ms>ms`
+  and exits 0. The server then exits 0 on stdin EOF. The command
+  passes the parsed address and the expected peer to `Host.dial`.
+  `Host.newStream` runs under `Streams.unauthDeadlineMs`. Expiry
+  closes the owned host and joins the open and the cleanup task.
+  `release` resets a late stream. The exchange deadline starts after
+  `newStream` returns, and expiry resets that stream. A protocol
+  failure resets the stream and maps through `Ping.mapPingError`.
+  `Tests/CliLive.lean` also covers a closed port, an expected-peer
+  mismatch, a peer that stays silent during protocol selection, and
+  a peer that reads the payload and writes no echo. Each failure
+  before a successful ping has empty stdout. The capture bound on
+  the two silent peers is 50 seconds, and the command exits inside
+  it. The dial slice recorded `lake build demo pingnode tests`,
+  then `LEANP2P_SUITE=cli .lake/build/bin/tests` and `LEANP2P_SUITE=cli
+  LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1 -RTS`. Each of
+  those suite runs passed 137 checks, with 0 failed, 0 todo, and 0
+  skipped. The port-zero correction builds with `lake build tests`.
+  `LEANP2P_SUITE=cli LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1
+  -RTS` passed 138 checks, with 0 failed, 0 todo, and 0 skipped.
+  That command runs the CLI suites alone. The added check is the
+  bounded port-zero exit. `scripts/lint-imports.sh` checked 189
+  module files, with 0 violations. `git diff --check` reported no
+  whitespace errors. The 121-check command above is the serve
+  slice. The full `lake test` was not rerun. Its recorded baseline
+   still has one failure in `Tests/Streams.lean`: `the teardown
+   aborted the stuck write: the peer meets a reset`. That slice left
+   the demo executable unfinished. The W5.9 gate remains
+   unit 2. Echo support is `Libp2p.Protocols.TestSupport.Echo`.
+- Go-to-Lean ping is in this slice. The Go peer dials `pingnode
+  serve`. `scripts/ping-go/main.go` dials one multiaddr over TCP,
+  Noise, and yamux, prints `PING OK rtt=<duration>`, and waits for
+  stdin EOF before it closes the host. The module requires
+  `github.com/libp2p/go-libp2p v0.50.0`. The host Go toolchain builds
+  it with `CGO_ENABLED=0`. The module asks for Go 1.26.
+  `scripts/ping-go-interop.sh` starts `pingnode serve 0` with
+  `LEAN_NUM_THREADS=1`, joins the `ADDR` fields, and requires the
+  ping line while Go stays alive. It then closes the server stdin,
+  requires server exit 0, closes the Go stdin, and requires Go exit
+  0. `finish_child` ends an owned child that misses its wait:
+  SIGTERM, at most 2 seconds (`term_grace`), SIGKILL, then `wait`.
+  The owned children are the Go process, the Go stdin holder, the
+  server stdin holder, and the server. A child that has already
+  exited is reaped. The trap keeps the script's status. The abrupt
+  Go-first close remains the historical case in the architecture
+  decision, at commit `416bc8e33bd99502799ae3a924f34188ee9a8246` and
+  https://github.com/etheorem/leanp2p/issues/22#issuecomment-6807493655.
+  That close can still surface the failed write. The library fault
+  rules stay in place. Three coordinated runs exited 0 and printed
+  `PASS go-to-lean PING OK rtt=834.084µs`,
+  `PASS go-to-lean PING OK rtt=549.5µs`, and
+  `PASS go-to-lean PING OK rtt=669.667µs`, each with empty stderr.
+  `PING_GO_BIN=/usr/bin/false scripts/ping-go-interop.sh` exited 1
+  with `FAIL go-to-lean: go exit 1`. A test-only peer that ignores
+  SIGTERM, passed as `PING_GO_BIN`, made the script exit 1 after 28.3
+  seconds, including its build, with
+  `FAIL go-to-lean: go ping missed 25 s`. The Go process, both stdin
+  holders, and the server were gone. The cleanup bound on that miss
+  is 33 seconds: the 25 second ping deadline, then 2 seconds for
+  each of the four children. The check stays outside `lake test`.
+  The spike selected its muxer from the Noise handshake
+  extension. This stack negotiates the muxer on the wire (the
+  negotiate pair's decision).
+- Lean-to-Go ping uses the same helper and driver. `ping-go listen`
+  binds `/ip4/127.0.0.1/tcp/0`, enables the host ping service, and
+  prints `ADDR` for the bound address and the host peer id. The host
+  stays up until stdin EOF, then closes. `ping-go <multiaddr>` stays
+  the dial invocation. `scripts/ping-go-interop.sh lean-to-go` starts
+  that listener, runs `pingnode dial` with `LEAN_NUM_THREADS=1`,
+  requires `PING OK` and dialer exit 0, then closes the Go stdin and
+  requires Go exit 0. The owned children are the Go process, the Go
+  stdin holder, and the dialer. Three runs exited 0 and printed
+  `PASS lean-to-go PING OK rtt=1ms`, `PASS lean-to-go PING OK rtt=0ms`,
+  and `PASS lean-to-go PING OK rtt=1ms`. `scripts/ping-go-interop.sh`
+  with no argument printed `PASS go-to-lean PING OK rtt=973.708µs`.
+  `PING_LEAN_BIN=/usr/bin/false scripts/ping-go-interop.sh lean-to-go`
+  exited 1 with `FAIL lean-to-go: lean exit 1`. A test-only dialer
+  that ignores SIGTERM, passed as `PING_LEAN_BIN`, made the script
+  exit 1 after 29 seconds, including its build, with
+  `FAIL lean-to-go: lean ping missed 25 s`. The Go process, the stdin
+  holder, and the dialer were gone. The reviewer independently
+  confirmed both ping directions, the false dialer failure, and the
+  stalled dialer. That stalled run failed after 28.3 seconds, and
+  every tracked child was reaped. The confirmation is separate from
+  the 29 second run above. The cleanup bound on that miss
+  is 31 seconds: the 25 second ping deadline, then 2 seconds for
+  the dialer, the Go process, and the Go stdin holder.
+  `gofmt -l scripts/ping-go/main.go` printed nothing. `CGO_ENABLED=0
+  go build` from `scripts/ping-go` completed. `bash -n
+  scripts/ping-go-interop.sh` completed. `git diff --check` reported
+   no whitespace errors. Lean sources are unchanged, so the 138-check
+   result above stands. That slice left the demo executable unfinished.
+   The W5.9 gate remains unit 2. Echo support is
+   `Libp2p.Protocols.TestSupport.Echo`. The demo command is recorded
+   in the unit 1 demo bullet.
+  This check stays outside `lake test`.
 - The in-suite legs pass under `+RTS -N1` (§6; PRINCIPLES 5.3).
+
+## W5.8 acceptance
+
+Issue #22's definition of done is the measure. This section is the
+snapshot of the local gates that included the demo flush, and of the
+GitHub checks on commit `f994be4` before that flush was published.
+Focused CLI counts above are not these gates.
+
+- The public surface of `cli/` is the nominal lib. It declares no
+  API. The owned contracts are the W5.8 behavior section. `demo` and
+  `pingnode` implement that section, including echo and the callback
+  flag. `reportFailure`, `closeBoth`, and `guarding` stay private.
+  The executable has no injection flag, so the process checks do not
+  deliver a `Failure` through `onFailure`.
+- The loopback demo dials, runs ping, identify, and echo, then closes
+  the dialer and the listener with `Host.close`. `Tests/CliLive.lean`
+  checks the four stdout lines, empty stderr, and exit 0.
+- The local carried suite is the macOS baseline. `lake test`
+  exited 1. The summary was 28095 passed, 1 failed, 0 todo, and 7
+  skipped. The failure is `Tests/Streams.lean` line 985, the check
+  `the teardown aborted the stuck write: the peer meets a reset`.
+  The peer's raw read ended without the reset error. That failure is
+  the recorded baseline. It is separate from the CLI checks. The same
+  command under `lake test -- +RTS -N1 -RTS` exited 1 with the same
+  summary and the same failure. These two local commands remain that
+  baseline. The required gates are the Linux run below.
+- `lake build` exited 0. The captured log has no warning line.
+  `scripts/lint-imports.sh` exited 0 and checked 190 module files,
+  with 0 violations. A search of the Lean sources found no `sorry`.
+- GitHub `build-and-test` on `f994be4` failed in `Run lake test`.
+  Its summary was 28099 passed, 2 failed, 0 todo, and 4 skipped.
+  The failures were `demo closed stdout exits` and `demo closed
+  stdout stderr`. The later CI steps, including `+RTS -N1`, the
+  import lint, and vector provenance, were skipped. The local
+  closed-stdout checks passed in the suite above. The demo's four
+  lines use `putStr` and `flush` in the flush commit. That Linux
+  result belongs to `f994be4` and stays the record of the unflushed
+  demo.
+- `snappy-native-hardening` passed. `License acceptance guard` passed.
+  `AI co-author guard` passed. All three ran on `f994be4`.
+- `scripts/ping-go-interop.sh` exited 0 and printed `PASS go-to-lean
+  PING OK rtt=710.459µs`. `scripts/ping-go-interop.sh lean-to-go`
+  exited 0 and printed `PASS lean-to-go PING OK rtt=0ms`. These
+  checks stay outside `lake test`. W5.9 is unit 2. This snapshot
+  predates the verified Linux gates below.
+
+The local `lake test` record above still fails. The flush commit's
+Linux gates follow.
+
+## Linux gates on `57c696a`
+
+Commit `57c696a25c205805ab67971cbe0f8323cf8e4c40` is `fix(cli): flush
+demo contract output`. GitHub Actions run `43145740577` records
+`headSha` as that commit:
+https://github.com/etheorem/leanp2p/actions/runs/43145740577.
+These results are the Linux run. They are separate from the local
+snapshot above. The W5.8 implementation and these required gates are
+verified. Maintainer review is pending.
+
+- `Run lake build` passed. The log ends with `Build completed
+  successfully (458 jobs).` The build step has no warning line.
+- `Run lake test` passed. The summary is 28101 passed, 0 failed, 0
+  todo, and 4 skipped. The log contains no `FAIL` line. Run
+  `43118933597` on `f994be4` failed `demo closed stdout exits` and
+  `demo closed stdout stderr`:
+  https://github.com/etheorem/leanp2p/actions/runs/43118933597.
+  That summary was 28099 passed, 2 failed, 0 todo, and 4 skipped.
+  This run passes 28101 checks. Both names are absent from this
+  failure log and from this skip list.
+- `Run lake test -- +RTS -N1 -RTS` passed. The summary is 28101
+  passed, 0 failed, 0 todo, and 4 skipped. The log contains no
+  `FAIL` line. Both closed-stdout names are absent from that failure
+  log and from that skip list.
+- Both runs skip `documented memory text divergence`, `documented
+  memory component divergence`, `mss generic model pin`, and
+  `upgrade noise yamux matrix over tcp`.
+- `Run the import lint` passed. It printed `lint-imports: checked
+  190 module files, 0 violations`.
+- `Verify vector provenance` passed. `scripts/vendor-pull.sh
+  --verify` printed `OK` for each pin and then `done`. `python3
+  scripts/extract-vectors.py` wrote the vector files. The step's
+  `git status --porcelain -- Tests/vectors` check then passed.
+- `snappy-native-hardening` passed in the same workflow run.
+  `License acceptance guard` passed in run `43145740639`:
+  https://github.com/etheorem/leanp2p/actions/runs/43145740639.
+  `AI co-author guard` passed in run `43145740610`:
+  https://github.com/etheorem/leanp2p/actions/runs/43145740610.
+  Each run records the same `headSha`. A later body edit reran the
+  license guard as `43146878809` on that same head:
+  https://github.com/etheorem/leanp2p/actions/runs/43146878809.
+
+The local `lake test` baseline remains `Tests/Streams.lean` line 985,
+`the teardown aborted the stuck write: the peer meets a reset`. The
+callback-testing limitation stays. Echo stays one chunk. The three
+working decisions stay contributor-selected. W5.9 is unit 2, and it
+follows this unit.
+
+## Linux gates on `d4c4de4`
+
+Commit `d4c4de405e37ccd4deba4422d3fd1888cce2d09c` is `fix(cli): keep
+demo usage errors on one line`. It is the head of this pull request.
+GitHub Actions run `43151637523` records `headSha` as that commit:
+https://github.com/etheorem/leanp2p/actions/runs/43151637523. The
+review independently reproduced each number below on the same commit.
+
+- `Run lake build` passed. The log ends with `Build completed
+  successfully (458 jobs).`
+- `Run lake test` passed. The summary is 28107 passed, 0 failed, 0
+  todo, and 4 skipped.
+- `Run lake test -- +RTS -N1 -RTS` passed. The summary is the same
+  28107 passed, 0 failed, 0 todo, and 4 skipped.
+- `Run the import lint` passed. It printed `lint-imports: checked
+  190 module files, 0 violations`.
+- `snappy-native-hardening` passed in the same workflow run.
+  `License acceptance guard` passed in run `43151637206`, and
+  `AI co-author guard` passed in run `43151637230`. Each run records
+  the same `headSha`. Two later body edits reran the license guard as
+  `43152763254` and `43153354414` on that same head.
 
 ## Test milestones (unit 2)
 

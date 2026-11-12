@@ -38,6 +38,8 @@ import Tests.Host
 import Tests.Protocols
 import Tests.ReqResp
 import Tests.Interop
+import Tests.Cli
+import Tests.CliLive
 
 /-!
 # Test entry point
@@ -47,11 +49,20 @@ One module per suite, each naming the upstream file it mirrors.
 failures. Documented gaps (todo) and skipped vectors stay visible in the
 summary without failing the run. The concurrency-sensitive suites also
 pass under a single capability: `lake test -- +RTS -N1 -RTS`
-(ARCHITECTURE §6).
+(ARCHITECTURE §6). `LEANP2P_SUITE=cli` runs `Tests.Cli` and
+`Tests.CliLive` and skips the other suites.
+`LEANP2P_SUITE=protocols` runs `Tests.Protocols`.
 -/
 
 def main : IO UInt32 := do
   let r ← Tests.Runner.new
+  if (← IO.getEnv "LEANP2P_SUITE") == some "cli" then
+    Tests.Cli.run r
+    Tests.CliLive.run r
+    return ← r.summary
+  if (← IO.getEnv "LEANP2P_SUITE") == some "protocols" then
+    Tests.Protocols.run r
+    return ← r.summary
   Tests.Vectors.run r
   Tests.Gossipsub.Core.run r
   Tests.Gossipsub.Sign.run r
@@ -91,4 +102,6 @@ def main : IO UInt32 := do
   Tests.Protocols.run r
   Tests.ReqResp.run r
   Tests.Interop.run r
+  Tests.Cli.run r
+  Tests.CliLive.run r
   r.summary

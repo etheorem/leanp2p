@@ -23,7 +23,9 @@ defaultTargets = [
   "Libp2pNegotiate",
   "Libp2pHost",
   "Libp2pProtocols",
-  "Cli",
+  "CliHarness",
+  "demo",
+  "pingnode",
   "Tests",
 ]
 # `lake test` builds and runs the executable named here.
@@ -77,6 +79,15 @@ name = "LeanHazmatSecp256k1"
 git = "https://github.com/etheorem/etheorem"
 rev = "169cf718a7d149a2973aa4e6468994720a6f356e"
 subDir = "packages/hazmat/LeanHazmatSecp256k1"
+
+# Argument parsing for the demo and the ping node. Tag `v4.34.0`
+# (`e92c9f15fdfacc8536f31cfb3b7ad26c3c8cd204`). The package, its lib,
+# and its root module are named `Cli`, so the nominal lib below is
+# `CliHarness`.
+[[require]]
+name = "Cli"
+git = "https://github.com/leanprover/lean4-cli"
+rev = "e92c9f15fdfacc8536f31cfb3b7ad26c3c8cd204"
 
 # The native helper builds the Snappy static archive. This file stays
 # the root configuration. The helper adds no Lean library.
@@ -188,10 +199,10 @@ roots = ["Libp2p.Protocols"]
 globs = ["Libp2p.Protocols.*"]
 
 [[lean_lib]]
-name = "Cli"
+name = "CliHarness"
 srcDir = "packages/cli"
-roots = ["Cli", "Interop", "GossipsubInterop", "GossipsubSession"]
-globs = ["Cli", "Interop.*", "GossipsubInterop", "GossipsubSession"]
+roots = ["CliHarness", "Demo", "PingNode", "Interop", "GossipsubInterop", "GossipsubSession"]
+globs = ["CliHarness", "Demo", "PingNode", "Interop.*", "GossipsubInterop", "GossipsubSession"]
 
 # The transport-interop harness of root PLAN W5.9.
 [[lean_exe]]
@@ -237,3 +248,13 @@ root = "Tests.Interop.Noise"
 name = "gossipsub-interop"
 srcDir = "packages/cli"
 root = "Main"
+
+[[lean_exe]]
+name = "demo"
+srcDir = "packages/cli"
+root = "Demo"
+
+[[lean_exe]]
+name = "pingnode"
+srcDir = "packages/cli"
+root = "PingNode"

@@ -19,6 +19,7 @@ group is §7, row 10). The spike has no req/resp or gossipsub code.
 | `Libp2p/Protocols/Constants.lean` | the protocol ids and the caps: `/ipfs/id/1.0.0`, `/ipfs/id/push/1.0.0`, `/ipfs/ping/1.0.0`, the `/eth2/beacon_chain/req/<name>/<version>/ssz_snappy` pattern of §8, gossipsub's `/meshsub/1.1.0`, one message cap per protocol, and the protocol version that the identify responder writes; for req/resp also `MAX_PAYLOAD_SIZE`, `max_compressed_len`, the result codes, and the constants of the snappy framing format; one home per fact (§3.8, §3.4) |
 | `Libp2p/Protocols/Identify.lean` | the `Identify` message with its `ProtoMessage` instance (§3.2), `Identify.Error`, the validate, the client that reads and validates one response, the push sender, and the handler values for identify and push |
 | `Libp2p/Protocols/Ping.lean` | `Ping.Error`, the echo handler, and the initiator that sends 32 bytes and awaits the echo |
+| `Libp2p/Protocols/TestSupport/Echo.lean` | the demo echo id `/demo/echo/1.0.0`, the one-chunk handler, and the stream client |
 | `Libp2p/Protocols/Identity.lean` | the boundary to `libp2p/identity`: the parse of the `publicKey` field, the peer id derivation, and the key serialization, each over the `List Nat` byte model; the pure half and the tests call these |
 | `Libp2p/Protocols/ReqResp/Crc32c.lean` | CRC-32C (RFC 3720) and the checksum mask of the snappy framing format: the bitwise model and the table path that runs |
 | `Libp2p/Protocols/ReqResp/SnappyFrame.lean` | one chunk of the snappy framing format: the closed set of chunk types and the chunk codec, a `Codec` with a `LawfulCodec` instance (§3.2), plus the `ByteArray` header read the core runs |
@@ -41,9 +42,27 @@ table lands in `Identify.lean`. The `NoiseHandshakePayload` table went
 to `libp2p/security` beside the handshake it serves. The `Envelope` and
 `PeerRecord` tables stay deferred (§8; §10, row 17). One protocol per
 module line keeps the responsibility split of PRINCIPLES 1.2; this
-package holds four protocols, and no module holds two. The echo demo of
-§2's tree comment (`identify, ping, echo (demo)`) is not in this
-package; §4.9 names no echo, so no module line covers it.
+package holds four protocols, and no module holds two. §4.9 names
+identify, ping, req/resp, and gossipsub, and the module list follows
+that sentence. A contributor working decision on the CLI branch
+places the demo echo handler and client at
+`Libp2p.Protocols.TestSupport.Echo`. The protocol id is
+`/demo/echo/1.0.0`, in that one module, as a `StreamHandler`. Test
+support sits beside the four protocols. The review context is
+https://github.com/etheorem/leanp2p/issues/22#issuecomment-6805941244.
+The root `Libp2p.Protocols` module does not re-export it. A consumer
+imports `Libp2p.Protocols.TestSupport.Echo`.
+
+`serve` reads one chunk. It writes those bytes and half-closes. An
+initial EOF half-closes and returns `.ok`. A `Streams.Error` maps
+through `mapStreamError`, and that path does not half-close. A thrown
+`IO.Error` stays thrown. The caller owns the stream. `exchange`
+writes one payload and reads one reply. `.ok none` is EOF before a
+reply. `exchange` does not close the stream. One chunk is the whole
+exchange. A later chunk stays unread. The demo chooses the payload
+and prints the result. The `demo` command registers `handler`, writes
+the bytes of `echo-me` through `exchange`, and requires those bytes
+back.
 
 ## Public surface
 

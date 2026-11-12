@@ -64,7 +64,7 @@ packages/
     mux/                       Muxer values: yamux (over net/yamux), mplex
     negotiate/                 multistream-select, upgrader
     host/                      swarm/host, peerstore, dedup, deadlines
-    protocols/                 identify, ping, echo (demo)
+    protocols/                 identify, ping, req/resp, gossipsub
   cli/                         command-line executables: demo node,
                                ping node, interop harness; config and wiring
 ```
@@ -104,8 +104,10 @@ then, version skew is a bigger risk than coupling.
 the *wiring*. The wiring turns the generic seams into a running node.
 It picks the `Transport`, the `SecurityProtocol` list, the muxers, and
 the stream handlers. From the spike, `cli/` gets `Main.lean`,
-`PingNode.lean`, and the interop harness executables. Two rules keep
-`cli/` small:
+`PingNode.lean`, and the interop harness executables. On this tree
+`Main.lean` is the `gossipsub-interop` executable. The demo
+executable is `Demo.lean`, and the ping node is `PingNode.lean`.
+Two rules keep `cli/` small:
 
 - `cli/` contains **no protocol logic and no reusable code**. Code that
   a second binary might want goes down into `libp2p/` or lower.
@@ -868,8 +870,13 @@ Everything with libp2p semantics, in subpackages:
   session table (§3.8). The package also holds the handler registry
   (`HashMap ProtocolId StreamHandler`), the peerstore, and
   `Host.Error`, which wraps `Core.Error` with arms of its own.
-- **`protocols/`**: identify (with push) and ping, plus req/resp and
-  gossipsub when they land (§8).
+- **`protocols/`**: identify (with push), ping, req/resp, and
+  gossipsub (§8). A contributor working decision on the CLI branch
+  places the demo echo handler and client at
+  `Libp2p.Protocols.TestSupport.Echo`. That module sits beside the
+  four protocols. It reads one chunk, echoes those bytes, and
+  half-closes. The empty `demo` command registers the handler and
+  calls `exchange` with the bytes of `echo-me`.
 - **Policy seams**: connection gater, resource manager, address ranker.
   The interfaces exist now, and the implementations come later.
 
