@@ -169,6 +169,10 @@ def run (runner : Runner) : IO Unit := do
   runner.section "cli arguments" "packages/cli/Demo.lean, packages/cli/PingNode.lean"
   expect runner "demo one argument" "demo" #["foo"] 2
     "Redundant positional argument `foo`."
+  expect runner "demo newline argument" "demo" #["foo\n"] 2
+    "Redundant positional argument `foo\\n`."
+  expect runner "demo carriage return argument" "demo" #["foo\r"] 2
+    "Redundant positional argument `foo\\r`."
   expect runner "demo two arguments" "demo" #["foo", "bar"] 2
     "Redundant positional argument `foo`."
   expect runner "demo help" "demo" #["--help"] 2 "Unknown flag `--help`."

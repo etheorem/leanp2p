@@ -19,7 +19,8 @@ import Libp2p.Protocols.TestSupport.Echo
 The `demo` executable. `Cmd.parse` checks the argument list. `Cmd.mk`
 would add help and version flags, so this command is built with
 `Cmd.init` and an empty flag list. A usage error exits 2, before any
-host exists.
+host exists. A line break in an argument is escaped in the usage
+line.
 
 An empty argument list builds two hosts. The listener serves ping,
 `/demo/echo/1.0.0`, and identify. The dialer stores the bound address,
@@ -47,9 +48,13 @@ private def command : Cmd :=
     variableArg? := none
   } (fun _ => pure 0) #[] none
 
+/-- Replace a newline with `\n` and a carriage return with `\r`. -/
+private def oneLine (text : String) : String :=
+  (text.replace "\r" "\\r").replace "\n" "\\n"
+
 /-- Print one usage line and exit 2. -/
 private def usage (line : String) : IO UInt32 := do
-  IO.eprintln line
+  IO.eprintln (oneLine line)
   return 2
 
 /-- The agent string identify advertises. -/

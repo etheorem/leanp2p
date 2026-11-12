@@ -81,6 +81,12 @@ hosts. `pingnode serve` and `pingnode dial` are implemented.
   .lake/build/bin/tests +RTS -N1 -RTS` passed 140 checks, with 0
   failed, 0 todo, and 0 skipped. The 138-check result stays the dial
   slice's record. The 80-check result stays the echo suite's record.
+  The usage-line escape then ran `lake build demo pingnode tests`,
+  which completed with 514 jobs. `LEANP2P_SUITE=cli
+  LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1 -RTS` passed 146
+  checks, with 0 failed, 0 todo, and 0 skipped. The 140-check result
+  stays the earlier demo record. This correction did not rerun the
+  full `lake test`.
   The full `lake test` was not rerun for that callback correction.
   Its recorded local baseline still has one failure in
   `Tests/Streams.lean`: `the teardown aborted the stuck write: the
@@ -108,7 +114,8 @@ hosts. `pingnode serve` and `pingnode dial` are implemented.
   outside 0..65535, a multiaddr that fails `Multiaddr.parse?`, a
   dial address that `Host.splitPeer` rejects, and a dial address
   whose transport prefix still contains a `p2p` component. A line
-  break in an operand stays inside that one stderr line.
+  break in a `demo` argument or a `pingnode` operand stays inside
+  that one stderr line, written as `\n` or `\r`.
   `Tests/Cli.lean` runs the built binaries for these cases. The
   successful `demo` run lives in `Tests/CliLive.lean` and uses
   `capture` with a 30 second deadline. A dial to

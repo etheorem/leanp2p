@@ -65,7 +65,7 @@ work.
 - **`demo`** (the spike's `Main.lean`, the file `Demo.lean` here).
   The executable takes no arguments. The behavior section below is
   the contract. The echo home is the working decision in that
-  section. This slice does not add the module.
+  section.
 - **`pingnode`** (the spike's `PingNode.lean`).
   `pingnode serve <port>` hosts `127.0.0.1:<port>`, serves
   `/ipfs/ping/1.0.0` and identify, prints
@@ -196,9 +196,9 @@ A usage line is that message, `reprStr` of a `Multiaddr.parse?`
 error followed by the operand, `Host.Error.render` of a `splitPeer`
 error followed by the operand, or `dial address has an earlier /p2p
 peer:` followed by the operand. `.ok (_, none)` from `splitPeer` is
-a usage error. A newline in an operand is written as `\n`, and a
-carriage return as `\r`, before the line is printed. The process
-creates no host.
+a usage error. A newline in a `demo` argument or a `pingnode`
+operand is written as `\n`, and a carriage return as `\r`, before
+the line is printed. The process creates no host.
 
 ### Exit status
 
@@ -672,6 +672,18 @@ not rerun the full `lake test`. The gate record for `f994be4`
 records the later full runs. The Linux gates section records the
 verified W5.8 run. Maintainer review of that run is pending. W5.9
 is unit 2.
+
+`lake build demo pingnode tests` completed with 514 jobs.
+`LEANP2P_SUITE=cli LEAN_NUM_THREADS=1 .lake/build/bin/tests +RTS -N1
+-RTS` passed 146 checks, with 0 failed, 0 todo, and 0 skipped. The
+newline argument and the carriage-return argument each exit 2, write
+empty stdout, and write one escaped diagnostic with one terminating
+newline. The 140-check result stays the earlier demo record. The
+local macOS full suite remains the Streams baseline. `lake test` and
+`lake test -- +RTS -N1 -RTS` each exited 1: 28095 passed, 1 failed,
+0 todo, and 7 skipped. The failure is `Tests/Streams.lean` line 985,
+`the teardown aborted the stuck write: the peer meets a reset`. This
+correction did not rerun that suite.
 
 ### Gate record for `f994be4`
 
