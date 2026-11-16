@@ -1769,7 +1769,7 @@ private def runCorrections (r : Runner) : Async Unit := do
     let hold : Chan Unit ← Chan.new 1
     let entered : Chan Unit ← Chan.new 1
     let accepted : Chan Unit ← Chan.new 1
-    let phase ← IO.mkRef 0
+    let phase ← (Conc.OnceRef.new 0 : BaseIO (Conc.OnceRef Nat))
     let conn : Connection := { pair.dialer with
       write := fun bytes => do
         let isData :=
@@ -1777,8 +1777,7 @@ private def runCorrections (r : Runner) : Async Unit := do
           | some b => b == 2
           | none => false
         if isData then
-          let n ← phase.get
-          phase.set (n + 1)
+          let n ← (phase.updateGet fun n => (n, n + 1) : BaseIO Nat)
           if n == 0 then
             discard <| entered.send ()
             discard <| hold.recv
@@ -1794,13 +1793,17 @@ private def runCorrections (r : Runner) : Async Unit := do
     let stream ← mustOpen sess
     let writer ← TaskSet.new
     let wrote : Chan (Except Streams.Error Unit) ← Chan.new 1
+    -- The barrier goes in before the write, and the write's own signal
+    -- is taken first. Installed after `entered`, it could catch the
+    -- writer's late signal in place of the reader's (#98).
+    hooks.acceptedEvent.set (some accepted)
     writer.spawn do
       let result ← stream.write ⟨Array.replicate (testPayloadCap + 1) 7⟩
       discard <| wrote.send result
+    discard <| accepted.recv
     discard <| entered.recv
     -- The barrier waits for the reader's successful event post
     -- before the blocked write is released.
-    hooks.acceptedEvent.set (some accepted)
     readGate.close
     match ← accepted.recv with
     | some _ => pure ()
@@ -1822,7 +1825,7 @@ private def runCorrections (r : Runner) : Async Unit := do
     let hold : Chan Unit ← Chan.new 1
     let entered : Chan Unit ← Chan.new 1
     let accepted : Chan Unit ← Chan.new 1
-    let phase ← IO.mkRef 0
+    let phase ← (Conc.OnceRef.new 0 : BaseIO (Conc.OnceRef Nat))
     let boom := IO.userError "reader boom"
     let later := IO.userError "later write"
     let conn : Connection := { pair.dialer with
@@ -1832,8 +1835,7 @@ private def runCorrections (r : Runner) : Async Unit := do
           | some b => b == 2
           | none => false
         if isData then
-          let n ← phase.get
-          phase.set (n + 1)
+          let n ← (phase.updateGet fun n => (n, n + 1) : BaseIO Nat)
           if n == 0 then
             discard <| entered.send ()
             discard <| hold.recv
@@ -1851,13 +1853,15 @@ private def runCorrections (r : Runner) : Async Unit := do
     let stream ← mustOpen sess
     let writer ← TaskSet.new
     let wrote : Chan (Except Streams.Error Unit) ← Chan.new 1
+    -- The barrier goes in before the write, as in the EOF case (#98).
+    hooks.acceptedEvent.set (some accepted)
     writer.spawn do
       let result ← stream.write ⟨Array.replicate (testPayloadCap + 1) 7⟩
       discard <| wrote.send result
+    discard <| accepted.recv
     discard <| entered.recv
     -- The barrier waits for the reader's successful event post
     -- before the blocked write is released.
-    hooks.acceptedEvent.set (some accepted)
     readGate.close
     match ← accepted.recv with
     | some _ => pure ()
@@ -1944,7 +1948,11 @@ private def runCorrections (r : Runner) : Async Unit := do
       | .ok extra =>
         extra.reset
         discard <| box.send false
-    pair.peer.write ⟨#[1]⟩
+    -- A byte event for the owner, in case the open has not reached it.
+    -- When the open got there first, the owner has thrown and torn the
+    -- connection down, so this write fails. That is expected. Loaded
+    -- runs hit it as an uncaught `connection is closed` (#98).
+    try pair.peer.write ⟨#[1]⟩ catch _ => pure ()
     match ← box.recv with
     | some true => r.check "an owner invariant wakes the opener" true
     | _ => r.check "an owner invariant wakes the opener" false
@@ -2010,7 +2018,8 @@ private def runCorrections (r : Runner) : Async Unit := do
       | .ok extra =>
         extra.reset
         discard <| box.send false
-    pair.peer.write ⟨#[1]⟩
+    -- As above: the owner may have torn the connection down already.
+    try pair.peer.write ⟨#[1]⟩ catch _ => pure ()
     discard <| box.recv
     opener.joinAll
     let want := InvariantError.message .sendInFlight
@@ -2053,11 +2062,15 @@ private def runCorrections (r : Runner) : Async Unit := do
     let stream ← mustOpen sess
     let box : Chan Bool ← Chan.new 8
     let workers ← TaskSet.new
+    -- The barrier goes in before the first write, and that write's own
+    -- signal is taken first, so the seven counted below are the seven
+    -- later events (#98).
+    hooks.acceptedEvent.set (some accepted)
     workers.spawn do
       let result ← stream.write ⟨#[9]⟩
       discard <| box.send (isClosedW result)
+    discard <| accepted.recv
     discard <| entered.recv
-    hooks.acceptedEvent.set (some accepted)
     for _ in List.range 3 do
       workers.spawn do
         let result ← stream.write ⟨#[9]⟩
@@ -2101,11 +2114,14 @@ private def runBudgetFairness (r : Runner) : Async Unit := do
     let frame :=
       Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[7]⟩
     blob := blob ++ frame
+  -- The barrier goes in before the blob, and the blob's own signal is
+  -- taken first (#98).
+  hooks.acceptedEvent.set (some accepted)
   pair.peer.write blob
   discard <| entered.recv
+  discard <| accepted.recv
   let saw : Chan Nat ← Chan.new 1
   hooks.captureOpenFrames.set (some saw)
-  hooks.acceptedEvent.set (some accepted)
   let opener ← TaskSet.new
   opener.spawn do
     discard <| mustOpen sess
@@ -2135,11 +2151,14 @@ private def runInverseFairness (r : Runner) : Async Unit := do
     let frame :=
       Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[7]⟩
     blob := blob ++ frame
+  -- The barrier goes in before the blob, and the blob's own signal is
+  -- taken first (#98).
+  hooks.acceptedEvent.set (some accepted)
   pair.peer.write blob
   discard <| entered.recv
+  discard <| accepted.recv
   let saw : Chan Nat ← Chan.new 4
   hooks.captureOpenFrames.set (some saw)
-  hooks.acceptedEvent.set (some accepted)
   let openers ← TaskSet.new
   for _ in List.range 3 do
     openers.spawn do
@@ -2164,8 +2183,8 @@ private def runDeferredPressure (r : Runner) (n : Nat) (fault : Bool) : Async Un
   let release : Chan Unit ← Chan.new 1
   let readGate : Chan Unit ← Chan.new 1
   let accepted : Chan Unit ← Chan.new 1
-  let phase ← IO.mkRef 0
-  let reads ← IO.mkRef 0
+  let phase ← (Conc.OnceRef.new 0 : BaseIO (Conc.OnceRef Nat))
+  let reads ← (Conc.OnceRef.new 0 : BaseIO (Conc.OnceRef Nat))
   let boom := IO.userError "deferred reader boom"
   let conn : Connection := { pair.dialer with
     write := fun bytes => do
@@ -2174,11 +2193,10 @@ private def runDeferredPressure (r : Runner) (n : Nat) (fault : Bool) : Async Un
         | some b => b == 2
         | none => false
       if isData then
-        phase.set ((← phase.get) + 1)
+        phase.update (· + 1)
       pair.dialer.write bytes
     read := do
-      let k ← reads.get
-      reads.set (k + 1)
+      let k ← (reads.updateGet fun k => (k, k + 1) : BaseIO Nat)
       if k == 0 then
         pair.dialer.read
       else if fault then
@@ -2201,9 +2219,12 @@ private def runDeferredPressure (r : Runner) (n : Nat) (fault : Bool) : Async Un
     let frame :=
       Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[7]⟩
     blob := blob ++ frame
+  -- The barrier goes in before the blob, and the blob's own signal is
+  -- taken first, as in `runRetained` (#98).
+  hooks.acceptedEvent.set (some accepted)
   pair.peer.write blob
   discard <| entered.recv
-  hooks.acceptedEvent.set (some accepted)
+  discard <| accepted.recv
   readGate.close
   discard <| accepted.recv
   let enteredB : Chan Unit ← Chan.new 1
@@ -2235,7 +2256,6 @@ private def runDeferredPressure (r : Runner) (n : Nat) (fault : Bool) : Async Un
   discard <| releaseC.send ()
   writers.joinAll
   let secondRelease ← saw.recv
-  let chunks ← phase.get
   let answersClosed ← closed.get
   let stepOk :=
     framesAtDefer == parserFrameBudget * 2
@@ -2243,18 +2263,21 @@ private def runDeferredPressure (r : Runner) (n : Nat) (fault : Bool) : Async Un
       && firstRelease == some (parserFrameBudget * 2)
       && extra == none
       && secondRelease == some (parserFrameBudget * 3)
-      && chunks == 0
       && answersClosed
+  -- The count is read after the session's join, as in `runRetained`
+  -- (#98): a frame the session's writer sends late is counted too.
   if fault then
     let first ← joinText sess
     let second ← joinText sess
+    let chunks ← (phase.get : BaseIO Nat)
     r.check "a deferred reader fault advances under queued writes"
-      (stepOk && first == boom.toString && second == boom.toString)
+      (stepOk && chunks == 0 && first == boom.toString && second == boom.toString)
   else
     let first ← joinText sess
     let second ← joinText sess
+    let chunks ← (phase.get : BaseIO Nat)
     r.check "a deferred EOF advances under queued writes"
-      (stepOk && first == "ok" && second == "ok")
+      (stepOk && chunks == 0 && first == "ok" && second == "ok")
 
 /-- Retained complete frames, then EOF, a partial tail, or a reader fault. -/
 private def runRetained (r : Runner) (n : Nat) (trailing fault : Bool) : Async Unit := do
@@ -2263,8 +2286,8 @@ private def runRetained (r : Runner) (n : Nat) (trailing fault : Bool) : Async U
   let release : Chan Unit ← Chan.new 1
   let readGate : Chan Unit ← Chan.new 1
   let accepted : Chan Unit ← Chan.new 1
-  let phase ← IO.mkRef 0
-  let reads ← IO.mkRef 0
+  let phase ← (Conc.OnceRef.new 0 : BaseIO (Conc.OnceRef Nat))
+  let reads ← (Conc.OnceRef.new 0 : BaseIO (Conc.OnceRef Nat))
   let boom := IO.userError "retained reader boom"
   let conn : Connection := { pair.dialer with
     write := fun bytes => do
@@ -2273,11 +2296,10 @@ private def runRetained (r : Runner) (n : Nat) (trailing fault : Bool) : Async U
         | some b => b == 2
         | none => false
       if isData then
-        phase.set ((← phase.get) + 1)
+        phase.update (· + 1)
       pair.dialer.write bytes
     read := do
-      let k ← reads.get
-      reads.set (k + 1)
+      let k ← (reads.updateGet fun k => (k, k + 1) : BaseIO Nat)
       if k == 0 then
         pair.dialer.read
       else if fault then
@@ -2301,12 +2323,17 @@ private def runRetained (r : Runner) (n : Nat) (trailing fault : Bool) : Async U
       Header.encodeB { kind := .data, streamId := id, length := 1 } ++ ⟨#[7]⟩
     blob := blob ++ frame
   if trailing then blob := blob ++ ⟨#[0, 0, 0, 0]⟩
+  -- The barrier goes in before the blob, and the blob's own signal is
+  -- taken here. Installed after `entered`, it caught the reader's late
+  -- signal for the blob, so the test took that for the write's and let
+  -- the owner run before the terminal was posted (#98).
+  hooks.acceptedEvent.set (some accepted)
   pair.peer.write blob
   discard <| entered.recv
+  discard <| accepted.recv
   let stream ← match target with
     | some stream => pure stream
     | none => throw <| IO.userError "retained test opened no stream"
-  hooks.acceptedEvent.set (some accepted)
   let writer ← TaskSet.new
   writer.spawn do
     discard <| stream.write ⟨Array.replicate (testPayloadCap + 1) 7⟩
@@ -2315,13 +2342,20 @@ private def runRetained (r : Runner) (n : Nat) (trailing fault : Bool) : Async U
   discard <| accepted.recv
   discard <| release.send ()
   writer.joinAll
-  let chunks ← phase.get
+  -- The data frames leave through the session's own writer task, which
+  -- `writer` does not hold. So the count is read after the session's
+  -- join, when every frame the session will write is out (#98: a read
+  -- before the join could see 0). The name carries the count, so a
+  -- failure says which side broke.
+  let chunkCheck (what : String) : Async Unit := do
+    let chunks ← (phase.get : BaseIO Nat)
+    r.check s!"no chunk follows a deferred {what} (chunks: {chunks})" (chunks == 1)
   if fault then
     let first ← joinText sess
     let second ← joinText sess
     r.check "retained frames keep the reader fault"
       (first == boom.toString && second == boom.toString)
-    r.check "no chunk follows a deferred reader fault" (chunks == 1)
+    chunkCheck "reader fault"
   else if trailing then
     let once ← sess.join
     let twice ← sess.join
@@ -2330,18 +2364,20 @@ private def runRetained (r : Runner) (n : Nat) (trailing fault : Bool) : Async U
       r.check "a partial frame at EOF is a protocol error"
         (a == protocolPartial && b == protocolPartial)
     | _, _ => r.check "a partial frame at EOF is a protocol error" false
-    r.check "no chunk follows a deferred partial EOF" (chunks == 1)
+    chunkCheck "partial EOF"
   else
     let first ← joinText sess
     let second ← joinText sess
     r.check "retained frames then EOF join as connection end"
       (first == "ok" && second == "ok")
-    r.check "no chunk follows a deferred EOF" (chunks == 1)
+    chunkCheck "EOF"
 
 /-- The second chunk of a large write leaves without a later event. -/
 private def runSecondChunk (r : Runner) : Async Unit := do
   let pair ← ends 29
-  let phase ← IO.mkRef 0
+  let phase ← (Conc.OnceRef.new 0 : BaseIO (Conc.OnceRef Nat))
+  -- The connection signals here when the second data frame arrives.
+  let second : Chan Unit ← Chan.new 1
   let conn : Connection := { pair.dialer with
     write := fun bytes => do
       let isData :=
@@ -2349,13 +2385,19 @@ private def runSecondChunk (r : Runner) : Async Unit := do
         | some b => b == 2
         | none => false
       if isData then
-        phase.set ((← phase.get) + 1)
+        let n ← (phase.updateGet fun n => (n + 1, n + 1) : BaseIO Nat)
+        if n == 2 then discard <| second.trySend ()
       pair.dialer.write bytes }
   let sess ← start .initiator conn
   let stream ← mustOpen sess
   let wrote ← stream.write ⟨Array.replicate (testPayloadCap + 1) 7⟩
-  let chunks ← phase.get
-  r.check "a large write sends its second chunk" (isOk wrote && chunks == 2)
+  -- The chunks leave through the session's writer task, so the second
+  -- may still be on its way when the write returns (#98). Wait for its
+  -- signal, under a deadline of one second. The expiry closes `second`,
+  -- which wakes the wait.
+  discard <| Conc.withinDeadline Clock.system 1000 second.close second.recv
+  let chunks ← (phase.get : BaseIO Nat)
+  r.check s!"a large write sends its second chunk (chunks: {chunks})" (isOk wrote && chunks == 2)
   sess.close
   discard <| sess.join
 

@@ -52,7 +52,8 @@ summary without failing the run. The concurrency-sensitive suites also
 pass under a single capability: `lake test -- +RTS -N1 -RTS`
 (ARCHITECTURE §6). `LEANP2P_SUITE=cli` runs `Tests.Cli` and
 `Tests.CliLive` and skips the other suites.
-`LEANP2P_SUITE=protocols` runs `Tests.Protocols`.
+`LEANP2P_SUITE=protocols` runs `Tests.Protocols`. `LEANP2P_SUITE=mux`
+runs `Tests.Mux`, so a loaded loop can run the mux suite alone.
 -/
 
 def main : IO UInt32 := do
@@ -63,6 +64,9 @@ def main : IO UInt32 := do
     return ← r.summary
   if (← IO.getEnv "LEANP2P_SUITE") == some "protocols" then
     Tests.Protocols.run r
+    return ← r.summary
+  if (← IO.getEnv "LEANP2P_SUITE") == some "mux" then
+    Tests.Mux.run r
     return ← r.summary
   Tests.Vectors.run r
   Tests.Gossipsub.Core.run r
