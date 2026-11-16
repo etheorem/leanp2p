@@ -1,0 +1,22 @@
+{
+ "_provenance": {
+  "repo": "https://github.com/multiformats/go-multistream",
+  "commit": "c4e1c126f1dad980e071b21b3bdf87e197953f74",
+  "version": "v0.6.1",
+  "upstreamTest": "TestInvalidProtocol (multistream_test.go, lines 294 to 318)",
+  "capturedBy": "scripts/mss-capture (net.Pipe, host Go toolchain)",
+  "extractedBy": "scripts/mss-capture",
+  "note": "each entry is one Write. The two directions run at once, so their relative order is not fixed. Each direction keeps its own order."
+ },
+ "invalidTrace": [
+  {
+   "dir": "i2r",
+   "hex": "0f2f544849535f49535f57524f4e470a"
+  },
+  {
+   "dir": "r2i",
+   "hex": "132f6d756c746973747265616d2f312e302e300a"
+  }
+ ],
+ "responderError": "client connected with incorrect version"
+}

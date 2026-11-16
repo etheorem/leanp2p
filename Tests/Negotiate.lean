@@ -179,6 +179,21 @@ def run (r : Runner) : IO Unit := do
       r.check "mss go lazy trace"
         (writesOf al == (← r2iL.mapM hexOf) ∧ selectsOf al == [(kadId, [])] ∧ sl.phase = .selected)
 
+  /- go-multistream's `TestInvalidProtocol` (`mss-go-invalid.json`): a
+  first message that is no header. go sends its header and aborts, and
+  so must our responder (connections spec, "Protocol Negotiation";
+  etheorem/leanp2p#97). -/
+  let invj ← Tests.loadJson "mss-go-invalid.json"
+  let invTrace ← Tests.jArr "mss-go-invalid.json" invj "invalidTrace"
+  let (i2rI, r2iI) ← traceHexes "mss-go-invalid.json" invTrace
+  match responderStart [kadId] with
+  | .error _ => r.check "mss go invalid first message: the responder starts" false
+  | .ok (si, wsi) =>
+      r.check "mss go invalid first message: the responder sends go's header"
+        (wsi == (← r2iI.mapM hexOf))
+      r.check "mss go invalid first message: the responder aborts"
+        ((replay si (← i2rI.mapM hexOf)) matches .error _)
+
   let lazyI2r ← hexOf i2rL[0]!
   match step initiatorState (.propose kadId) with
   | .error _ => r.check "mss go lazy coalesced write" false

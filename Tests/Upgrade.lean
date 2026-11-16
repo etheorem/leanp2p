@@ -696,7 +696,23 @@ private def checkResponderFirst (r : Runner) : Async Unit := do
   match responderStart [Libp2p.Core.ProtocolId.mk "/ipfs/kad/1.0.0"] with
   | .ok (s, ws) =>
       r.check "negotiate responder sends its header first"
-        (ws == [encodeMsg header] && s.phase = .negotiating)
+        (ws == [encodeMsg header] && s.phase = .headerPending && s.headerSent)
+      -- etheorem/leanp2p#97: a proposal as the first message aborts.
+      r.check "negotiate responder aborts on a proposal before the header"
+        ((step s (.bytes (encodeText "/ipfs/kad/1.0.0"))) matches .error _)
+      -- The header, then the proposal: the header writes nothing back,
+      -- since ours is already out, and the proposal selects.
+      match step s (.bytes (encodeText protocolId.toString)) with
+      | .ok (s1, acts) =>
+        r.check "negotiate responder takes the header and writes nothing" (acts.isEmpty)
+        let isSelect : Action → Bool := fun
+          | .select _ _ => true
+          | _ => false
+        r.check "negotiate responder then selects the proposal"
+          (match step s1 (.bytes (encodeText "/ipfs/kad/1.0.0")) with
+           | .ok (_, acts) => acts.any isSelect
+           | .error _ => false)
+      | .error _ => r.check "negotiate responder takes the header" false
   | .error _ => r.check "negotiate responder sends its header first" false
 
 /-! ## The byte-split two-party runs over the sim -/
