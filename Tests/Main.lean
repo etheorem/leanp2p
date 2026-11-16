@@ -7,6 +7,7 @@ import Tests.Gossipsub.Rpc
 import Tests.Gossipsub.Node
 import Tests.Gossipsub.Wire
 import Tests.Gossipsub.Interop
+import Tests.Leak
 import Tests.Vectors
 import Tests.Concurrency
 import Tests.Protobuf
@@ -52,7 +53,10 @@ summary without failing the run. The concurrency-sensitive suites also
 pass under a single capability: `lake test -- +RTS -N1 -RTS`
 (ARCHITECTURE §6). `LEANP2P_SUITE=cli` runs `Tests.Cli` and
 `Tests.CliLive` and skips the other suites.
-`LEANP2P_SUITE=protocols` runs `Tests.Protocols`.
+`LEANP2P_SUITE=protocols` runs `Tests.Protocols`. `yamux` and `streams`
+run those suites alone, and `leak-clock`, `leak-pair`, `leak-handler`,
+and `leak-late-handler` run the scenarios of `Tests.Leak`, for a
+LeakSanitizer build (#102).
 -/
 
 def main : IO UInt32 := do
@@ -64,6 +68,16 @@ def main : IO UInt32 := do
   if (← IO.getEnv "LEANP2P_SUITE") == some "protocols" then
     Tests.Protocols.run r
     return ← r.summary
+  -- The #102 leak scenarios and the suites that showed the leaks, one per
+  -- run, for a LeakSanitizer build.
+  match (← IO.getEnv "LEANP2P_SUITE") with
+  | some "leak-clock" => Tests.Leak.clockOnly r; return ← r.summary
+  | some "leak-pair" => Tests.Leak.pairOnly r; return ← r.summary
+  | some "leak-handler" => Tests.Leak.pairSelfHandler r; return ← r.summary
+  | some "leak-late-handler" => Tests.Leak.lateSelfHandler r; return ← r.summary
+  | some "yamux" => Tests.Yamux.run r; return ← r.summary
+  | some "streams" => Tests.Streams.run r; return ← r.summary
+  | _ => pure ()
   Tests.Vectors.run r
   Tests.Gossipsub.Core.run r
   Tests.Gossipsub.Sign.run r

@@ -263,7 +263,7 @@ private def connection (sock : Socket) : IO Connection := do
   -- The teardown: wake every park, then let libuv drop its references,
   -- then send the FIN and release the handle. One atomic step takes the
   -- socket and the parks, so a second teardown finds none.
-  let shut : BaseIO Unit := do
+  let shut (broken : Bool := false) : BaseIO Unit := do
     let (sock?, reading, writing) ← state.updateGet fun s =>
       ((s.sock, s.reading, s.writing), { s with sock := none, reading := none, writing := [] })
     let some sock := sock? | return
@@ -272,9 +272,11 @@ private def connection (sock : Socket) : IO Connection := do
     discard sock.cancelRecv.toBaseIO
     -- A write in flight may never complete (a peer that stops reading),
     -- and it holds the socket; so does a shutdown queued behind it. The
-    -- abort fails it, and the handle closes. With no write in flight,
-    -- the graceful path sends the FIN.
-    if writing.isEmpty then finish sock else StreamsShim.abort sock
+    -- abort fails it, and the handle closes. A connection the read found
+    -- broken (the peer's reset) takes the abort too: a shutdown on it
+    -- never completes, and its request would hold the socket for good
+    -- (#102). Otherwise the graceful path sends the FIN.
+    if writing.isEmpty && !broken then finish sock else StreamsShim.abort sock
 
   let read : Async (Option ByteArray) := do
     let some sock := (← (state.get : BaseIO ConnState)).sock | return none
@@ -293,7 +295,7 @@ private def connection (sock : Socket) : IO Connection := do
     match r with
     | .ok chunk => return chunk
     | .error e =>
-      shut
+      shut (broken := true)
       -- The peer's reset is its end (module doc, "The peer's reset").
       if peerReset e then return none
       throw e
@@ -320,7 +322,7 @@ private def connection (sock : Socket) : IO Connection := do
       shut
       throw e
 
-  return { read, write, close := do shut, localAddr, remoteAddr }
+  return { read, write, close := do shut false, localAddr, remoteAddr }
 
 /-! ## Dial and listen -/
 

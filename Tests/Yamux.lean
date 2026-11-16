@@ -706,6 +706,9 @@ private def synBackPressureChecks (r : Runner) : Async Unit := do
     (match ← slot.recv with | some (.ok _) => true | _ => false)
   sh.events.close
   tasks.joinAll
+  -- The test plays the session's owner, so it takes the SYN streams the
+  -- loop queued: each holds `sh`, and `sh` holds the queue (#102).
+  discard <| (sh.accepts.drain : BaseIO (List Stream))
   conn.close
   peer.close
 
@@ -1118,6 +1121,10 @@ private def hostileChecks (r : Runner) : Async Unit := do
         [(true, false), (false, true)])
     server.close
     discard server.join
+    -- The owner's duty: accept until `none`. A queued stream holds the
+    -- session, and the session holds its queue (#102).
+    repeat
+      if (← server.acceptStream).isNone then break
     raw.close
   -- A handle of a retired stream, after the peer reopens its id. The old
   -- stream holds two unread chunks when it retires. The new stream on

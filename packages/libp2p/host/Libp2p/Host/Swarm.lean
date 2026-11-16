@@ -135,8 +135,10 @@ structure Host where
   localPeer : PeerId
   /-- The session table (§3.8). -/
   sessions : OnceRef (SessionTable Served)
-  /-- The handler table (§3.10). -/
-  handlers : OnceRef Handlers
+  /-- The handler table (§3.10); `none` once `close` took it. A handler
+  often holds its own host, so the table must not outlive the close
+  (#102). -/
+  handlers : OnceRef (Option Handlers)
   /-- The peerstore (§3.8). -/
   peerstore : OnceRef Peerstore
   /-- The next session number, and the next pending key. -/
@@ -166,7 +168,7 @@ def new (config : Config) : BaseIO (Except Identity.Error Host) := do
     return .ok {
       config, localPeer
       sessions := ← OnceRef.new {}
-      handlers := ← OnceRef.new (config.handlers.foldl (fun t h => Handlers.set h t) {})
+      handlers := ← OnceRef.new (some (config.handlers.foldl (fun t h => Handlers.set h t) {}))
       peerstore := ← OnceRef.new {}
       counter := ← OnceRef.new 0
       closing := ← OnceRef.new false
@@ -192,9 +194,16 @@ private def report (h : Host) (peer : Option PeerId) (protocol : Option Protocol
   h.config.onFailure { peer, protocol, error }
 
 /-- Store `handler` under its id, through the cell's update (contract
-1). A served stream negotiated after the call sees it. -/
+1). A served stream negotiated after the call sees it. After `close`
+took the table, the call stores nothing. The update reads and writes
+the cell in one step, so a call that races the close cannot put a
+handler back (#102). -/
 def setHandler (h : Host) (handler : StreamHandler) : BaseIO Unit :=
-  h.handlers.update (Handlers.set handler)
+  h.handlers.update (·.map (Handlers.set handler))
+
+/-- The handler table, empty once `close` took it. -/
+private def handlerTable (h : Host) : BaseIO Handlers :=
+  return (← h.handlers.get).getD {}
 
 /-- Add addresses of `peer` to the peerstore, each once. -/
 def addAddrs (h : Host) (peer : PeerId) (addrs : List Multiaddr) : BaseIO Unit :=
@@ -286,7 +295,7 @@ private def serveStream (h : Host) (ctx : StreamContext) (scope : ConnectionScop
   let peer := ctx.remotePeer
   let some share ← (scope.reserveStream : BaseIO (Option Reservation))
     | s.reset
-  let ids := Handlers.ids (← (h.handlers.get : BaseIO Handlers))
+  let ids := Handlers.ids (← (h.handlerTable : BaseIO Handlers))
   match ← (negotiateStream .responder s ids).run with
   | .error e =>
     s.reset
@@ -296,7 +305,7 @@ private def serveStream (h : Host) (ctx : StreamContext) (scope : ConnectionScop
     unless e matches .closed _ do
       h.report (some peer) none (.stream e)
   | .ok (id, s) =>
-    match (← (h.handlers.get : BaseIO Handlers)).find? id with
+    match (← (h.handlerTable : BaseIO Handlers)).find? id with
     | none =>
       -- The negotiation selected an id from the table's ids, and the
       -- handler left the table since; the stream closes (contract 6).

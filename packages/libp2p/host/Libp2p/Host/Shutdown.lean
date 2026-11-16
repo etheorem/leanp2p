@@ -24,6 +24,14 @@ ARCHITECTURE, contract 4):
 6. join the host tasks: the accept loops and the inbound upgrades,
    then the listeners.
 
+After the joins, `close` takes the handler table, and `setHandler`
+stores nothing after that. A closed host serves no stream, so the table
+is not read again. A handler often holds its own host, as
+`Identify.pushHandler h` does, and the host holds it in turn. Reference
+counting frees no such cycle, so without this step the host, its
+sessions, and everything they reach would stay allocated until exit
+(#102).
+
 Every stage closes the parks of the tasks that a later stage joins, so
 every join returns (PRINCIPLES 3.1, 3.2). A path that registers after a
 stage took its list sees the flag of stage 1, and closes what it
@@ -100,6 +108,10 @@ def close (h : Host) (onStage : Stage → BaseIO Unit := fun _ => pure ()) : Asy
   let mut listenerFault : Option IO.Error := none
   for l in listeners do
     listenerFault := listenerFault <|> (← capture l.join)
+
+  -- Every task that reads the table has been joined. Break the cycles
+  -- through closures that hold the host (module doc).
+  (h.handlers.set none : BaseIO Unit)
 
   if let some e := sessionFault <|> hostFault <|> listenerFault then throw e
 
