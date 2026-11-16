@@ -600,6 +600,15 @@ private def shutdownChecks (r : Runner) : Async Unit := do
   r.check "host: the shutdown closed the pending connection" (← endsSoon raw)
   r.check "host: a closed listener refuses a dial"
     ((← b.dial addrA (peer := none)) matches .error _)
+  -- The close took the handler table, and a later `setHandler` puts
+  -- nothing back: a handler that holds its host would keep it
+  -- allocated (#102).
+  r.check "host: the close takes the handler table"
+    ((← (a.handlers.get : BaseIO (Option Handlers))).isNone)
+  (a.setHandler { id := ⟨"/late/1"⟩, handle := fun _ s => ExceptT.mk do s.close; return .ok () } :
+    BaseIO Unit)
+  r.check "host: a handler set after the close is not stored"
+    ((← (a.handlers.get : BaseIO (Option Handlers))).isNone)
   -- A second close finds nothing left, and returns.
   a.close
   b.close

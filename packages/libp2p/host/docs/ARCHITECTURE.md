@@ -47,7 +47,10 @@ module re-exports the public submodules.
   enters the upgrade pipeline as a pending connection.
 - `setHandler` stores one `StreamHandler` under its `ProtocolId`
   through `OnceRef.update`. The registry is the
-  `Std.HashMap ProtocolId StreamHandler` of §3.10. The host calls the
+  `Std.HashMap ProtocolId StreamHandler` of §3.10. `close` takes the
+  registry after its joins, and a later `setHandler` stores nothing. A
+  handler often holds its own host, so a registry that outlived the
+  close would keep the host allocated (#102). The host calls the
   handler with the `StreamContext` of the session: the peer the
   upgrade proved, and the connection's remote address, which the
   session entry keeps from the upgrade. A handler failure
