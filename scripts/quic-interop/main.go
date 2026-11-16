@@ -61,11 +61,12 @@ var leanSeed = bytes.Repeat([]byte{'H'}, 32)
 const echoID = protocol.ID("/test/echo")
 const doneID = protocol.ID("/test/done")
 
-// size is 2 MiB. go-libp2p keeps quic-go's initial windows: 512 KiB for
+// size is 12 MiB. go-libp2p keeps quic-go's initial windows: 512 KiB for
 // a stream and 768 KiB for the connection. The Lean host starts with the
 // same, so the echo passes only when each receiver sends window updates.
-// It is also past the Lean host's 1 MiB cap of unacknowledged bytes.
-const size = 2 << 20
+// It is also past the Lean host's cap of 10,000,000 unacknowledged bytes
+// per connection.
+const size = 12 << 20
 
 // payload is the deterministic byte pattern both sides build.
 func payload(n int) []byte {

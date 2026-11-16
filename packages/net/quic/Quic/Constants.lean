@@ -63,15 +63,16 @@ must take datagrams up to the `max_udp_payload_size` it announces
 default, 65527 (`NGTCP2_DEFAULT_MAX_RECV_UDP_PAYLOAD_SIZE`). -/
 def maxDatagram : Nat := 65527
 
-/-- The bytes of a stream that the peer has not acknowledged, past which
-a write parks: 1 MiB. The shim keeps every unacknowledged byte, since
-QUIC may send it again (RFC 9000 §13.3), so this cap bounds the memory
-one stream holds on our side (root §5.1). No reference sets such a
-number: quic-go's `Write` returns once all but a small tail of the
-bytes have gone into frames (`send_stream.go`, `write`),
-and the stream sends only as far as the peer's window allows. This one
-is ours. -/
-def streamSendCap : Nat := 1024 * 1024
+/-- The bytes of a connection that the peer has not acknowledged, past
+which a write parks: 10,000,000, the default `send_window` of quinn
+0.11, which the rust reference's QUIC transport keeps (quinn-proto
+`config/transport.rs`, `TransportConfig::default`: 8 times a stream
+window of 1,250,000 bytes). The shim keeps every unacknowledged byte,
+since QUIC may send it again (RFC 9000 §13.3). So this cap bounds the
+memory that one connection holds on our side (root §5.1). The count is
+over all the streams of the connection, as quinn's is. A cap per stream
+would let `maxStreamsBidi` streams hold 256 times as much. -/
+def connSendCap : Nat := 10000000
 
 /-- The datagrams that wait for the endpoint's loop: 1024, quic-go's
 `MaxServerUnprocessedPackets` (`internal/protocol/params.go`, line 40).
@@ -126,7 +127,9 @@ connections. Past the count the oldest record goes, which RFC 9000
 §10.2 allows. The endpoint sends no stateless reset, so a late packet
 of that connection draws no answer. The peer then ends the connection
 by its idle timer. quic-go keeps a record for every closed connection
-with no count, and no spec or reference gives one. This one is ours. -/
+with no count. quinn 0.11 keeps the whole connection until its drain
+ends, with no count either (quinn-proto `endpoint.rs`, `Drained`). No
+spec gives one. This one is ours. -/
 def maxClosingPeriods : Nat := 2 * maxHandshakes
 
 /-- The transport error CONNECTION_REFUSED, 0x2 (RFC 9000 §20.1): "The

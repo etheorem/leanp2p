@@ -5,7 +5,7 @@
 # directions. Each run checks both TLS certificates and peer ids, checks
 # that the go host's identify of the Lean host records its agent and its
 # protocols, dials with the listener's peer id, negotiates a stream
-# whose first proposal draws `na`, echoes 2 MiB on it, and ends
+# whose first proposal draws `na`, echoes 12 MiB on it, and ends
 # with a /test/done stream that tells the listener to close. A third run
 # has the Lean host dial a go listener that answers with a Retry. The
 # last four check the tls.md "Peer Authentication" MUSTs between the two

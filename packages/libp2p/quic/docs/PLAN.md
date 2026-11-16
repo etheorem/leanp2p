@@ -55,8 +55,9 @@ Units 0 and 1 are done. The suite is the libp2p part of
   QUIC transport (quic-go v0.62.0), in both directions. Both
   certificates and peer ids check, and the go host's identify of the
   Lean host records our agent and our protocols. A stream whose first
-  proposal draws `na` echoes 2 MiB. That is past both initial windows,
-  so each side sends window updates. The close is orderly. A third run
+  proposal draws `na` echoes 12 MiB. That is past both initial windows,
+  so each side sends window updates, and past our send cap
+  (`Quic.connSendCap`), so our writes wait for go's acknowledgments. The close is orderly. A third run
   dials a go listener that answers the first Initial with a Retry, the
   path of a go node under load (`vendor/go-libp2p/config/config.go`,
   lines 412 to 414). The dialer must take the Retry (RFC 9000

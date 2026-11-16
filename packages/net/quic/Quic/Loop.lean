@@ -91,6 +91,9 @@ structure StreamState where
   inbox : Chan Item
   /-- The writes that wait for the peer's acknowledgments. -/
   waiting : Array (Chan (Except Streams.Error Unit)) := #[]
+  /-- The bytes of the stream that the peer has not acknowledged, as the
+  shim counted them last. -/
+  buffered : Nat := 0
   /-- The peer's STOP_SENDING ended our writes. -/
   stopped : Bool := false
   /-- The peer opened the stream. -/
@@ -108,6 +111,11 @@ structure ConnState (α : Type) where
   closedUnaccepted : Std.HashSet UInt64 := {}
   /-- The opens that wait for the peer's credit. -/
   opens : Array (Chan (Except Error Stream)) := #[]
+  /-- The bytes of all streams that the peer has not acknowledged: the
+  sum of each stream's `buffered`, against `connSendCap`. -/
+  buffered : Nat := 0
+  /-- The streams with a write that waits for acknowledgments. -/
+  blocked : Std.HashSet UInt64 := {}
   /-- A dial's answer slot, until the handshake ends. -/
   ready : Option (Chan (Except Error Conn)) := none
   /-- A server connection's admission, until the accept queue takes the
@@ -264,6 +272,27 @@ def withStream (st : LoopState α) (conn sid : UInt64) (c : ConnState α) (s : S
     LoopState α :=
   { st with conns := st.conns.insert conn { c with streams := c.streams.insert sid s } }
 
+/-- Answer every write that waits on `c`, on any stream. The loop calls
+it when the connection's unacknowledged bytes are at or under
+`connSendCap`. -/
+def wakeWriters (c : ConnState α) : BaseIO (ConnState α) := do
+  let mut streams := c.streams
+  for sid in c.blocked.toList do
+    if let some s := streams.get? sid then
+      for w in s.waiting do discard <| w.trySend (.ok ())
+      streams := streams.insert sid { s with waiting := #[] }
+  return { c with streams, blocked := {} }
+
+/-- `c` with the shim's new count `n` for stream `sid`, whose last state
+is `s`. The connection's sum takes the difference. At or under
+`connSendCap`, every waiting write of the connection returns. -/
+def setBuffered (c : ConnState α) (sid : UInt64) (s : StreamState) (n : Nat) :
+    BaseIO (ConnState α) := do
+  let c := { c with
+    buffered := c.buffered - s.buffered + n
+    streams := c.streams.insert sid { s with buffered := n } }
+  if c.buffered ≤ connSendCap then wakeWriters c else return c
+
 /-- Try the opens that wait for credit, in order. -/
 def retryOpens (sh : Shared α) (st : LoopState α) (conn : UInt64) : IO (LoopState α) := do
   let some c := st.conns.get? conn | return st
@@ -349,15 +378,22 @@ def onEvent (sh : Shared α) (st : LoopState α) (ev : QuicNative.EventRaw) : IO
     -- The peer reads no more: our writes end, and our reads go on.
     if let some s := c.streams.get? ev.stream then
       for w in s.waiting do discard <| w.trySend (.error .reset)
+      let c := { c with blocked := c.blocked.erase ev.stream }
       return withStream st ev.conn ev.stream c { s with waiting := #[], stopped := true }
     return st
   | .streamClosed =>
     if let some s := c.streams.get? ev.stream then
       -- Every byte is acknowledged, or the stream was reset; the inbox
-      -- keeps what the reader has not taken.
+      -- keeps what the reader has not taken. The stream's bytes leave
+      -- the connection's sum, which can wake the writes of other
+      -- streams.
       for w in s.waiting do discard <| w.trySend (.ok ())
       s.inbox.close
-      let c := { c with streams := c.streams.erase ev.stream }
+      let c := { c with
+        streams := c.streams.erase ev.stream
+        blocked := c.blocked.erase ev.stream
+        buffered := c.buffered - s.buffered }
+      let c ← if c.buffered ≤ connSendCap then wakeWriters c else pure c
       -- A stream of the peer's gives its credit back once it is over and
       -- accepted, as quic-go's does (the module doc, "A new connection").
       let c ← if !s.remote then pure c
@@ -370,9 +406,8 @@ def onEvent (sh : Shared α) (st : LoopState α) (ev : QuicNative.EventRaw) : IO
     return st
   | .streamAcked =>
     if let some s := c.streams.get? ev.stream then
-      if ev.code.toNat ≤ streamSendCap then
-        for w in s.waiting do discard <| w.trySend (.ok ())
-        return withStream st ev.conn ev.stream c { s with waiting := #[] }
+      let c ← setBuffered c ev.stream s ev.code.toNat
+      return { st with conns := st.conns.insert ev.conn c }
     return st
   | .openCredit => retryOpens sh st ev.conn
   | .connClosed | .connRefused | .connFailed | .peerFailed | .connTimeout | .connIdle
@@ -410,6 +445,7 @@ def resetStream (sh : Shared α) (st : LoopState α) (conn sid : UInt64) : IO (L
   if bytes > 0 then QuicNative.streamConsume sh.native conn sid bytes.toUInt64
   discard <| s.inbox.trySend .reset
   for w in s.waiting do discard <| w.trySend (.error .reset)
+  let c := { c with blocked := c.blocked.erase sid }
   return withStream st conn sid c { s with waiting := #[], stopped := true }
 
 /-- Handle one command of a view. -/
@@ -438,10 +474,14 @@ def onCommand (sh : Shared α) (st : LoopState α) (cmd : Command) : IO (LoopSta
     if n == QuicNative.writeRefused then
       discard <| reply.trySend (.error .closed)
       return st
-    if n.toNat ≤ streamSendCap then
+    let c ← setBuffered c sid s n.toNat
+    if c.buffered ≤ connSendCap then
       discard <| reply.trySend (.ok ())
-      return st
-    -- Past the cap: the write waits for the peer's acknowledgments.
+      return { st with conns := st.conns.insert conn c }
+    -- Past the cap of the connection: the write waits for the peer's
+    -- acknowledgments, on any of its streams.
+    let s := (c.streams.get? sid).getD s
+    let c := { c with blocked := c.blocked.insert sid }
     return withStream st conn sid c { s with waiting := s.waiting.push reply }
   | .consume conn sid n =>
     QuicNative.streamConsume sh.native conn sid n

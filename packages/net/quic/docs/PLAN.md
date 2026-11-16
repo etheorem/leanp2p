@@ -39,7 +39,7 @@ an arbitrary extension.
   certificate.
 - A stream echo after our FIN: the peer's reply arrives after the FIN
   (PRINCIPLES 2.2).
-- 12 MiB on one stream, past `streamSendCap` and past the 10 MiB stream
+- 12 MiB on one stream, past `connSendCap` and past the 10 MiB stream
   window, arrive whole.
 - 32 streams at once each echo.
 - Our reset with bytes in the inbox: the next read answers `.reset` at
@@ -107,8 +107,11 @@ an arbitrary extension.
 - Through a relay that drops one direction or both:
   - the idle timeout, on the test clock: a peer that goes silent ends
     the connection with `.idle`, no earlier than `idleTimeoutMs`;
-  - the send cap: a write of twice `streamSendCap` parks while no ACK
-    arrives, ends once they do, and its bytes arrive whole.
+  - the send cap: a write of twice `connSendCap` parks while no ACK
+    arrives, ends once they do, and its bytes arrive whole;
+  - the scope of the send cap: two streams that each write 0.6 times
+    `connSendCap` with no ACK. The first write returns, and the second
+    parks until the ACKs arrive.
 - The keep-alive, on one test clock for both peers: one and a half idle
   timeouts of silence leave the connection up, and a stream echoes
   after it.

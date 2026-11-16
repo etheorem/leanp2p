@@ -19,10 +19,10 @@ A `Streams.Stream` of a QUIC stream reads from an inbox that the loop
 fills. A read posts the count of its bytes to the loop, which returns
 that credit to the peer. The peer cannot send past the window we
 granted, so the window bounds the inbox (PRINCIPLES 3.4). A write
-posts its bytes and parks until the loop answers. While the stream's
-unacknowledged bytes stay under `streamSendCap`, the loop answers once
-the shim holds the bytes for sending. Past the cap, it answers after
-the peer's acknowledgments. From there the QUIC stack owns the bytes,
+posts its bytes and parks until the loop answers. While the
+unacknowledged bytes of the connection's streams stay under
+`connSendCap`, the loop answers once the shim holds the bytes for
+sending. Past the cap, it answers after the peer's acknowledgments. From there the QUIC stack owns the bytes,
 and it sends them again until the peer acknowledges them (RFC 9000
 §13.3). A TCP stack owns the bytes of a finished socket write the same
 way: that is "on the wire" in the `Stream` contract.

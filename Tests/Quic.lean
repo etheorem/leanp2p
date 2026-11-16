@@ -992,9 +992,12 @@ private def keepAliveChecks (r : Runner) : Async Unit := do
   l.join
   tc.close
 
-/-- The send cap (`streamSendCap`): a write of twice the cap parks while
+/-- The send cap (`connSendCap`): a write of twice the cap parks while
 the peer's ACKs do not arrive, and it ends once they do. The shim keeps
-every byte the peer has not acknowledged (RFC 9000 §13.3). -/
+every byte the peer has not acknowledged (RFC 9000 §13.3). The cap
+counts the bytes of all the connection's streams: a second stream's
+write parks once the sum passes the cap, though neither stream alone
+does. -/
 private def sendCapChecks (r : Runner) : Async Unit := do
   let ctxL ← context
   let ctxD ← context
@@ -1008,7 +1011,7 @@ private def sendCapChecks (r : Runner) : Async Unit := do
   let echo ← (Conc.Wrap.spawn (echoAll a) : BaseIO (Task (Except IO.Error Unit)))
   let s ← expectOk "open" (← d.openStream)
   rl.cutToDialer.set true
-  let w ← (Conc.Wrap.spawn (s.write (pattern (2 * Quic.streamSendCap))) :
+  let w ← (Conc.Wrap.spawn (s.write (pattern (2 * Quic.connSendCap))) :
     BaseIO (Task (Except IO.Error (Except Streams.Error Unit))))
   -- Real time: the write has 300 ms to end early, and must not.
   select #[← Park.sleep 300 ()]
@@ -1018,7 +1021,31 @@ private def sendCapChecks (r : Runner) : Async Unit := do
   s.close
   let (got, _) ← readAll s
   r.check "quic: the bytes past the send cap arrive whole"
-    (got == pattern (2 * Quic.streamSendCap))
+    (got == pattern (2 * Quic.connSendCap))
+  -- The scope: each of two streams writes 0.6 times the cap with the
+  -- ACKs cut. The first write fits under the cap, and the second does
+  -- not, so it parks until the ACKs arrive.
+  let part := pattern (Quic.connSendCap * 3 / 5)
+  let s1 ← expectOk "open" (← d.openStream)
+  let s2 ← expectOk "open" (← d.openStream)
+  rl.cutToDialer.set true
+  let w1 ← (Conc.Wrap.spawn (s1.write part) :
+    BaseIO (Task (Except IO.Error (Except Streams.Error Unit))))
+  r.check "quic: a write under the cap of the connection returns with no ACK"
+    ((← Conc.Wrap.await w1) matches .ok (.ok ()))
+  let w2 ← (Conc.Wrap.spawn (s2.write part) :
+    BaseIO (Task (Except IO.Error (Except Streams.Error Unit))))
+  select #[← Park.sleep 300 ()]
+  r.check "quic: a second stream's write past the sum of the connection waits"
+    (!(← IO.hasFinished w2))
+  rl.cutToDialer.set false
+  r.check "quic: the second stream's write ends once the ACKs arrive"
+    ((← Conc.Wrap.await w2) matches .ok (.ok ()))
+  s1.close
+  s2.close
+  let (got1, _) ← readAll s1
+  let (got2, _) ← readAll s2
+  r.check "quic: both streams' bytes arrive whole" (got1 == part && got2 == part)
   closeBoth d a
   discard <| Conc.Wrap.await echo
   l.close

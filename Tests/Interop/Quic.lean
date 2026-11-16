@@ -70,12 +70,12 @@ def leanSeed : ByteArray := seed 'H'.toNat.toUInt8
 /-- The go side's identity seed: 32 bytes of `G`. -/
 def goSeed : ByteArray := seed 'G'.toNat.toUInt8
 
-/-- The bytes of the echo: 2 MiB. Both sides start with quic-go's
+/-- The bytes of the echo: 12 MiB. Both sides start with quic-go's
 windows, 512 KiB for a stream and 768 KiB for the connection
 (`Quic.streamWindow`, `Quic.connWindow`), so the echo passes only when
 each receiver sends window updates. It is also past our
-`Quic.streamSendCap`, so our writes park until go acknowledges. -/
-def size : Nat := 2 * 1024 * 1024
+`Quic.connSendCap`, so our writes park until go acknowledges. -/
+def size : Nat := 12 * 1024 * 1024
 
 /-- The pattern both sides build. -/
 def payload (n : Nat) : ByteArray :=

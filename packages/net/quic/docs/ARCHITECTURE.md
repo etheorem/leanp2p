@@ -177,10 +177,10 @@ in the table), and it keeps quic-go v0.62.0's default for the rest
 | largest datagram read | 65527 bytes | the default `max_udp_payload_size` of RFC 9000 §18.2 |
 | accept queue of a listener | 32 | quic-go's `MaxAcceptQueueSize` (`params.go`, line 54) |
 | datagrams queued for the loop | 1024 | quic-go's `MaxServerUnprocessedPackets` (`params.go`, line 40) |
-| unacknowledged bytes per stream before a write parks | 1 MiB | ours ("Flow control and the bounds") |
+| unacknowledged bytes per connection before a write parks | 10,000,000 | quinn 0.11's default `send_window`, which rust-libp2p's QUIC transport keeps (quinn-proto `config/transport.rs`, `TransportConfig::default`); quic-go keeps no such count ("Flow control and the bounds") |
 | server connections in their handshake | 32 | go-libp2p's transient `ConnsInbound` on a minimal node (`vendor/go-libp2p/p2p/host/resource-manager/limit_defaults.go`, lines 23 and 686 to 687); quic-go keeps no such count |
 | connections in their handshake past which a client proves its address | 16 | half the cap, go-libp2p's split (`conn_limiter.go`) |
-| closing periods a listener keeps | 64 | ours, twice the cap; no spec or reference gives a count ("Flow control and the bounds") |
+| closing periods a listener keeps | 64 | ours, twice the cap. No spec gives a count, and neither quic-go nor quinn keeps one ("Flow control and the bounds") |
 | the Retry token's lifetime | 30 s | the handshake deadline, quic-go's `maxRetryTokenAge` |
 | the orderly close | application error 0 | go-libp2p's `Close` (`vendor/go-libp2p/p2p/transport/quic/conn.go`, lines 42 and 43) |
 | the code of a stream reset | application error 0 | go-libp2p's `reset` constant (`vendor/go-libp2p/p2p/transport/quic/stream.go`), sent by its `Reset` in both directions |
@@ -200,10 +200,11 @@ a window while the reader keeps up, to its ceiling.
 - **Send.** QUIC may send a byte again until the peer acknowledges it
   (RFC 9000 §13.3). So the shim keeps every unacknowledged byte, in
   chunks that never move, since ngtcp2 holds pointers into them. A
-  write returns at once while the stream's unacknowledged bytes stay
-  under `streamSendCap`. Past the cap, it returns after the peer's
-  acknowledgments. That bounds the memory one stream holds on our
-  side. A flush offers each stream with bytes in turn. A stream that
+  write returns at once while the unacknowledged bytes of all the
+  connection's streams stay under `connSendCap`. Past the cap, it
+  returns once the peer's acknowledgments on any stream bring the sum
+  under the cap. That bounds the memory one connection holds on
+  our side, as quinn's `send_window` does. A flush offers each stream with bytes in turn. A stream that
   the flow window holds leaves that flush alone, so a peer that holds
   back credit on some streams stalls none of the others. ngtcp2's
   pacer spreads the packets. The shim reports each burst
@@ -275,7 +276,7 @@ The two directions of a stream end apart (RFC 9000 §3):
   never handed to us (`conn_recv_reset_stream`).
 
 A write answers once the shim holds the bytes for sending, under
-`streamSendCap`. From there QUIC owns them and sends them again until
+`connSendCap`. From there QUIC owns them and sends them again until
 the peer acknowledges them, as a TCP stack owns the bytes of a finished
 socket write: that is "on the wire" in the `Stream` contract.
 
@@ -342,7 +343,7 @@ ends ("Decisions", the UDP socket).
    connection's `join` joins the tasks of its dialing endpoint, and a
    listener's `join` joins the tasks of its listening endpoint.
 4. **Bounded inputs** (root §5.1; "Flow control and the bounds"). The
-   windows bound the receive side, and `streamSendCap` the send side.
+   windows bound the receive side, and `connSendCap` the send side.
    `datagramQueueCap` bounds the datagrams, `maxHandshakes` the
    connections in their handshake, and the deadline each handshake. The
    stream credit bounds each accept queue. `maxClosingPeriods` and three
