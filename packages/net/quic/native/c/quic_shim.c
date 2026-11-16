@@ -1466,8 +1466,9 @@ static void version_negotiation(endpoint *ep, const ngtcp2_version_cid *vc,
                                 const struct sockaddr_storage *from, socklen_t flen) {
     uint8_t buf[MAX_DATAGRAM];
     uint32_t versions[] = {NGTCP2_PROTO_VER_V1};
-    uint8_t r;
-    RAND_bytes(&r, 1);
+    /* The byte fills the packet's unused bits. A failed draw sends zero. */
+    uint8_t r = 0;
+    if (RAND_bytes(&r, 1) != 1) r = 0;
     ngtcp2_ssize n = ngtcp2_pkt_write_version_negotiation(buf, sizeof buf, r, vc->scid,
                                                           vc->scidlen, vc->dcid, vc->dcidlen,
                                                           versions, 1);
