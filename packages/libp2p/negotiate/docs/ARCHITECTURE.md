@@ -38,7 +38,8 @@ and `Streams.Stream`.
   `\n` (the spike's `lsPayload`, kept).
 - The core surface: `State`, `Event`, `Action`, and `step` (§3.3).
   `State` holds the role, the responder's ordered supported list, the
-  initiator's remaining proposals, the input buffer, and the phase.
+  initiator's remaining proposals, the input buffer, the phase, and
+  `headerSent`, which marks our header as already on the wire.
   `Event.bytes` carries raw bytes, and the core decodes them, so the
   malformed-versus-incomplete call stays in
   the core (§3.1). `Event.propose` records one id and writes the
@@ -147,8 +148,16 @@ connection-level selection.
   `step : State → Event → Except ProtocolError (State × List Action)`,
   so a failure leaves through the `Except` channel and never as an
   action. In phase `headerPending`, this core returns the error and
-  writes nothing. The upgrader starts its responder in `negotiating`,
-  so a bad first frame there reads as a proposal and draws `na`.
+  writes nothing.
+- **The responder sends its header first, then waits for the peer's**
+  (connections spec, "Protocol Negotiation": "If either side receives
+  anything other than the multistream protocol id as the first message,
+  they abort"). `responderStart` writes the header and starts in
+  `headerPending` with `State.headerSent`. The peer's header then moves
+  the state to `negotiating` and writes nothing back, and any other
+  first message aborts. Sending first keeps a dialer that also waits
+  from stalling. go-multistream, rust-libp2p, and nim-libp2p abort the
+  same way, and `mss-go-invalid.json` holds go's exchange.
 - **Wire-based muxer selection, against the spike's extension
   selection.** The section above records it.
 - **The identity check sits between the handshake and the muxer stage,

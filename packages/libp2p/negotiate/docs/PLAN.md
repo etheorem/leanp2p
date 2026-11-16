@@ -46,6 +46,10 @@ Unit 0 is done.
   the lazy exchange of `mss-go-trace.json` (captured from go-libp2p
   v0.50.0 over go-multistream v0.6.1). The lazy trace pins the
   back-to-back header-plus-proposal write.
+- A first message that is no header: the responder sends go's header
+  and aborts, as go's muxer does in `mss-go-invalid.json`
+  (go-multistream's `TestInvalidProtocol`). A dialer that sends the
+  header, then a proposal, still selects.
 - The 1 KiB cap: a declared length one byte over the cap is rejected
   before any payload allocation, as a protocol error (§5.1,
   PRINCIPLES 2.3).
@@ -88,7 +92,9 @@ The multistream traces exist on the spike branch and arrive through
 W0.3 with `VECTORS.lock` (§6): `mss-wire.json` (the spec framing
 examples), `mss-ls.json` (the `ls` request and reply framing from the
 multistream README), and `mss-go-trace.json` (captured go-libp2p
-v0.50.0 exchanges: full, `na`, and lazy). The upgrader milestones also
+v0.50.0 exchanges: full, `na`, and lazy). `mss-go-invalid.json` adds
+go-multistream's answer to a first message that is no header, from
+`scripts/mss-capture`. The upgrader milestones also
 lean on the Noise and yamux transcript sets the security and yamux
 pairs name, since the pipeline runs their values. W5.9 is the live
 gate: the go-libp2p matrix over `tcp + /noise + yamux` exercises the

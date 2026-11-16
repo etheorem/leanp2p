@@ -36,13 +36,16 @@ inductive Phase where
 
 /-- The core state. `role` is the side. `supported` is the responder's
 ordered list. `proposals` is the initiator's remaining list, in order.
-`buffer` holds the bytes no frame has consumed yet. -/
+`buffer` holds the bytes no frame has consumed yet. `headerSent` is set
+when our header is already on the wire, so the header phase checks the
+peer's first message and writes nothing back (etheorem/leanp2p#97). -/
 structure State where
   role : Core.Role
   supported : List Core.ProtocolId
   proposals : List Core.ProtocolId
   buffer : List Nat
   phase : Phase
+  headerSent : Bool := false
   deriving Repr, DecidableEq
 
 /-- One input to the core. Raw bytes arrive as one event; a proposal
@@ -158,7 +161,8 @@ private def classify (s : State) (text : String) : Answer :=
 /-- Perform an answer. It decodes nothing, so its theorems need no
 decoder facts. -/
 private def act (s : State) (rest : List Nat) : Answer → Except Error (State × List Action)
-  | .echo => .ok ({ s with buffer := rest, phase := .negotiating }, [.write (encodeText protocolId.toString)])
+  | .echo => .ok ({ s with buffer := rest, phase := .negotiating },
+      if s.headerSent then [] else [.write (encodeText protocolId.toString)])
   | .listIds => .ok ({ s with buffer := rest }, [.write (encodeLs s.supported)])
   | .pick p => .ok ({ s with buffer := [], phase := .selected },
       [.write (encodeText p.toString), .select p rest])
