@@ -15,6 +15,7 @@ W5.9 gate runs live, outside the suite runner.
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
 | 1 | W5.7 | the demo node and the ping node binaries, with the composition wiring, as running code that documents it (root W5.8) | the root W5.8 row holds, the W5.8 behavior section of the package architecture holds, and the unit 1 milestones pass |
 | 2 | 1 | the transport-interop harness, closed by its gate: the go-libp2p matrix `tcp + /noise + yamux`, dial and listen, plus the silent-peer and slow-reader scenarios (root W5.9) | the gate passes, and the unit 2 milestones pass |
+| 3 | 2, W5.11, W4.4 | the harness's `tls` security and `quic-v1` transport, and their matrix cells | the cells of unit 3 below pass |
 
 Unit 0 is done.
 
@@ -354,6 +355,12 @@ review independently reproduced each number below on the same commit.
   `scripts/mplex-interop.sh` runs `Mux.mplex` against go-mplex v0.7.0
   over loopback TCP, in both directions, and the mux suite covers the
   identity rule in-process.
+- Unit 3's cells: `tcp + /tls + yamux` with Lean dialing go, go dialing
+  Lean, and Lean dialing Lean; `quic-v1` with go dialing go (the check
+  of the setup), Lean dialing go, go dialing Lean, and Lean dialing
+  Lean. The configuration suite checks the parse of `security=tls`,
+  `muxer=mplex`, and `transport=quic-v1`, which skips the security and
+  the muxer.
 - The silent-peer scenario, the carried regression (PRINCIPLES 5.4):
   a raw connection that sends nothing fails the upgrade at the
   deadline (§5.4), and teardown closes the pending connection and

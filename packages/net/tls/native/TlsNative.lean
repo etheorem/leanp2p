@@ -9,10 +9,11 @@ caller outside `net/tls` imports this module.
 
 **Objects.** `Context` holds one `SSL_CTX`: the certificate, its key,
 TLS 1.3 only, no session tickets, no middlebox compatibility mode, the
-ALPN name, and the verify callback with its one-certificate rule. `Session` holds one `SSL`, its two BIOs, and the
+ALPN name, and the verify callback with its one-certificate rule.
+`Session` holds one `SSL` and its two BIOs, and the `SSL` holds the
 caller's certificate check. Both are external objects, so the runtime
 frees them when the last reference goes. A session holds a reference
-to its context and to its check.
+to its context, and its `SSL` holds one to the check.
 
 **The check runs inside the handshake.** libssl's verify callback calls
 the session's check with the DER of the peer's one certificate, inside

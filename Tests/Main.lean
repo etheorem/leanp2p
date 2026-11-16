@@ -31,6 +31,7 @@ import Tests.Identity
 import Tests.Core
 import Tests.Noise
 import Tests.Tls
+import Tests.Quic
 import Tests.Rlp
 import Tests.Enr
 import Tests.Negotiate
@@ -53,6 +54,8 @@ pass under a single capability: `lake test -- +RTS -N1 -RTS`
 (ARCHITECTURE §6). `LEANP2P_SUITE=cli` runs `Tests.Cli` and
 `Tests.CliLive` and skips the other suites.
 `LEANP2P_SUITE=protocols` runs `Tests.Protocols`.
+`LEANP2P_SUITE=quic` runs `Tests.Quic`, so a memory checker can run
+the ngtcp2 shim's suite alone. `LEANP2P_SUITE=host` runs `Tests.Host`.
 -/
 
 def main : IO UInt32 := do
@@ -63,6 +66,12 @@ def main : IO UInt32 := do
     return ← r.summary
   if (← IO.getEnv "LEANP2P_SUITE") == some "protocols" then
     Tests.Protocols.run r
+    return ← r.summary
+  if (← IO.getEnv "LEANP2P_SUITE") == some "quic" then
+    Tests.QuicSuite.run r
+    return ← r.summary
+  if (← IO.getEnv "LEANP2P_SUITE") == some "host" then
+    Tests.Host.run r
     return ← r.summary
   Tests.Vectors.run r
   Tests.Gossipsub.Core.run r
@@ -96,6 +105,7 @@ def main : IO UInt32 := do
   Tests.Core.run r
   Tests.Noise.run r
   Tests.TlsSuite.run r
+  Tests.QuicSuite.run r
   Tests.Rlp.run r
   Tests.Enr.run r
   Tests.Negotiate.run r

@@ -22,6 +22,10 @@ module holds its configuration, its state, and its paths:
   (`Transport.handles`), dial, and run the upgrade;
 * the listen path: `startListening` binds a listener, and its accept
   loop runs each accepted connection through the upgrade;
+* the secured paths: an address that a `SecuredTransport` handles goes
+  to it first. Its sessions arrive secured and muxed, so they skip the
+  upgrade. They still meet its checkpoint, the dedup, and the serve
+  task of any session;
 * the session paths: a committed session runs one serve task, which
   accepts the peer's streams, negotiates each one against the handler
   table, and hands it to its handler; `newStream` opens and negotiates
@@ -94,6 +98,11 @@ structure Config where
   identity : PrivKey
   /-- The transports. An address picks the first one that handles it. -/
   transports : List Transport
+  /-- The secured transports, such as QUIC: their connections arrive
+  secured and muxed, so the upgrade has no stage to run on them. An
+  address that one of them handles goes to it before the list above
+  (the package ARCHITECTURE, "Secured transports"). -/
+  securedTransports : List SecuredTransport := []
   /-- The security protocols, in preference order. -/
   security : List SecurityProtocol
   /-- The muxers, in preference order. -/
@@ -104,8 +113,9 @@ structure Config where
   gater : ConnectionGater := Policy.permissiveGater
   /-- The resource manager. -/
   resources : ResourceManager := Policy.unlimited
-  /-- The address ranker of `dialPeer`. -/
-  ranker : AddressRanker := Policy.keepOrder
+  /-- The address ranker of `dialPeer`: QUIC first, as the consensus
+  networking spec asks (`Policy.quicFirst`). -/
+  ranker : AddressRanker := Policy.quicFirst
   /-- The clock of the upgrade deadline, the session births, and the
   dial delays. -/
   clock : Clock := Clock.system
@@ -147,6 +157,9 @@ structure Host where
   shutdown : Chan Unit
   /-- The listeners; `none` once `close` took them. -/
   listeners : OnceRef (Option (List Listener))
+  /-- The listeners of the secured transports; `none` once `close`
+  took them. -/
+  securedListeners : OnceRef (Option (List SecuredListener))
   /-- The connections inside their upgrade, the pending connections of
   §5.5; `none` once `close` took them. -/
   pending : OnceRef (Option (Std.HashMap Nat Connection))
@@ -172,6 +185,7 @@ def new (config : Config) : BaseIO (Except Identity.Error Host) := do
       closing := ← OnceRef.new false
       shutdown := ← Chan.new 1
       listeners := ← OnceRef.new (some [])
+      securedListeners := ← OnceRef.new (some [])
       pending := ← OnceRef.new (some {})
       sessionTasks := ← Gate.new
       hostTasks := ← Gate.new }
@@ -232,13 +246,20 @@ def splitPeer (a : Multiaddr) : Except Error (Multiaddr × Option PeerId) :=
   | none => .ok (a, none)
 
 /-- The checkpoint the upgrade runs after the handshake (the module
-doc, "The upgrade and its checkpoints"). -/
-private def admit (h : Host) (role : Role) (scope : ConnectionScope) (conn : Connection)
-    (peer : PeerId) : BaseIO (Option Checkpoint) := do
-  if !(← h.config.gater.allowSecured role peer conn.localAddr conn.remoteAddr) then
+doc, "The upgrade and its checkpoints"), at the two addresses of the
+connection. A secured transport's session meets the same checkpoint
+(`admitSecured`). -/
+private def admitAt (h : Host) (role : Role) (scope : ConnectionScope)
+    (localAddr remoteAddr : Multiaddr) (peer : PeerId) : BaseIO (Option Checkpoint) := do
+  if !(← h.config.gater.allowSecured role peer localAddr remoteAddr) then
     return some .secured
   if !(← scope.setPeer peer) then return some .resources
   return none
+
+/-- The checkpoint of `admitAt`, at the addresses of a connection. -/
+private def admit (h : Host) (role : Role) (scope : ConnectionScope) (conn : Connection)
+    (peer : PeerId) : BaseIO (Option Checkpoint) :=
+  h.admitAt role scope conn.localAddr conn.remoteAddr peer
 
 /-! ## The upgrade -/
 
@@ -378,6 +399,46 @@ private def register (h : Host) (role : Role) (u : Upgraded) (remoteAddr : Multi
       return .error .closing
     return .ok u.remotePeer
 
+/-! ## The secured sessions -/
+
+/-- Admit a session that a secured transport proved: the checkpoint of
+the upgrade, at the session's addresses, then the dedup and the serve
+task. A refusal closes the session and releases `scope`. -/
+private def admitSecured (h : Host) (role : Role) (s : SecuredSession) (scope : ConnectionScope) :
+    Async (Except Error PeerId) := do
+  if let some c ← (h.admitAt role scope s.localAddr s.remoteAddr s.remotePeer :
+      BaseIO (Option Checkpoint)) then
+    discard s.session.close.toBaseIO
+    discard s.session.join.run
+    scope.release
+    return .error (.gated c)
+  h.register role { session := s.session, remotePeer := s.remotePeer } s.remoteAddr scope
+
+/-- Dial a secured transport. The transport proves the peer, so the
+dial has no pending connection to register: its handshake has its own
+deadline inside the transport (root §5.4), and the host's shutdown
+channel ends it at a close (root §5.5; the package ARCHITECTURE,
+"Secured transports"). -/
+private def dialSecured (h : Host) (t : SecuredTransport) (addr : Multiaddr)
+    (expected : Option PeerId) : Async (Except Error PeerId) := do
+  let some scope ← (h.config.resources.openConnection .initiator expected addr :
+      BaseIO (Option ConnectionScope))
+    | return .error (.gated .resources)
+  -- The shutdown channel, which stage 1 of `close` closes, ends a dial
+  -- still in its handshake (§5.5).
+  let r ← try (t.dial addr expected h.shutdown).run
+    catch e =>
+      scope.release
+      throw e
+  match r with
+  | .error e =>
+    scope.release
+    return .error (if ← (h.isClosing : BaseIO Bool) then .closing else .upgrade e)
+  | .ok s =>
+    let r ← h.admitSecured .initiator s scope
+    if let .ok p := r then h.addAddrs p [addr]
+    return r
+
 /-! ## The dial path -/
 
 /-- Dial one transport address and upgrade it, or reuse the live
@@ -390,6 +451,8 @@ private def dialAddr (h : Host) (addr : Multiaddr) (expected : Option PeerId) :
     if ← (h.connected p : BaseIO Bool) then return .ok p
   if !(← (h.config.gater.allowDial expected addr : BaseIO Bool)) then
     return .error (.gated .dial)
+  if let some t := h.config.securedTransports.find? (·.handles addr) then
+    return ← h.dialSecured t addr expected
   let some transport := h.config.transports.find? (·.handles addr)
     | return .error (.noTransport addr)
   let some scope ← (h.config.resources.openConnection .initiator expected addr :
@@ -444,14 +507,18 @@ def dialPeer (h : Host) (peer : PeerId) : Async (Except Error PeerId) := do
 
 /-! ## The listen path -/
 
+/-- The admission of an inbound connection before its handshake
+(`Policy.admission`): the gater's `allowInbound`, then the resource
+manager's scope. A TCP connection meets it at its accept, and a secured
+transport's connection when its first packet arrives. -/
+private def admitInbound (h : Host) : Admit :=
+  Policy.admission h.config.gater h.config.resources
+
 /-- Upgrade one accepted connection. No caller awaits it, so its
 failure goes to the owner of the host; a refusal by policy is a
 decision, and no failure. -/
 private def inbound (h : Host) (conn : Connection) : Async Unit := do
-  if !(← (h.config.gater.allowInbound conn.localAddr conn.remoteAddr : BaseIO Bool)) then
-    conn.closeQuietly
-    return
-  let some scope ← (h.config.resources.openConnection .responder none conn.remoteAddr :
+  let some scope ← (h.admitInbound conn.localAddr conn.remoteAddr :
       BaseIO (Option ConnectionScope))
     | conn.closeQuietly
   match ← h.upgradeConn .responder conn none scope with
@@ -470,31 +537,67 @@ private def acceptLoop (h : Host) (l : Listener) : Async Unit := do
     let some conn ← l.accept | break
     discard <| h.hostTasks.spawn (h.inbound conn) conn.closeQuietly
 
-/-- Listen on an address through the first transport that handles it,
-and start its accept loop. The answer is the address the listener
-serves, with the port the system picked for a port of 0. -/
-def startListening (h : Host) (addr : Multiaddr) : Async (Except Error Multiaddr) := do
-  if ← (h.isClosing : BaseIO Bool) then return .error .closing
-  let some transport := h.config.transports.find? (·.handles addr)
-    | return .error (.noTransport addr)
-  let l ← transport.listen addr
-  let registered ← (h.listeners.updateGet fun
+/-- Admit one session of a secured listener, with the scope its
+admission opened before the handshake (`admitInbound`). No caller
+awaits it, so its failure goes to the owner of the host; a refusal by
+policy is a decision, and no failure. -/
+private def inboundSecured (h : Host) (s : SecuredSession) (scope : ConnectionScope) :
+    Async Unit := do
+  match ← h.admitSecured .responder s scope with
+  | .ok _ | .error (.gated _) | .error .closing => pure ()
+  | .error e => h.report (some s.remotePeer) none e
+
+/-- The accept loop of a secured listener: each session is admitted in
+a task of `hostTasks`. A session the task set refuses, at a close,
+closes and releases its scope. -/
+private def acceptSecuredLoop (h : Host) (l : SecuredListener) : Async Unit := do
+  repeat
+    -- Park: a proved session wakes it, and so does the listener's close
+    -- (contract 4).
+    let some (s, scope) ← l.accept | break
+    discard <| h.hostTasks.spawn (h.inboundSecured s scope) do
+      discard s.session.close.toBaseIO
+      scope.release
+
+/-- Adopt a listener that a transport has bound: register it in `cell`,
+the host's list of its kind, and spawn its accept loop. `close` takes
+the list once (the module doc), so a listener that comes after it is
+this call's to close and join. The registration comes before the flag
+test: `close` holds the listener in its list, and it joins the listener
+after the host tasks. -/
+private def adoptListener {L : Type} (h : Host) (cell : OnceRef (Option (List L))) (l : L)
+    (addr : Multiaddr) (close : IO Unit) (join : Async Unit) (acceptLoop : Async Unit) :
+    Async (Except Error Multiaddr) := do
+  let registered ← (cell.updateGet fun
     | some ls => (true, some (l :: ls))
     | none => (false, none) : BaseIO Bool)
   if !registered then
     -- `close` took the listeners already, so this call owns `l`.
-    l.close
-    l.join
+    close
+    join
     return .error .closing
-  if !(← h.hostTasks.spawn (h.acceptLoop l) (discard l.close.toBaseIO)) then
-    l.join
+  if !(← h.hostTasks.spawn acceptLoop (discard close.toBaseIO)) then
+    join
     return .error .closing
-  -- The registration, then the flag (the module doc). `close` holds
-  -- `l` in its list, and it joins `l` after the host tasks.
   if ← (h.isClosing : BaseIO Bool) then
-    l.close
+    close
     return .error .closing
-  return .ok l.addr
+  return .ok addr
+
+/-- Listen on an address through the first transport that handles it,
+and start its accept loop. A secured transport that handles the address
+goes first, and it admits each connection through `admitInbound` before
+its handshake. The answer is the address the listener serves, with the
+port the system picked for a port of 0. -/
+def startListening (h : Host) (addr : Multiaddr) : Async (Except Error Multiaddr) := do
+  if ← (h.isClosing : BaseIO Bool) then return .error .closing
+  if let some t := h.config.securedTransports.find? (·.handles addr) then
+    let l ← t.listen addr h.admitInbound
+    return ← h.adoptListener h.securedListeners l l.addr l.close l.join (h.acceptSecuredLoop l)
+  let some transport := h.config.transports.find? (·.handles addr)
+    | return .error (.noTransport addr)
+  let l ← transport.listen addr
+  h.adoptListener h.listeners l l.addr l.close l.join (h.acceptLoop l)
 
 /-! ## Outbound streams -/
 

@@ -6,13 +6,17 @@
 //
 //	dial-noext PORT     a client whose certificate lacks the libp2p extension
 //	dial-chain PORT     a client that sends a chain of two certificates
+//	dial-nocert PORT    a client that sends no certificate
 //	dial-noalpn PORT    a client that offers no ALPN, then the echo
 //	listen-expired      a server whose certificate has expired
 //	listen-refuse       a go-libp2p server that must refuse our client
 //	listen-noalpn       a server that selects no ALPN, then the echo
+//	listen-nosni        a server that refuses a client that sends a server name, then the echo
 //
-// A refusal must reach the peer as the TLS alert bad_certificate, which
-// Go reports as "remote error: tls: bad certificate".
+// A refused certificate must reach the peer as the TLS alert
+// bad_certificate, which Go reports as "remote error: tls: bad
+// certificate". A client with no certificate gets certificate_required
+// instead (RFC 8446 §4.4.2.4), "remote error: tls: certificate required".
 package main
 
 import (
@@ -38,6 +42,10 @@ import (
 // badCertificate is Go's text for a received bad_certificate alert
 // (crypto/tls, alert.go).
 const badCertificate = "remote error: tls: bad certificate"
+
+// certificateRequired is Go's text for a received certificate_required
+// alert (crypto/tls, alert.go).
+const certificateRequired = "remote error: tls: certificate required"
 
 // template is go-libp2p's certificate template (crypto.go,
 // certTemplate) with the validity window [notBefore, notAfter].
@@ -100,22 +108,23 @@ func config(opts ...libp2ptls.IdentityOption) (*tls.Config, error) {
 	return conf, nil
 }
 
-// expectAlert passes when err is the peer's bad_certificate alert.
-func expectAlert(what string, err error) error {
+// expectAlert passes when err is the peer's alert with the text want.
+func expectAlert(what, want string, err error) error {
 	if err == nil {
-		return fmt.Errorf("%s: no error, want %q", what, badCertificate)
+		return fmt.Errorf("%s: no error, want %q", what, want)
 	}
-	if !strings.Contains(err.Error(), badCertificate) {
-		return fmt.Errorf("%s: %v, want %q", what, err, badCertificate)
+	if !strings.Contains(err.Error(), want) {
+		return fmt.Errorf("%s: %v, want %q", what, err, want)
 	}
 	return nil
 }
 
 // dialRefused runs a TLS 1.3 client with conf against PORT, and passes
-// when the Lean server refuses it. The client finishes its handshake
-// before the server checks its certificate (the TLS spec's "Note for
-// clients"), so the alert arrives at the first read.
-func dialRefused(addr string, conf *tls.Config) error {
+// when the Lean server refuses it with the alert want. The client
+// finishes its handshake before the server checks its certificate (the
+// TLS spec's "Note for clients"), so the alert arrives at the first
+// read.
+func dialRefused(addr string, conf *tls.Config, want string) error {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return err
@@ -123,10 +132,10 @@ func dialRefused(addr string, conf *tls.Config) error {
 	c := tls.Client(conn, conf)
 	defer c.Close()
 	if err := c.Handshake(); err != nil {
-		return expectAlert("handshake", err)
+		return expectAlert("handshake", want, err)
 	}
 	_, err = c.Read(make([]byte, 1))
-	return expectAlert("first read", err)
+	return expectAlert("first read", want, err)
 }
 
 func dialNoExt(addr string) error {
@@ -139,7 +148,7 @@ func dialNoExt(addr string) error {
 		return err
 	}
 	conf.Certificates = []tls.Certificate{cert}
-	return dialRefused(addr, conf)
+	return dialRefused(addr, conf, badCertificate)
 }
 
 func dialChain(addr string) error {
@@ -155,14 +164,27 @@ func dialChain(addr string) error {
 	cert := conf.Certificates[0]
 	cert.Certificate = append(append([][]byte{}, cert.Certificate...), extra.Certificate[0])
 	conf.Certificates = []tls.Certificate{cert}
-	return dialRefused(addr, conf)
+	return dialRefused(addr, conf, badCertificate)
 }
 
-// echo writes the payload and checks the echo (the client), or reads
-// it and echoes it (the server), then ends with an orderly close.
-func echo(c *tls.Conn, client bool) error {
-	if got := c.ConnectionState().NegotiatedProtocol; got != "" {
-		return fmt.Errorf("the handshake selected ALPN %q, want none", got)
+// dialNoCert is a client with no certificate: Go's client then answers
+// the server's CertificateRequest with an empty Certificate message.
+// The TLS spec: "servers MUST require client authentication".
+func dialNoCert(addr string) error {
+	conf, err := config()
+	if err != nil {
+		return err
+	}
+	conf.Certificates = nil
+	return dialRefused(addr, conf, certificateRequired)
+}
+
+// echo checks that the handshake selected the ALPN alpn, then writes the
+// payload and checks the echo (the client), or reads it and echoes it
+// (the server), then ends with an orderly close.
+func echo(c *tls.Conn, client bool, alpn string) error {
+	if got := c.ConnectionState().NegotiatedProtocol; got != alpn {
+		return fmt.Errorf("the handshake selected ALPN %q, want %q", got, alpn)
 	}
 	if client {
 		data := payload(size)
@@ -206,7 +228,7 @@ func dialNoALPN(addr string) error {
 	if err := c.Handshake(); err != nil {
 		return fmt.Errorf("handshake: %w", err)
 	}
-	return echo(c, true)
+	return echo(c, true, "")
 }
 
 // acceptOne listens, prints the port, and answers the first connection.
@@ -237,7 +259,7 @@ func listenExpired() error {
 	}
 	c := tls.Server(conn, conf)
 	defer c.Close()
-	return expectAlert("handshake", c.Handshake())
+	return expectAlert("handshake", badCertificate, c.Handshake())
 }
 
 // noExtension is go-libp2p's refusal of a certificate without the
@@ -281,5 +303,33 @@ func listenNoALPN() error {
 	if err := c.Handshake(); err != nil {
 		return fmt.Errorf("handshake: %w", err)
 	}
-	return echo(c, false)
+	return echo(c, false, "")
+}
+
+// listenNoSNI is a server that refuses a ClientHello with a server
+// name, then echoes. The TLS spec: "clients that only support the
+// version of the handshake defined in this document MUST NOT send any
+// value in the Server Name Indication". GetConfigForClient sees the
+// ClientHello before the handshake goes on, and its error ends the
+// handshake.
+func listenNoSNI() error {
+	conf, err := config()
+	if err != nil {
+		return err
+	}
+	conf.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		if hello.ServerName != "" {
+			return nil, fmt.Errorf("the client sent the server name %q", hello.ServerName)
+		}
+		return nil, nil
+	}
+	conn, err := acceptOne()
+	if err != nil {
+		return err
+	}
+	c := tls.Server(conn, conf)
+	if err := c.Handshake(); err != nil {
+		return fmt.Errorf("handshake: %w", err)
+	}
+	return echo(c, false, "libp2p")
 }

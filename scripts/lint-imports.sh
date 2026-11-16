@@ -18,9 +18,10 @@
 # under `packages/<group>/<leaf>/` belongs to that leaf. An import of
 # leaf M by a file of leaf L is allowed when M is L itself or M's rank
 # is below L's; imports point downward along the chain arrows of §2:
-# net streams < yamux = tls; codec varint = snappy < proto =
+# net streams < yamux = tls < quic; codec varint = snappy < proto =
 # multiformats; crypto pure = backend < the Crypto facade; libp2p
-# identity < core < security = mux < negotiate < host < protocols.
+# identity < core < security = mux < negotiate = quic < host <
+# protocols.
 # Siblings have no edge, so an equal-rank import is a violation either
 # way. The ranks state an order, and §2's arrows state the order; an
 # import the order allows but no docs row names is headroom, and the
@@ -32,8 +33,8 @@
 # no order in the docs, so
 # the rule skips it. The §3.1 carve-out:
 # within libp2p, negotiate and host import core and no implementation,
-# so an import of security or mux from a negotiate or host file is a
-# violation even though the ranks alone would allow it. Rule 3 runs
+# so an import of security, mux, or quic from a negotiate or host file
+# is a violation even though the ranks alone would allow it. Rule 3 runs
 # inside rule 1's scan: one grep pass covers both import rules.
 #
 # Rule 4, the facade is the crypto import (ARCHITECTURE §3.6). A file
@@ -73,6 +74,7 @@ leafrank() {
     net/streams)        lrank=1 ;;
     net/yamux)          lrank=2 ;;
     net/tls)            lrank=2 ;;
+    net/quic)           lrank=3 ;;
     codec/varint)       lrank=1 ;;
     codec/snappy)       lrank=1 ;;
     codec/proto)        lrank=2 ;;
@@ -85,6 +87,7 @@ leafrank() {
     libp2p/security)    lrank=3 ;;
     libp2p/mux)         lrank=3 ;;
     libp2p/negotiate)   lrank=4 ;;
+    libp2p/quic)        lrank=4 ;;
     libp2p/host)        lrank=5 ;;
     libp2p/protocols)   lrank=6 ;;
   esac
@@ -152,7 +155,7 @@ while IFS= read -r -d '' f; do
         seg=${mod%%.*}
         case $seg in
           Cli|CliHarness|Interop) gname=cli; grank=0 ;;
-          Streams|StreamsShim|Yamux|Tls|TlsNative) gname=net;    grank=2 ;;
+          Streams|StreamsShim|Yamux|Tls|TlsNative|Quic|QuicNative) gname=net;    grank=2 ;;
           Crypto|CryptoPure|Backend) gname=crypto; grank=3 ;;
           Varint|Multiformats|Proto|Snappy) gname=codec; grank=4 ;;
           Conc|Bytes) gname=base;   grank=5 ;;
@@ -186,6 +189,7 @@ while IFS= read -r -d '' f; do
             Security)  mleaf=security  ;;
             Mux)       mleaf=mux       ;;
             Negotiate) mleaf=negotiate ;;
+            Quic)      mleaf=quic      ;;
             Host)      mleaf=host      ;;
             Protocols) mleaf=protocols ;;
           esac ;;
@@ -198,6 +202,7 @@ while IFS= read -r -d '' f; do
             Streams|StreamsShim) mleaf=streams ;;
             Yamux)        mleaf=yamux        ;;
             Tls|TlsNative) mleaf=tls          ;;
+            Quic|QuicNative) mleaf=quic       ;;
             Varint)       mleaf=varint       ;;
             Proto)        mleaf=proto        ;;
             Multiformats) mleaf=multiformats ;;
@@ -217,7 +222,7 @@ while IFS= read -r -d '' f; do
         # implementations under negotiate and host even where a rank
         # would allow the import.
         case "$ileaf/$mleaf" in
-          negotiate/security|negotiate/mux|host/security|host/mux)
+          negotiate/security|negotiate/mux|negotiate/quic|host/security|host/mux|host/quic)
             echo "$f:$lineno: $ileaf imports $mod; negotiate and host import core and no implementation (§3.1)" >&2
             violations=$((violations + 1))
             ;;

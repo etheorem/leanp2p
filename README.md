@@ -13,16 +13,16 @@ bottom-up, in the order of [`docs/PLAN.md`](docs/PLAN.md). W1 starts
 ## What it is
 
 A libp2p stack in Lean 4. Its first target is the **Ethereum consensus
-layer**: `tcp + /noise + /yamux`, identify, req/resp (`ssz_snappy`), and
-gossipsub v1.1. Everything else that libp2p offers stays a deferred
-seam behind the interfaces. ARCHITECTURE.md §8 gives the full priority
-list.
+layer**: `tcp + /noise + /yamux` and `quic-v1`, identify, req/resp
+(`ssz_snappy`), and gossipsub v1.1. Everything else that libp2p offers
+stays a deferred seam behind the interfaces. ARCHITECTURE.md §8 gives
+the full priority list.
 
 Dependency strategy: **FFI first**. Some dependencies have a mature
-implementation in another language: OpenSSL today, snappy and QUIC
-stacks later. The stack binds each one through a small C shim behind a
-Lean interface. A native Lean implementation may replace it later,
-behind the same interface.
+implementation in another language: OpenSSL (crypto and TLS), snappy,
+and ngtcp2 (QUIC). The stack binds each one through a small C shim
+behind a Lean interface. A native Lean implementation may replace it
+later, behind the same interface.
 
 ## Layout
 
@@ -34,8 +34,10 @@ packages/
   crypto/   Crypto facade; pure (pure-Lean digests, proved),
             backend (OpenSSL 3 via C shim); secp256k1, P-256, SHA-256,
             and keccak route to the etheorem hazmat packages
-  net/      streams (Connection/BufReader/Framing/tcp), yamux
-  libp2p/   identity, core (seam types), security, mux, negotiate, host, protocols
+  net/      streams (Connection/BufReader/Framing/tcp), yamux, tls (libssl),
+            quic (ngtcp2)
+  libp2p/   identity, core (seam types), security, mux, negotiate, quic, host,
+            protocols
   cli/      demo node, ping node, interop harness
 ```
 

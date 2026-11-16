@@ -16,9 +16,12 @@ defaultTargets = [
   "CryptoPure",
   "Streams",
   "Yamux",
+  "Tls",
+  "Quic",
   "Libp2pIdentity",
   "Libp2pCore",
   "Libp2pSecurity",
+  "Libp2pQuic",
   "Libp2pMux",
   "Libp2pNegotiate",
   "Libp2pHost",
@@ -51,6 +54,14 @@ path = "packages/crypto/backend"
 [[require]]
 name = "TlsNative"
 path = "packages/net/tls/native"
+
+# `net/quic/native` is a nested Lake package for the same reason: it
+# compiles the pinned ngtcp2 tree (`packages/net/quic/upstream/`) and the
+# shim of `net/quic` into one archive, which resolves against the
+# toolchain's static OpenSSL.
+[[require]]
+name = "QuicNative"
+path = "packages/net/quic/native"
 
 # `net/streams/shim` is a nested Lake package for the same reason. Its
 # `lakefile.lean` builds the C abort of the TCP transport. It provides
@@ -170,6 +181,12 @@ roots = ["Tls"]
 globs = ["Tls.*"]
 
 [[lean_lib]]
+name = "Quic"
+srcDir = "packages/net/quic"
+roots = ["Quic"]
+globs = ["Quic.*"]
+
+[[lean_lib]]
 name = "Libp2pIdentity"
 srcDir = "packages/libp2p/identity"
 roots = ["Libp2p.Identity"]
@@ -186,6 +203,12 @@ name = "Libp2pSecurity"
 srcDir = "packages/libp2p/security"
 roots = ["Libp2p.Security"]
 globs = ["Libp2p.Security.*"]
+
+[[lean_lib]]
+name = "Libp2pQuic"
+srcDir = "packages/libp2p/quic"
+roots = ["Libp2p.Quic"]
+globs = ["Libp2p.Quic.*"]
 
 [[lean_lib]]
 name = "Libp2pMux"
@@ -263,6 +286,13 @@ root = "Tests.Interop.Noise"
 [[lean_exe]]
 name = "tls-interop"
 root = "Tests.Interop.Tls"
+
+# The Lean side of the QUIC interop check against go-libp2p's host with
+# its QUIC transport; run it through `scripts/quic-interop.sh`. Like
+# `tls-interop`, it is not part of `lake test`.
+[[lean_exe]]
+name = "quic-interop"
+root = "Tests.Interop.Quic"
 
 [[lean_exe]]
 name = "gossipsub-interop"

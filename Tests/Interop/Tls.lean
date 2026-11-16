@@ -19,19 +19,21 @@ checks of both sides, and the records alone.
   orderly end.
 * `tls-interop dial PORT`: connect as the client, write `size` bytes,
   check the echo, and close.
-* `tls-interop listen-noext` and `tls-interop listen-chain`: listen,
-  and pass when the handshake refuses the peer with
-  `Core.Error.authentication` for a missing extension, or for a chain
-  of two certificates.
+* `tls-interop listen-noext`, `tls-interop listen-chain`, and
+  `tls-interop listen-nocert`: listen, and pass when the handshake
+  refuses the peer with `Core.Error.authentication` for a missing
+  extension, for a chain of two certificates, or for a client that sent
+  no certificate (libssl's reason, "peer did not return a
+  certificate").
 * `tls-interop dial-refuse PORT`: connect, and pass when the handshake
   refuses an expired server certificate.
 * `tls-interop dial-noext PORT`: connect through the engine with a
   certificate that lacks the libp2p extension, and pass when the
   server's alert `bad_certificate` ends the first read.
 
-`scripts/tls-interop.sh` pairs these with the refusal and no-ALPN
-modes of the go side (`scripts/tls-interop/refuse.go`); the plain
-`listen` and `dial` serve the no-ALPN runs.
+`scripts/tls-interop.sh` pairs these with the refusal, no-ALPN, and
+no-SNI modes of the go side (`scripts/tls-interop/refuse.go`); the
+plain `listen` and `dial` serve the no-ALPN and no-SNI runs.
 
 The go transport offers yamux in ALPN before `libp2p`, as it does in
 production. This side offers and selects `libp2p` alone, so the go
@@ -212,11 +214,13 @@ def main (args : List String) : IO UInt32 := do
     | ["dial", port] => Tests.Interop.Tls.dialMode port
     | ["listen-noext"] => Tests.Interop.Tls.listenRefuseMode "lacks the libp2p extension"
     | ["listen-chain"] => Tests.Interop.Tls.listenRefuseMode "sent 2 certificates"
+    | ["listen-nocert"] =>
+      Tests.Interop.Tls.listenRefuseMode "peer did not return a certificate"
     | ["dial-refuse", port] => Tests.Interop.Tls.dialRefuseMode port
     | ["dial-noext", port] => Tests.Interop.Tls.dialNoExtMode port
     | _ => Tests.Interop.Tls.fail
       ("usage: tls-interop listen | dial PORT | listen-noext | listen-chain | " ++
-        "dial-refuse PORT | dial-noext PORT")
+        "listen-nocert | dial-refuse PORT | dial-noext PORT")
   try
     run.run
     IO.eprintln "lean: ok"

@@ -23,6 +23,7 @@ removes that coupling (§9, delta 10).
 | `Libp2p/Core/Mux.lean` | the `Muxer` seam and `MuxSession` |
 | `Libp2p/Core/Handler.lean` | `StreamHandler`, the callback a served stream reaches, and `StreamContext`, the connection facts the callback gets |
 | `Libp2p/Core/Policy.lean` | the connection gater, the resource manager, and the address ranker |
+| `Libp2p/Core/Transport.lean` | the `SecuredTransport` seam, `SecuredSession`, and `SecuredListener`: a transport whose connections arrive secured and muxed, such as QUIC |
 
 All declarations live in the `Libp2p.Core` namespace, and the root
 module re-exports the public submodules, so an implementation or the
@@ -153,6 +154,41 @@ more there, with the proved peer, as go-libp2p does
   of go-libp2p's `AddrDelay` and `DialRanker`
   (`vendor/go-libp2p/core/network/network.go`, lines 212 and 218).
 
+**The secured transport seam.** QUIC secures and muxes its own
+connections: its handshake is TLS 1.3, and its streams are native (the
+QUIC spec; RFC 9000 §2). Such a connection gives the upgrader no stage
+to run, so it needs a seam of its own beside `Streams.Transport`:
+
+- `SecuredTransport` holds `handles`, `dial`, and `listen`, the shape
+  of `Streams.Transport`. `dial` takes the expected peer id and fails
+  with `authentication` when the peer proves another one. It also takes
+  an `abort` channel, whose close ends a dial still in its handshake.
+  The host passes its shutdown channel, so a close reaches the
+  unauthenticated dials of a secured transport too (root §5.5).
+- `SecuredSession` is what a dial or an accept answers: the
+  `MuxSession` of the transport's streams, the two peer ids the
+  handshake proved, and the two addresses.
+- `SecuredListener` has the lifecycle of `Streams.Listener`: `accept`,
+  `close`, and `join`. Its `join` also waits for the sessions it gave,
+  since they share its socket.
+- `listen` takes an `Admit`, the owner's decision on each inbound
+  connection before its handshake costs anything: a `ConnectionScope`,
+  or `none` to refuse. `accept` answers each session with its scope.
+  The listener releases the scope of a connection that never reaches
+  `accept`. The host passes its gater's `allowInbound` and its
+  resource manager (`Policy.admission`). That is the same admission it
+  runs on a TCP connection before the upgrade. go-libp2p asks its
+  resource manager at the same point of a QUIC handshake
+  (`vendor/go-libp2p/config/config.go`, `ConnContext`).
+
+go-libp2p draws the same line: its `transport.Transport.Dial` answers a
+`CapableConn`, secured and muxed
+(`vendor/go-libp2p/core/transport/transport.go`, lines 29 and 61), and
+its TCP transport runs the upgrader inside its own dial
+(`vendor/go-libp2p/p2p/transport/tcp/tcp.go`, line 302).
+Here the upgrader stays in the host, so `Streams.Transport` and the TCP
+path keep their shape.
+
 **Test values.** §3.1 gives every seam two values from the start, the
 production value and a test value, and every suite above the
 transport runs on the test values (PRINCIPLES 1.4). The test values
@@ -160,7 +196,13 @@ live with their implementations: the fixed-key security protocol is a
 second `SecurityProtocol` value in `libp2p/security` (§4.9), and a
 `Muxer` test value with fixed ids belongs to `libp2p/mux`. The sim
 transport is the `Transport` test value and lives in `net/streams`.
-A `StreamHandler` double exists for the compile milestone of this
+The `SecuredTransport` test value, QUIC with fixed keys and a fixed
+wall clock, lives in `libp2p/quic`. Its sim value is
+`Libp2p.Negotiate.securedOver`. It runs the upgrade of
+`libp2p/negotiate` inside the dial and the accept of a
+`Streams.Transport`, as go-libp2p's TCP transport runs it. Over the sim
+transport, the host suite runs its secured paths with no socket. A
+`StreamHandler` double exists for the compile milestone of this
 package's plan. The policy doubles, a permissive gater and a denying
 gater among them, belong to the host pair (W5.6), whose consumers
 they are. Core itself provides types only. Its contribution is that
@@ -224,6 +266,13 @@ this package's plan check.
   one field with a `Role`.** One field per seam keeps the two seams
   parallel, and the parity rules stay inside the implementation
   packages, where the spike kept them (§10 row 12).
+- **A second transport seam, and `Streams.Transport` unchanged.** A
+  `Streams.Transport` that answered a secured session for QUIC would
+  have to carry identities, a notion `net/streams` cannot name (§2).
+  A field on `Streams.Transport` that skipped the upgrade would make
+  every caller check it. So the secured transports are a second list
+  in the host's configuration, and an address picks a secured
+  transport first (the host ARCHITECTURE, "Secured transports").
 
 ## What the package must not depend on
 

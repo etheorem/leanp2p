@@ -5,6 +5,7 @@ import Interop.Redis
 import Libp2p.Identity
 import Libp2p.Security
 import Libp2p.Mux
+import Libp2p.Quic
 import Libp2p.Host
 import Libp2p.Protocols.Ping
 
@@ -18,9 +19,11 @@ test-plan peer is the model on the other side of the wire
 (`vendor/go-libp2p/test-plans/cmd/ping/main.go`).
 
 Both sides read the configuration, connect to Redis, and start a host
-with the TCP transport and Noise. The host offers the one muxer the
-test plan configures: `Mux.yamux` for `muxer=yamux`, `Mux.mplex` for
-`muxer=mplex` (root PLAN W5.10).
+with the run's transport. Over TCP, the host offers the one security
+protocol and the one muxer the test plan configures: Noise or TLS, and
+`Mux.yamux` or `Mux.mplex` (root PLAN W5.10). Over QUIC v1, the host
+has the QUIC transport alone, which secures and muxes its connections
+itself (root PLAN W4.4).
 
 * **The listener** listens, publishes its address with the `/p2p/<id>`
   suffix through `RPUSH`, and sleeps for the test timeout. The runner
@@ -103,24 +106,35 @@ def generateKey : Run PrivKey := do
   let seed ← orFail "identity seed" (fun e => reprStr e) (← Crypto.ed25519Generate.run)
   orFail "identity key" (fun e => reprStr e) (PrivKey.ofData? .ed25519 seed.bytes)
 
-/-- The host of one run: TCP, Noise with a static key from the system
-generator, the configured muxer, and the ping handler (root §3.1: the
-ordered lists are assembled here). -/
+/-- The host of one run, with the ping handler (root §3.1: the ordered
+lists are assembled here). Over TCP: the TCP transport, the security
+protocol of the run (Noise with a static key from the system
+generator, or TLS with a fresh certificate key), and its muxer. Over
+QUIC: the QUIC transport alone, with TLS inside it. -/
 def startHost (cfg : Config) : Run Host := do
-  let muxer ← match cfg.muxer with
-    | .yamux => pure Libp2p.Mux.yamux
-    | .mplex => pure Libp2p.Mux.mplex
   let key ← generateKey
-  let noise ← orFail "noise static key" (fun e => reprStr e)
-    (← (Libp2p.Security.Noise.Config.generate key).run)
+  let tlsConfig : Run Libp2p.Security.Tls.Config := do
+    orFail "tls config" (fun e => reprStr e) (← Libp2p.Security.Tls.Config.generate key)
+  let config : Libp2p.Host.Config ← match cfg.transport with
+    | .tcp security muxer =>
+      let sec ← match security with
+        | .noise => do
+          let noise ← orFail "noise static key" (fun e => reprStr e)
+            (← (Libp2p.Security.Noise.Config.generate key).run)
+          pure (Libp2p.Security.Noise.securityProtocol noise)
+        | .tls => do pure (Libp2p.Security.Tls.securityProtocol (← tlsConfig))
+      let mux := match muxer with
+        | .yamux => Libp2p.Mux.yamux
+        | .mplex => Libp2p.Mux.mplex
+      pure { identity := key, transports := [Streams.Tcp.transport], security := [sec],
+             muxers := [mux], handlers := [Ping.pingHandler] }
+    | .quicV1 =>
+      pure { identity := key, transports := [],
+             securedTransports := [Libp2p.Quic.transport (← tlsConfig)],
+             security := [], muxers := [], handlers := [Ping.pingHandler] }
   -- The ascription keeps the call in `BaseIO`. The `←` lifts the
   -- action into the run, and `orFail` binds the `Except` as data.
-  orFail "host" (fun e => reprStr e) (← (Host.new {
-    identity := key
-    transports := [Streams.Tcp.transport]
-    security := [Libp2p.Security.Noise.securityProtocol noise]
-    muxers := [muxer]
-    handlers := [Ping.pingHandler] } : BaseIO _))
+  orFail "host" (fun e => reprStr e) (← (Host.new config : BaseIO _))
 
 /-- The address the listener publishes: the bound address, with the
 Redis connection's local IP in place of `0.0.0.0`, and the `/p2p/<id>`
