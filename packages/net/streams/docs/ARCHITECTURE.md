@@ -236,6 +236,27 @@ The names are §7 row 8's. The types follow §3.1.
 
   The checks: "a TCP read that meets the peer's reset answers EOF" and
   "the reset tore the connection down: the read stays at EOF".
+- **Every TCP connection sets `TCP_NODELAY`**, the dialed ones and the
+  accepted ones (`Std.Internal.UV.TCP.Socket.noDelay`, which calls
+  `uv_tcp_nodelay` in `vendor/lean4/src/runtime/uv/tcp.cpp`, line 723).
+  With Nagle's algorithm, the kernel holds a small write while an
+  earlier one waits for its ACK. The peer can delay that ACK by 40 ms,
+  and every handshake turn then waits for it. A go dial to Lean took
+  133 ms for the handshake and one ping before the option, and 8.4 ms
+  with it. A go dial to go took 6.4 ms. The references set the option
+  on every connection:
+  - Go's `net` package sets it on each TCP connection it makes
+    (`net/tcpsock.go`, `newTCPConn`; the doc of `TCPConn.SetNoDelay`:
+    "The default is true (no delay)"). go-libp2p makes no call of its
+    own.
+  - rust-libp2p's TCP transport sets it by default
+    (`vendor/rust-libp2p/transports/tcp/src/lib.rs`, line 142, and the
+    call on line 214).
+
+  Go ignores a failure to set the option, and so does the transport:
+  the option changes the latency alone. No suite check reads the
+  option, since a `Connection` holds no socket. The check is the
+  handshake time of `scripts/interop-matrix.sh`.
 - **A TCP dial has its own deadline** (§5.4). A connect to an address
   that drops the SYN waits for the kernel timeout, which is minutes
   long. The dial bounds the connect by `unauthDeadlineMs` on the

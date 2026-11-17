@@ -129,8 +129,8 @@ dir = "vendor/rust-libp2p"
 repo = "https://github.com/libp2p/rust-libp2p"
 commit = "c449090f49b5ae2338e8f0727be98e0a739ba135"
 branch = "master"
-paths = ["/transports/noise/src/io.rs", "/transports/noise/src/io/handshake.rs", "/transports/noise/src/io/framed.rs", "/LICENSE*"]
-used-for = "io.rs: the one decrypted frame held ahead of the reader; io/handshake.rs: the read buffer that the handshake hands to the transport, and the refused payload of message 0; io/framed.rs: the payload decode with no limit below the frame (libp2p/security)"
+paths = ["/transports/noise/src/io.rs", "/transports/noise/src/io/handshake.rs", "/transports/noise/src/io/framed.rs", "/transports/tcp/src/lib.rs", "/LICENSE*"]
+used-for = "io.rs: the one decrypted frame held ahead of the reader; io/handshake.rs: the read buffer that the handshake hands to the transport, and the refused payload of message 0; io/framed.rs: the payload decode with no limit below the frame (libp2p/security); tcp/src/lib.rs: TCP_NODELAY on by default (net/streams)"
 
 [[vendor]]
 dir = "vendor/lean4"
