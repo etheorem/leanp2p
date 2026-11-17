@@ -141,6 +141,28 @@ structure Params where
   prims : Sign.Prims
   /-- The message id function. -/
   msgId : Sign.MsgIdFn
+  /-- The subscriptions one RPC may carry, or `none` for no cap. An RPC
+  over the cap changes no subscription of its sender (`admittedSubs`).
+
+  `none` is the default of go and rust, and it suits a closed test
+  network. A node that faces public peers sets both caps: with no cap,
+  one large RPC costs time quadratic in its size on the loop task.
+  Lighthouse sizes them from the topic count of its largest fork
+  (Lighthouse `ef55e2f`, `lighthouse_network/src/service/mod.rs`, lines
+  324 to 341): twice that count per RPC, and four times it per peer. It
+  counts the worst case of each fork, with every subnet and the light
+  client server (`types/topics.rs`, lines 49 to 95 and 140 to 150). A
+  Fulu fork then has 205 topics: 5 base, 64 attestation, 1 sync
+  contribution, 4 sync committee, 2 light client, 1 BLS change, and 128
+  column. Fulu deprecates the blob topics (`fulu/p2p-interface.md`,
+  "Deprecated `blob_sidecar_{subnet_id}`"). The caps then come to 410
+  and 820. The comment beside that code still counts 9 blob topics,
+  which the code no longer lists. -/
+  maxSubscriptionsPerRpc : Option Nat := none
+  /-- The topics one peer may hold, or `none` for no cap. An RPC that
+  would take its sender past the cap changes no subscription. The sizing
+  of `maxSubscriptionsPerRpc` covers this cap too. -/
+  maxSubscribedTopics : Option Nat := none
 
 /-- The parameter bound the mesh theorems consume: the target degree is
 at most the high water mark. -/
@@ -593,10 +615,45 @@ def applySubOpts (subs : List TopicId) (o : Rpc.SubOpts) : List TopicId :=
   if o.subscribe then (if memB t subs then subs else t :: subs)
   else subs.filter (fun u => decide (u ≠ t))
 
-/-- Update the announced topics of the sender. -/
-def handleSubs (s : State) (sender : Peer) (subs : List Rpc.SubOpts) : State :=
+/-- The topics of a sender that holds `current`, after the subscriptions
+of one RPC. `none` when the RPC breaks a cap. Each option folds into the
+list through a linear membership test, so with no cap one large RPC
+costs time quadratic in its size, and the list grows with no bound. The
+count cap comes first, so the fold runs only on an RPC within it, and it
+runs once: `handleSubs` stores the list this answer holds.
+
+go and rust leave both caps to the application, and both are off here
+by default. rust's `MaxCountSubscriptionFilter` has the two caps
+(rust-libp2p `c449090`, `subscription_filter.rs`, lines 109 to 156).
+Over either cap, rust ignores the subscriptions of the RPC
+(`behaviour.rs`, lines 2106 to 2119), and it still handles the messages
+and the control of the RPC (lines 3548 to 3586). go's
+`WrapLimitSubscriptionFilter` has the count cap, and over it go drops
+the whole RPC (go-libp2p-pubsub v0.19.0, `subscription_filter.go`,
+lines 143 to 147, and `pubsub.go`, lines 1506 to 1513). The router
+follows rust. Lighthouse runs rust's filter with both caps set
+(Lighthouse `ef55e2f`, `lighthouse_network/src/service/mod.rs`, lines
+332 to 341). -/
+def admittedSubs (p : Params) (current : List TopicId) (subs : List Rpc.SubOpts) :
+    Option (List TopicId) :=
+  let withinCount := match p.maxSubscriptionsPerRpc with
+    | some cap => decide (subs.length ≤ cap)
+    | none => true
+  if withinCount then
+    let next := subs.foldl applySubOpts current
+    match p.maxSubscribedTopics with
+    | some cap => if next.length ≤ cap then some next else none
+    | none => some next
+  else none
+
+/-- Update the announced topics of the sender. An RPC that breaks a cap
+changes none of them (`admittedSubs`). -/
+def handleSubs (p : Params) (s : State) (sender : Peer) (subs : List Rpc.SubOpts) : State :=
   match peerOf s sender with
-  | some pd => setPeer s sender { pd with subs := subs.foldl applySubOpts pd.subs }
+  | some pd =>
+    match admittedSubs p pd.subs subs with
+    | some next => setPeer s sender { pd with subs := next }
+    | none => s
   | none => s
 
 /-- Handle the published messages of an RPC: validate, accept, cache,
@@ -758,7 +815,7 @@ def handleControl (p : Params) (s : State) (sender : Peer) :
 /-- Handle a decoded RPC: subscriptions, published messages, control. -/
 def handleRpc (p : Params) (s : State) (sender : Peer) (rpc : Rpc.RPC) :
     State × List Action :=
-  let s1 := handleSubs s sender rpc.subscriptions
+  let s1 := handleSubs p s sender rpc.subscriptions
   let (s2, a2) := handlePubs p s1 sender rpc.publish
   let (s3, a3) := handleControl p s2 sender rpc.control
   (s3, a2 ++ a3)
@@ -1529,13 +1586,19 @@ private theorem foldl_updateScoreOf_topics (ms : List Message) (s : State) (send
   | cons m ms ih =>
     rw [List.foldl_cons, ih, updateScoreOf_topics]
 
-private theorem handleSubs_mesh (s : State) (sender : Peer) (subs : List Rpc.SubOpts)
-    (topic : TopicId) : meshOf (handleSubs s sender subs) topic = meshOf s topic := by
-  cases h : peerOf s sender <;> simp [handleSubs, h, setPeer, meshOf]
+private theorem handleSubs_mesh (p : Params) (s : State) (sender : Peer)
+    (subs : List Rpc.SubOpts) (topic : TopicId) :
+    meshOf (handleSubs p s sender subs) topic = meshOf s topic := by
+  cases h : peerOf s sender with
+  | none => simp [handleSubs, h]
+  | some pd =>
+    cases ha : admittedSubs p pd.subs subs <;> simp [handleSubs, h, ha, setPeer, meshOf]
 
-private theorem handleSubs_topics (s : State) (sender : Peer) (subs : List Rpc.SubOpts) :
-    (handleSubs s sender subs).topics = s.topics := by
-  cases h : peerOf s sender <;> simp [handleSubs, h, setPeer]
+private theorem handleSubs_topics (p : Params) (s : State) (sender : Peer)
+    (subs : List Rpc.SubOpts) : (handleSubs p s sender subs).topics = s.topics := by
+  cases h : peerOf s sender with
+  | none => simp [handleSubs, h]
+  | some pd => cases ha : admittedSubs p pd.subs subs <;> simp [handleSubs, h, ha, setPeer]
 
 private theorem handlePubs_mesh (p : Params) (s : State) (sender : Peer)
     (ms : List Message) (topic : TopicId) :
@@ -1810,15 +1873,19 @@ private theorem controlActions_not_deliver (p : Params) (s : State) (sender : Pe
     · exact mapHandlers_not_deliver _ (fun s b => handleGraft_not_deliver p s sender b) _ _ _ h
   · exact mapHandlers_not_deliver _ (fun s b => handlePrune_not_deliver p s sender b) _ _ _ h
 
-/-- A message reaches the application only when the pre-state seen cache
-does not hold its id. -/
-private theorem handleSubs_seen (s : State) (sender : Peer) (subs : List Rpc.SubOpts) :
-    (handleSubs s sender subs).seen = s.seen := by
-  cases h : peerOf s sender <;> simp [handleSubs, h, setPeer]
+/-- `handleSubs` writes one peer record at most, so the seen cache and
+the clock stay. `stepDeliverUnseen` reads both through these lemmas. -/
+private theorem handleSubs_seen (p : Params) (s : State) (sender : Peer)
+    (subs : List Rpc.SubOpts) : (handleSubs p s sender subs).seen = s.seen := by
+  cases h : peerOf s sender with
+  | none => simp [handleSubs, h]
+  | some pd => cases ha : admittedSubs p pd.subs subs <;> simp [handleSubs, h, ha, setPeer]
 
-private theorem handleSubs_now (s : State) (sender : Peer) (subs : List Rpc.SubOpts) :
-    (handleSubs s sender subs).now = s.now := by
-  cases h : peerOf s sender <;> simp [handleSubs, h, setPeer]
+private theorem handleSubs_now (p : Params) (s : State) (sender : Peer)
+    (subs : List Rpc.SubOpts) : (handleSubs p s sender subs).now = s.now := by
+  cases h : peerOf s sender with
+  | none => simp [handleSubs, h]
+  | some pd => cases ha : admittedSubs p pd.subs subs <;> simp [handleSubs, h, ha, setPeer]
 
 private theorem join_not_deliver (p : Params) (s : State) (peer : Peer)
     (proto : PubsubProto) (m : Message) : Action.deliver m ∉ (join p s peer proto).2 := by
@@ -1976,21 +2043,21 @@ theorem stepDeliverUnseen (p : Params) (s s' : State) (acts : List Action)
               rcases hdel with hdl | hdl
               · simp only [List.mem_map] at hdl
                 obtain ⟨m', hm', heq⟩ := hdl
-                have hseen : (handleSubs s sender rpc.subscriptions).seen = s.seen :=
-                  handleSubs_seen s sender rpc.subscriptions
-                have hnow : (handleSubs s sender rpc.subscriptions).now = s.now :=
-                  handleSubs_now s sender rpc.subscriptions
+                have hseen : (handleSubs p s sender rpc.subscriptions).seen = s.seen :=
+                  handleSubs_seen p s sender rpc.subscriptions
+                have hnow : (handleSubs p s sender rpc.subscriptions).now = s.now :=
+                  handleSubs_now p s sender rpc.subscriptions
                 cases heq
-                have hgate := accept_gate (handleSubs s sender rpc.subscriptions).seen
-                  (handleSubs s sender rpc.subscriptions).now p.msgId []
-                  (handleSubs s sender rpc.subscriptions).seen
+                have hgate := accept_gate (handleSubs p s sender rpc.subscriptions).seen
+                  (handleSubs p s sender rpc.subscriptions).now p.msgId []
+                  (handleSubs p s sender rpc.subscriptions).seen
                   (List.filter (fun m => validationOk p m) rpc.publish) m hm'
                 rwa [hseen, hnow] at hgate
               · exact absurd hdl
-                  (forwardPubs_not_deliver (handleSubs s sender rpc.subscriptions) sender
-                    ((accept (handleSubs s sender rpc.subscriptions).seen
-                        (handleSubs s sender rpc.subscriptions).now p.msgId []
-                        (handleSubs s sender rpc.subscriptions).seen
+                  (forwardPubs_not_deliver (handleSubs p s sender rpc.subscriptions) sender
+                    ((accept (handleSubs p s sender rpc.subscriptions).seen
+                        (handleSubs p s sender rpc.subscriptions).now p.msgId []
+                        (handleSubs p s sender rpc.subscriptions).seen
                         (List.filter (fun m => validationOk p m) rpc.publish)).accepted) m)
             · cases hctl : rpc.control with
               | none =>

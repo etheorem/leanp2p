@@ -122,6 +122,9 @@ private def rpcOfPublish (ms : List Message) : Rpc.RPC :=
 private def rpcOfControl (c : Rpc.ControlMessage) : Rpc.RPC :=
   { subscriptions := [], publish := [], control := some c }
 
+private def rpcOfSubs (subs : List Rpc.SubOpts) : Rpc.RPC :=
+  { subscriptions := subs, publish := [], control := none }
+
 private def controlOf (grafts : List Rpc.ControlGraft) (prunes : List Rpc.ControlPrune) : Rpc.ControlMessage :=
   { ihave := [], iwant := [], graft := grafts, prune := prunes }
 
@@ -430,6 +433,35 @@ def run (r : Runner) : IO Unit := do
         { known with mcache := (Cache.MessageCache.empty baseParams.window).put ⟨[7]⟩ (msgOf ta [7]) }
         (.rpc pa (Pb.encodeMessage (iwantRpc [⟨[7]⟩]))) with
      | .ok (_, acts) => publishCount acts = 0
+     | _ => false)
+
+  -- The subscription caps. The peer `pa` holds `ta`, and the RPC
+  -- subscribes it to three more topics. With no cap, every option lands.
+  -- An RPC over a cap changes no subscription of its sender.
+  let three : List Rpc.SubOpts :=
+    ["s1", "s2", "s3"].map fun n => { subscribe := true, topicid := n }
+  let topicsAfter (p : Params) (subs : List Rpc.SubOpts) : Option Nat :=
+    match step p known (.rpc pa (Pb.encodeMessage (rpcOfSubs subs))) with
+    | .ok (s', _) => (peerOf s' pa).map (·.subs.length)
+    | _ => none
+  r.check "core.subs.no-cap-admits" (topicsAfter baseParams three == some 4)
+  r.check "core.subs.count-cap-refuses"
+    (topicsAfter { baseParams with maxSubscriptionsPerRpc := some 2 } three == some 1)
+  r.check "core.subs.count-cap-admits-at-cap"
+    (topicsAfter { baseParams with maxSubscriptionsPerRpc := some 3 } three == some 4)
+  r.check "core.subs.topic-cap-refuses"
+    (topicsAfter { baseParams with maxSubscribedTopics := some 3 } three == some 1)
+  -- The topic cap counts the topics after the whole RPC, so an
+  -- unsubscribe in the same RPC makes room.
+  r.check "core.subs.topic-cap-counts-unsubscribes"
+    (topicsAfter { baseParams with maxSubscribedTopics := some 3 }
+      ({ subscribe := false, topicid := ta.name } :: three) == some 3)
+  -- As in rust, an RPC over a cap keeps its messages.
+  r.check "core.subs.over-cap-keeps-messages"
+    (match step { baseParams with maxSubscriptionsPerRpc := some 2 } known
+        (.rpc pa (Pb.encodeMessage { rpcOfSubs three with publish := [msgOf ta [5]] })) with
+     | .ok (s', acts) =>
+       delivers (msgOf ta [5]) acts = 1 && (peerOf s' pa).map (·.subs.length) == some 1
      | _ => false)
 
   -- The transcript driver runs two events in order and appends the
