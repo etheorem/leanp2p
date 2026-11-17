@@ -15,6 +15,9 @@ The windows of the message cache checks are the spec defaults: five
 history windows and three gossip windows. The seen cache uses capacity
 three and a TTL of one hundred milliseconds, so each boundary is a round
 number.
+
+Two property pins tie each keyed index that the router runs
+(`MessageIndex`, `SeenIndex`) to its list model over random runs.
 -/
 
 set_option autoImplicit false
@@ -58,9 +61,74 @@ def promiseOf (p : Peer) (i : MessageId) (d : Millis) : IwantPromise :=
 def backoffOf (p : Peer) (t : TopicId) (u : Millis) : BackoffEntry :=
   { peer := p, topic := t, «until» := u }
 
+/-- One pseudo-random step of a linear congruential generator. -/
+private def lcg (x : Nat) : Nat := (x * 6364136223846793005 + 1442695040888963407) % 2 ^ 64
+
+/-- The property pin of `MessageIndex` to the model `MessageCache`
+(CLAUDE.md, "Proofs and tests", rule 2): random runs of puts (ids 0 to
+14, two topics, a payload that marks the put) and shifts, with the spec
+windows of five and three. After each operation every id must agree on
+`get`, and each topic on `gossipIds`. -/
+private def messageIndexPin (rounds ops : Nat) : Bool := Id.run do
+  let topics : List TopicId := [topicA, topicB]
+  let mut seed := 11
+  for _ in [0:rounds] do
+    let mut model := MessageCache.empty window5
+    let mut index := MessageIndex.empty window5
+    for step in [0:ops] do
+      seed := lcg seed
+      if (seed / 17) % 3 == 0 then
+        model := model.shift
+        index := index.shift
+      else
+        seed := lcg seed
+        let id := mid ((seed / 19) % 15)
+        let topic : TopicId := if (seed / 23) % 2 == 0 then topicA else topicB
+        let m : Message := { «from» := none, data := some [step], seqno := none, topic,
+                             signature := none, key := none }
+        model := model.put id m
+        index := index.put id m
+      for k in [0:15] do
+        if model.get (mid k) != index.get (mid k) then return false
+      for t in topics do
+        if model.gossipIds t != index.gossipIds t then return false
+  return true
+
+/-- The property pin of `SeenIndex` to the model `SeenCache`: random runs
+with capacity 8, a TTL of 50 ms, ids from 0 to 19, and times that step
+forward by 0 to 9 ms. A step of 0 makes a re-add in the same millisecond,
+which needs the entry numbers of the index. An operation is an add or a
+prune, and after each one every id must agree on `contains`. -/
+private def seenIndexPin (rounds ops : Nat) : Bool := Id.run do
+  let p : SeenParams := { capacity := 8, ttl := 50, valid := by decide }
+  let mut seed := 7
+  for _ in [0:rounds] do
+    let mut model := SeenCache.empty p
+    let mut index := SeenIndex.empty p
+    let mut now := 0
+    for _ in [0:ops] do
+      seed := lcg seed
+      now := now + (seed / 7) % 10
+      seed := lcg seed
+      let id := mid ((seed / 11) % 20)
+      seed := lcg seed
+      if (seed / 13) % 4 == 0 then
+        model := model.prune now
+        index := index.prune now
+      else
+        model := model.add id now
+        index := index.add id now
+      for k in [0:20] do
+        if model.contains (mid k) now != index.contains (mid k) now then return false
+  return true
+
 /-- Run the checks of this module. -/
 def run (r : Runner) : IO Unit := do
   r.section "gossipsub Cache" "vendor/specs/pubsub"
+  r.check "MessageIndex agrees with MessageCache on get and gossipIds over random runs"
+    (messageIndexPin 200 200)
+  r.check "SeenIndex agrees with SeenCache on contains over random add and prune runs"
+    (seenIndexPin 200 200)
 
   -- Message cache: one message, then shifts.
   let c0 : MessageCache := MessageCache.empty window5

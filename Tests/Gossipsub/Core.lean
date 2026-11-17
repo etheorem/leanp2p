@@ -91,8 +91,8 @@ private def emptyState : State :=
   { peers := []
     mesh := []
     fanout := []
-    mcache := Cache.MessageCache.empty baseParams.window
-    seen := Cache.SeenCache.empty baseParams.seen
+    mcache := Cache.MessageIndex.empty baseParams.window
+    seen := Cache.SeenIndex.empty baseParams.seen
     backoff := []
     iwant := []
     topics := []
@@ -352,7 +352,7 @@ def run (r : Runner) : IO Unit := do
   -- Gossip stays away from a peer below the gossip threshold.
   r.check "core.gossip.threshold"
     (match step gossipParams
-        { known with mcache := (Cache.MessageCache.empty baseParams.window).put ⟨[1]⟩ (msgOf ta [1]) }
+        { known with mcache := (Cache.MessageIndex.empty baseParams.window).put ⟨[1]⟩ (msgOf ta [1]) }
         (.tick 1000 [pa, pb, pc, pd]) with
      | .ok (_, acts) => ihaveCount acts = 0
      | _ => false)
@@ -364,7 +364,7 @@ def run (r : Runner) : IO Unit := do
     (match step baseParams
         { known with
           mesh := [(ta, [pa, pb])]
-          mcache := (Cache.MessageCache.empty baseParams.window).put ⟨[1]⟩ (msgOf ta [1]) }
+          mcache := (Cache.MessageIndex.empty baseParams.window).put ⟨[1]⟩ (msgOf ta [1]) }
         (.tick 1000 [pa, pb, pc, pd]) with
      | .ok (_, acts) => sendsTo pa acts = 0 && sendsTo pb acts = 0 &&
          sendsTo pc acts = 1 && sendsTo pd acts = 1 && ihaveCount acts = 2
@@ -424,7 +424,7 @@ def run (r : Runner) : IO Unit := do
   -- A cached id answers an IWANT with one publish.
   r.check "core.iwant.cached-answer"
     (match step baseParams
-        { known with mcache := (Cache.MessageCache.empty baseParams.window).put ⟨[7]⟩ (msgOf ta [7]) }
+        { known with mcache := (Cache.MessageIndex.empty baseParams.window).put ⟨[7]⟩ (msgOf ta [7]) }
         (.rpc pa (Pb.encodeMessage (iwantRpc [⟨[7]⟩]))) with
      | .ok (_, acts) => publishCount acts = 1
      | _ => false)
@@ -456,7 +456,7 @@ def run (r : Runner) : IO Unit := do
      | _ => false)
   r.check "core.iwant.below-gossip-threshold-ignored"
     (match step gossipParams
-        { known with mcache := (Cache.MessageCache.empty baseParams.window).put ⟨[7]⟩ (msgOf ta [7]) }
+        { known with mcache := (Cache.MessageIndex.empty baseParams.window).put ⟨[7]⟩ (msgOf ta [7]) }
         (.rpc pa (Pb.encodeMessage (iwantRpc [⟨[7]⟩]))) with
      | .ok (_, acts) => publishCount acts = 0
      | _ => false)

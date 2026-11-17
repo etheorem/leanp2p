@@ -187,9 +187,9 @@ structure State where
   /-- The fanout of each topic. -/
   fanout : List (TopicId × Fanout)
   /-- The message cache. -/
-  mcache : Cache.MessageCache
+  mcache : Cache.MessageIndex
   /-- The seen cache. -/
-  seen : Cache.SeenCache
+  seen : Cache.SeenIndex
   /-- The backoff table. -/
   backoff : Cache.BackoffTable
   /-- The IWANT promises. -/
@@ -430,13 +430,13 @@ structure Accept where
   /-- The ids the loop passed. -/
   done : List MessageId
   /-- The seen cache after the run. -/
-  cache : Cache.SeenCache
+  cache : Cache.SeenIndex
 
 /-- Accept a list of messages. The gate reads the pre-state cache `c0`,
 so a message that the pre-state cache holds as seen is never accepted.
 The local `done` list rejects a repeated id inside the one event. -/
-def accept (c0 : Cache.SeenCache) (now : Millis) (idf : Sign.MsgIdFn)
-    (done : List MessageId) (c : Cache.SeenCache) : List Message → Accept
+def accept (c0 : Cache.SeenIndex) (now : Millis) (idf : Sign.MsgIdFn)
+    (done : List MessageId) (c : Cache.SeenIndex) : List Message → Accept
   | [] => { accepted := [], done := done, cache := c }
   | m :: ms =>
       if c0.contains (idf m) now || memB (idf m) done then
@@ -524,7 +524,7 @@ def gossipActions (p : Params) (s : State) (order : List Peer) : List Action :=
     order.filter (fun q => decide (p.thresholds.gossipThreshold ≤ scoreOf p s q))
   let topics := s.mesh.map Prod.fst ++ s.fanout.map Prod.fst
   topics.flatMap fun t =>
-    let ids := Cache.MessageCache.gossipIds s.mcache t
+    let ids := Cache.MessageIndex.gossipIds s.mcache t
     if ids = [] then []
     else
       let targets :=
@@ -560,8 +560,8 @@ def freshState (p : Params) (s : State) (now : Millis) : State :=
     now := now,
     lastHeartbeat := now,
     backoff := Cache.Backoff.clear s.backoff now,
-    seen := Cache.SeenCache.prune s.seen now,
-    mcache := Cache.MessageCache.shift s.mcache }
+    seen := Cache.SeenIndex.prune s.seen now,
+    mcache := Cache.MessageIndex.shift s.mcache }
 
 /-- The per-topic plans of the heartbeat. -/
 def heartbeatPlans (p : Params) (s : State) (now : Millis) (order : List Peer) :
@@ -746,7 +746,7 @@ def handleIhave (p : Params) (s : State) (sender : Peer) (i : Rpc.ControlIHave) 
   if gossipIgnored p s sender || !memB (⟨i.topicId⟩ : TopicId) s.topics then (s, [])
   else
     let wanted := i.messageIds.filter (fun id =>
-      !(s.seen.contains id s.now) && (Cache.MessageCache.get s.mcache id).isNone &&
+      !(s.seen.contains id s.now) && (Cache.MessageIndex.get s.mcache id).isNone &&
         !(promised s.iwant sender id))
     let s1 : State :=
       { s with
@@ -761,7 +761,7 @@ def handleIwant (p : Params) (s : State) (sender : Peer) (w : Rpc.ControlIWant) 
   if gossipIgnored p s sender then (s, [])
   else
     let answers := w.messageIds.filterMap (fun id =>
-      match Cache.MessageCache.get s.mcache id with
+      match Cache.MessageIndex.get s.mcache id with
       | some m => if p.msgId m = id then some m else none
       | none => none)
     (s, answers.map (fun m => Action.sendRpc sender (publishRpc m)))
@@ -1828,8 +1828,8 @@ theorem tickGossipGated (p : Params) (s s' : State) (acts : List Action)
 /-! ## The deduplication theorem -/
 
 /-- Every accepted message was absent from the pre-state seen cache. -/
-theorem accept_gate (c0 : Cache.SeenCache) (now : Millis) (idf : Sign.MsgIdFn)
-    (done : List MessageId) (c : Cache.SeenCache) (ms : List Message) :
+theorem accept_gate (c0 : Cache.SeenIndex) (now : Millis) (idf : Sign.MsgIdFn)
+    (done : List MessageId) (c : Cache.SeenIndex) (ms : List Message) :
     ∀ m ∈ (accept c0 now idf done c ms).accepted, c0.contains (idf m) now = false := by
   induction ms generalizing done c with
   | nil => simp [accept]
@@ -2036,7 +2036,7 @@ does not hold its id. -/
 theorem stepDeliverUnseen (p : Params) (s s' : State) (acts : List Action)
     (e : Event) (m : Message)
     (hstep : step p s e = .ok (s', acts)) (hdel : Action.deliver m ∈ acts) :
-    Cache.SeenCache.contains s.seen (p.msgId m) s.now = false := by
+    Cache.SeenIndex.contains s.seen (p.msgId m) s.now = false := by
   cases e with
   | peerJoined peer proto =>
       have h1 : join p s peer proto = (s', acts) := by
