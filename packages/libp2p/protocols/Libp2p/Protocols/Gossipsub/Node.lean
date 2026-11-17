@@ -595,7 +595,8 @@ private def initialState (p : Core.Params) (now : Millis) : Core.State :=
     iwant := []
     topics := []
     now := now
-    lastHeartbeat := now }
+    lastHeartbeat := now
+    lastDecay := now }
 
 /-- The published message of a payload. The four signed fields stay absent,
 as `strictNoSign` requires. -/

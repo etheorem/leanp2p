@@ -200,6 +200,8 @@ structure State where
   now : Millis
   /-- The time of the last heartbeat. -/
   lastHeartbeat : Millis
+  /-- The interval boundary of the last score decay (`freshState`). -/
+  lastDecay : Millis := 0
 
 /-- The external events. -/
 inductive Event where
@@ -530,12 +532,31 @@ def gossipActions (p : Params) (s : State) (order : List Peer) : List Action :=
           !(memB q (meshOf s t)) && !(memB q (fanoutOf s t)))).take p.mesh.dLazy
       targets.map fun q => Action.sendRpc q (ihaveRpc t ids)
 
-/-- The state at the start of the heartbeat: the decayed scores, the new
-clock, the cleared backoff table, the pruned seen cache, and the shifted
-message cache. -/
+/-- True when a score decay is due: `decayInterval` has passed since the
+last decay boundary. -/
+def decayDue (p : Params) (s : State) (now : Millis) : Bool :=
+  decide (s.lastDecay + p.score.global.decayInterval ≤ now)
+
+/-- The state at the start of the heartbeat: the decayed scores when a
+decay is due, the new clock, the cleared backoff table, the pruned seen
+cache, and the shifted message cache.
+
+The scores decay once per `decayInterval`, as go-libp2p-pubsub v0.19.0
+decays on a ticker of that period (`score.go`, lines 414 and 415). The
+heartbeat drives this core, so the decay runs at the first heartbeat at
+or after each boundary. `lastDecay` then moves to the last boundary at or
+before `now`, so the period does not drift by the heartbeat's lateness.
+A heartbeat that finds several intervals passed decays once, as a go
+ticker drops the ticks a slow reader misses. A `decayInterval` of 0
+decays at every heartbeat. -/
 def freshState (p : Params) (s : State) (now : Millis) : State :=
+  let due := decayDue p s now
   { s with
-    peers := s.peers.map (fun e => (e.1, { e.2 with score := Score.decay p.score e.2.score })),
+    peers := if due then
+        s.peers.map (fun e => (e.1, { e.2 with score := Score.decay p.score e.2.score }))
+      else s.peers,
+    lastDecay := if due then now - (now - s.lastDecay) % p.score.global.decayInterval
+      else s.lastDecay,
     now := now,
     lastHeartbeat := now,
     backoff := Cache.Backoff.clear s.backoff now,
@@ -580,7 +601,7 @@ def heartbeatActions (p : Params) (s : State) (now : Millis) (order : List Peer)
   planActionsOf p s now order ++ negativeActions p s now order ++
     gossipActions p (gossipState p s now order) order
 
-/-- The heartbeat: decay, the fresh clock and tables, the per-topic plan,
+/-- The heartbeat: the decay when due, the fresh clock and tables, the per-topic plan,
 the score updates, the mesh write with the negative prune, and the
 actions of the plan, the negative prune, and the gossip. -/
 def heartbeat (p : Params) (s : State) (now : Millis) (order : List Peer) :

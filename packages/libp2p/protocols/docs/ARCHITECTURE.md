@@ -291,6 +291,20 @@ Both spike programs call `Ping.ping`.
   `NewStream`, `vendor/go-libp2p/p2p/host/basic/basic_host.go`, line
   441). The responder registers through `setHandler`. A host failure
   that wraps a seam error reaches `requestPeer` as that error.
+- **The score counters count thousandths of an event.** The spec
+  computes with float64. `Score.lean` computes with integers: weights in
+  `1/scoreScale`, and the five decaying counters in `1/counterUnit`,
+  both 1000. One event adds `counterUnit`, and the caps, the `P3`
+  threshold, `behaviourPenaltyThreshold`, and `decayToZero` take the
+  same unit. A whole-event counter floors at every decay, so a factor of
+  0.993 takes a count of 1 to 0 in one step. With the unit, the floor
+  costs one thousandth of an event a step.
+- **The scores decay once per `decayInterval`.** go runs the decay on a
+  ticker of that period (`score.go`, lines 414 and 415). The core decays
+  at the first heartbeat at or after each interval boundary, and
+  `State.lastDecay` keeps the boundary, so the period does not drift by
+  the heartbeat's lateness. A consensus profile decays once a 12 s slot
+  under a heartbeat of 700 ms.
 
 ## What the package must not depend on
 

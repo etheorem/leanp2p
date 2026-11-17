@@ -198,7 +198,7 @@ private def invalidCount (s : State) (q : Peer) (t : TopicId) : Nat :=
 /-- The counters of a peer with one invalid delivery. -/
 private def negCounters : Score.TopicCounters :=
   { Score.TopicCounters.zero with
-    inMesh := true, graftTime := 0, invalidMessageDeliveries := 1 }
+    inMesh := true, graftTime := 0, invalidMessageDeliveries := Score.counterUnit }
 
 /-- The score state of a peer with one invalid delivery in topic `t`. -/
 private def negPeerState : Score.PeerState :=
@@ -284,7 +284,7 @@ def run (r : Runner) : IO Unit := do
     (match step cfgParams { emptyState with peers := [(pa, peerRec [ta])], topics := [ta] }
         (.rpc pa (Pb.encodeMessage (rpcOfPublish [badMsg]))) with
      | .ok (s', acts) => delivers badMsg acts = 0 && publishCount acts = 0 &&
-         invalidCount s' pa ta = 1
+         invalidCount s' pa ta = Score.counterUnit
      | _ => false)
 
   -- A repeated id inside one event is delivered once.
@@ -322,6 +322,32 @@ def run (r : Runner) : IO Unit := do
         (.tick 1000 []) with
      | .ok (s', acts) => meshIs s' ta [pc, pd] && pruneCount ta acts = 2
      | _ => false)
+
+  -- The decay cadence. The scores decay once per `decayInterval`, at the first heartbeat at
+  -- or after each boundary, and not at every heartbeat. The peer `pa` holds one behavior
+  -- penalty event, 1000 units, and each decay halves it. Each answer is the penalty and the
+  -- new `lastDecay`.
+  let decayParams : Params :=
+    { baseParams with
+      heartbeatInterval := 700
+      score := { baseParams.score with
+        global := { baseParams.score.global with
+          behaviourPenaltyDecay := 500, decayInterval := 12000 } } }
+  let penalized : State :=
+    { known with peers := [(pa, { peerRec [ta] with
+        score := { Score.PeerState.zero with behaviourPenalty := 1000 } })] }
+  let afterTick (s : State) (now : Nat) : Option (Nat × Nat) :=
+    match step decayParams s (.tick now []) with
+    | .ok (s', _) => (peerOf s' pa).map fun pd => (pd.score.behaviourPenalty, s'.lastDecay)
+    | _ => none
+  r.check "core.decay.waits-for-interval" (afterTick penalized 700 == some (1000, 0))
+  r.check "core.decay.at-interval"
+    (afterTick { penalized with lastHeartbeat := 11300 } 12000 == some (500, 12000))
+  -- A late heartbeat after two boundaries decays once, and `lastDecay` takes the last
+  -- boundary, 36000, so the period keeps its phase.
+  r.check "core.decay.once-after-missed-intervals"
+    (afterTick { penalized with lastHeartbeat := 35800, lastDecay := 12000 } 36500 ==
+      some (500, 36000))
 
   -- Gossip stays away from a peer below the gossip threshold.
   r.check "core.gossip.threshold"

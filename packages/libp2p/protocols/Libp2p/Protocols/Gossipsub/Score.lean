@@ -25,12 +25,21 @@ The spec computes with float64. This module computes with integers, in `scoreSca
 (`Gossipsub/Types.lean`). One convention applies to every product:
 
 - Every weight is an `Int` in `1/scoreScale` units. A weight of 3 means 0.003.
-- The `P1` to `P4`, `P6`, and `P7` values are `Nat` counts.
-- A weight times a count is an exact `Int` product.
-- The one rounded product is the topic contribution:
-  `(topicWeight * topicScore) tdiv scoreScale`. `Int.tdiv` truncates toward zero. This is the
-  single rounding site.
+- The five decaying counters (`P2`, `P3`, `P3b`, `P4`, and the behavior penalty of `P7`) count
+  thousandths of an event: `counterUnit` per event. An event adds `counterUnit`. The caps, the
+  `P3` threshold, `behaviourPenaltyThreshold`, and `decayToZero` use the same unit, so a
+  fractional threshold such as 0.685 events is 685. The `P1` and `P6` values are plain counts.
+- A squared term (`P3`, `P4`, `P7`) divides its square by `counterUnit` once, with `Nat`
+  division, which floors. Its value is then in counter units too.
+- The topic score is in `1/scoreScale` weight units times counter units. `P1` is multiplied by
+  `counterUnit` to match. The topic contribution is
+  `(topicWeight * topicScore) tdiv (scoreScale * counterUnit)`. The `P7` term is
+  `(weight * P7) tdiv counterUnit`. `Int.tdiv` truncates toward zero.
 - The decay divides with `Nat` division, `counter * decay / scoreScale`, which floors.
+
+For a whole number of events every division above is exact, and the score equals the score of
+plain counts. Thousandths keep a counter that decays below one event. With plain counts, a
+decay of 0.993 takes a count of 1 to 0 in one step, and a threshold of 0.685 rounds away.
 
 Lean 4.34 defines `/` on `Int` as Euclidean division. For a negative numerator, `/ scoreScale`
 rounds down by one unit at the boundary, and `Int.tdiv scoreScale` truncates toward zero. This
@@ -109,15 +118,15 @@ structure TopicParams where
   firstMessageDeliveriesWeight : Int
   /-- The decay factor of the `P2` counter. -/
   firstMessageDeliveriesDecay : Nat
-  /-- The maximum of the `P2` counter. The cap applies at increment time. -/
+  /-- The maximum of the `P2` counter, in counter units. The cap applies at increment time. -/
   firstMessageDeliveriesCap : Nat
   /-- The weight of `P3`, the mesh message delivery rate. -/
   meshMessageDeliveriesWeight : Int
   /-- The decay factor of the `P3` counter. -/
   meshMessageDeliveriesDecay : Nat
-  /-- The delivery count below which `P3` penalizes the peer. -/
+  /-- The delivery count below which `P3` penalizes the peer, in counter units. -/
   meshMessageDeliveriesThreshold : Nat
-  /-- The maximum of the `P3` counter. The cap applies at increment time. -/
+  /-- The maximum of the `P3` counter, in counter units. The cap applies at increment time. -/
   meshMessageDeliveriesCap : Nat
   /-- The mesh time a peer needs before `P3` applies. -/
   meshMessageDeliveriesActivation : Millis
@@ -133,7 +142,7 @@ structure TopicParams where
   invalidMessageDeliveriesDecay : Nat
 
 /-- The global score parameters of gossipsub v1.1. The field order follows the global parameter
-table of the spec. `decayInterval` feeds the core's heartbeat; `score` does not read it.
+table of the spec. `decayInterval` sets when the core decays; `score` does not read it.
 
 The vendored spec gives `P7` as the square of a counter with no threshold
 (`gossipsub-v1.1.md`, "The Score Function"). The global parameter table names only
@@ -148,13 +157,13 @@ structure GlobalParams where
   ipColocationFactorThreshold : Nat
   /-- The weight of `P7`, the behavior penalty. -/
   behaviourPenaltyWeight : Int
-  /-- The behavior penalty count at or below which `P7` is zero. -/
+  /-- The behavior penalty count at or below which `P7` is zero, in counter units. -/
   behaviourPenaltyThreshold : Nat
   /-- The decay factor of the behavior penalty counter. -/
   behaviourPenaltyDecay : Nat
-  /-- The decay period of the router's heartbeat. -/
+  /-- The time between two decays. The core decays at the first heartbeat of each interval. -/
   decayInterval : Millis
-  /-- The counter limit below which a decayed counter becomes zero. -/
+  /-- The counter limit below which a decayed counter becomes zero, in counter units. -/
   decayToZero : Nat
   /-- The cap of the summed topic part. A cap of 0 or less means no cap. -/
   topicScoreCap : Int
@@ -279,6 +288,10 @@ theorem GlobalParams.validB_iff (g : GlobalParams) :
 
 /-! ## Peer state -/
 
+/-- The counter units per event: the decaying counters count thousandths of an event (the
+module doc, "Fixed point"). -/
+def counterUnit : Nat := 1000
+
 /-- The counters of one peer in one topic. `graftTime` holds the start of the current mesh
 period, and `elapsed` reads it while `inMesh` is true. -/
 structure TopicCounters where
@@ -286,13 +299,13 @@ structure TopicCounters where
   graftTime : Millis
   /-- Whether the peer is in the mesh of the topic. -/
   inMesh : Bool
-  /-- The first message deliveries, capped at increment time. -/
+  /-- The first message deliveries in counter units, capped at increment time. -/
   firstMessageDeliveries : Nat
-  /-- The mesh message deliveries, capped at increment time. -/
+  /-- The mesh message deliveries in counter units, capped at increment time. -/
   meshMessageDeliveries : Nat
-  /-- The mesh message delivery failures. -/
+  /-- The mesh message delivery failures in counter units. -/
   meshFailurePenalty : Nat
-  /-- The invalid message deliveries. -/
+  /-- The invalid message deliveries in counter units. -/
   invalidMessageDeliveries : Nat
 
 /-- The all-zero counters of a peer that has no history in a topic. -/
@@ -312,7 +325,7 @@ structure PeerState where
   appScore : Int
   /-- The IP colocation count `P6`. -/
   ipColocation : Nat
-  /-- The behavior penalty counter `P7`. -/
+  /-- The behavior penalty counter `P7`, in counter units. -/
   behaviourPenalty : Nat
 
 /-- The state of a fresh peer: no topic history, no application score, no colocation, and no
@@ -335,19 +348,22 @@ def elapsed (now : Millis) (t : TopicCounters) : Millis :=
 def p1 (tp : TopicParams) (now : Millis) (t : TopicCounters) : Nat :=
   min (elapsed now t / tp.timeInMeshQuantum) tp.timeInMeshCap
 
+/-- The square of a deficit in counter units, back in counter units: it divides by
+`counterUnit` once. -/
+def squareUnits (x : Nat) : Nat := x * x / counterUnit
+
 /-- `P3`, the mesh message delivery rate: the square of the delivery deficit below the
 threshold, when the activation window has passed. Both comparisons are strict, so equality with
 either bound gives 0. -/
 def p3 (tp : TopicParams) (now : Millis) (t : TopicCounters) : Nat :=
   if tp.meshMessageDeliveriesActivation < elapsed now t ∧
       t.meshMessageDeliveries < tp.meshMessageDeliveriesThreshold then
-    (tp.meshMessageDeliveriesThreshold - t.meshMessageDeliveries) *
-      (tp.meshMessageDeliveriesThreshold - t.meshMessageDeliveries)
+    squareUnits (tp.meshMessageDeliveriesThreshold - t.meshMessageDeliveries)
   else 0
 
 /-- `P4`, the invalid message deliveries: the square of the counter, uncapped. -/
 def p4 (t : TopicCounters) : Nat :=
-  t.invalidMessageDeliveries * t.invalidMessageDeliveries
+  squareUnits t.invalidMessageDeliveries
 
 /-- `P6`, the IP colocation factor: the square of the surplus over the threshold. -/
 def p6 (g : GlobalParams) (s : PeerState) : Nat :=
@@ -356,30 +372,31 @@ def p6 (g : GlobalParams) (s : PeerState) : Nat :=
       (s.ipColocation - g.ipColocationFactorThreshold)
   else 0
 
-/-- `P7`, the behavior penalty: the square of the excess over the threshold. -/
+/-- `P7`, the behavior penalty: the square of the excess over the threshold, in counter
+units. -/
 def p7 (g : GlobalParams) (s : PeerState) : Nat :=
   if g.behaviourPenaltyThreshold < s.behaviourPenalty then
-    (s.behaviourPenalty - g.behaviourPenaltyThreshold) *
-      (s.behaviourPenalty - g.behaviourPenaltyThreshold)
+    squareUnits (s.behaviourPenalty - g.behaviourPenaltyThreshold)
   else 0
 
-/-- The per-topic score: the weighted sum of the five terms, in `1/scoreScale` weight units.
-The `P2` and `P3b` caps apply at increment time, so this function reads the counters as they
-stand. -/
+/-- The per-topic score: the weighted sum of the five terms, in `1/scoreScale` weight units
+times counter units. `P1` counts quanta, so it is multiplied by `counterUnit`. The `P2` and
+`P3b` caps apply at increment time, so this function reads the counters as they stand. -/
 def topicScore (tp : TopicParams) (now : Millis) (t : TopicCounters) : Int :=
-  tp.timeInMeshWeight * (p1 tp now t : Int)
+  tp.timeInMeshWeight * ((p1 tp now t * counterUnit : Nat) : Int)
   + tp.firstMessageDeliveriesWeight * (t.firstMessageDeliveries : Int)
   + tp.meshMessageDeliveriesWeight * (p3 tp now t : Int)
   + tp.meshFailurePenaltyWeight * (t.meshFailurePenalty : Int)
   + tp.invalidMessageDeliveriesWeight * (p4 t : Int)
 
 /-- The contribution of one topic entry. An unconfigured topic contributes 0. A configured
-topic contributes `(topicWeight * topicScore) tdiv scoreScale`; this is the one rounding site of
-the module. -/
+topic contributes `(topicWeight * topicScore) tdiv (scoreScale * counterUnit)`, which takes the
+weights and the counter units out together. -/
 private def topicContribution (p : Params) (now : Millis)
     (entry : TopicId × TopicCounters) : Int :=
   match p.topics entry.1 with
-  | some tp => (tp.topicWeight * topicScore tp now entry.2).tdiv scoreScale
+  | some tp =>
+      (tp.topicWeight * topicScore tp now entry.2).tdiv (scoreScale * counterUnit : Nat)
   | none => 0
 
 /-- The sum of the topic contributions, before the cap. -/
@@ -395,12 +412,13 @@ def topicPart (p : Params) (now : Millis) (s : PeerState) : Int :=
   else raw
 
 /-- The peer score of gossipsub v1.1: the capped topic part, the weighted application score, and
-the weighted `P6` and `P7` terms. The last three products are exact. -/
+the weighted `P6` and `P7` terms. The `P5` and `P6` products are exact. The `P7` product divides
+by `counterUnit` (the module doc, "Fixed point"). -/
 def score (p : Params) (s : PeerState) (now : Millis) : Score :=
   topicPart p now s
   + p.global.appSpecificWeight * s.appScore
   + p.global.ipColocationFactorWeight * (p6 p.global s : Int)
-  + p.global.behaviourPenaltyWeight * (p7 p.global s : Int)
+  + (p.global.behaviourPenaltyWeight * (p7 p.global s : Int)).tdiv counterUnit
 
 /-! ## Decay -/
 
@@ -487,8 +505,7 @@ private def pruneCounters (p : Params) (now : Millis) (id : TopicId)
       if tp.meshMessageDeliveriesActivation < e ∧
           t.meshMessageDeliveries < tp.meshMessageDeliveriesThreshold then
         { t1 with meshFailurePenalty := t.meshFailurePenalty +
-            (tp.meshMessageDeliveriesThreshold - t.meshMessageDeliveries) *
-              (tp.meshMessageDeliveriesThreshold - t.meshMessageDeliveries) }
+            squareUnits (tp.meshMessageDeliveriesThreshold - t.meshMessageDeliveries) }
       else t1
   | none => t1
 
@@ -498,31 +515,31 @@ def prune (p : Params) (s : PeerState) (now : Millis) (id : TopicId) : PeerState
   let t := countersOf s id
   if t.inMesh then setCounters s id (pruneCounters p now id t) else s
 
-/-- The first message delivery update: increment the counter and cap it. An unconfigured topic
-is unchanged. -/
+/-- The first message delivery update: add one event to the counter and cap it. An
+unconfigured topic is unchanged. -/
 def firstDelivery (p : Params) (s : PeerState) (id : TopicId) : PeerState :=
   match p.topics id with
   | some tp =>
       let t := countersOf s id
       setCounters s id { t with
         firstMessageDeliveries :=
-          min (t.firstMessageDeliveries + 1) tp.firstMessageDeliveriesCap }
+          min (t.firstMessageDeliveries + counterUnit) tp.firstMessageDeliveriesCap }
   | none => s
 
-/-- The mesh message delivery update: increment the counter and cap it. An unconfigured topic
-is unchanged. -/
+/-- The mesh message delivery update: add one event to the counter and cap it. An unconfigured
+topic is unchanged. -/
 def meshDelivery (p : Params) (s : PeerState) (id : TopicId) : PeerState :=
   match p.topics id with
   | some tp =>
       let t := countersOf s id
       setCounters s id { t with
         meshMessageDeliveries :=
-          min (t.meshMessageDeliveries + 1) tp.meshMessageDeliveriesCap }
+          min (t.meshMessageDeliveries + counterUnit) tp.meshMessageDeliveriesCap }
   | none => s
 
-/-- The counter part of an invalid delivery: increment the uncapped `P4` counter. -/
+/-- The counter part of an invalid delivery: add one event to the uncapped `P4` counter. -/
 private def invalidStep (t : TopicCounters) : TopicCounters :=
-  { t with invalidMessageDeliveries := t.invalidMessageDeliveries + 1 }
+  { t with invalidMessageDeliveries := t.invalidMessageDeliveries + counterUnit }
 
 /-- The invalid message delivery update: increment the uncapped `P4` counter. An unconfigured
 topic is unchanged. -/
@@ -531,10 +548,10 @@ def invalidDelivery (p : Params) (s : PeerState) (id : TopicId) : PeerState :=
   | some _ => setCounters s id (invalidStep (countersOf s id))
   | none => s
 
-/-- The behavior penalty update: increment the `P7` counter. It is uncapped, and the decay
-reduces it later. -/
+/-- The behavior penalty update: add one event to the `P7` counter. It is uncapped, and the
+decay reduces it later. -/
 def behaviourPenalty (s : PeerState) : PeerState :=
-  { s with behaviourPenalty := s.behaviourPenalty + 1 }
+  { s with behaviourPenalty := s.behaviourPenalty + counterUnit }
 
 /-! ## Table lemmas -/
 
@@ -806,7 +823,7 @@ theorem firstDelivery_le_cap {p : Params} {s : PeerState} {id : TopicId} {tp : T
     (hcfg : p.topics id = some tp) :
     (countersOf (firstDelivery p s id) id).firstMessageDeliveries ≤
       tp.firstMessageDeliveriesCap := by
-  have h : min ((countersOf s id).firstMessageDeliveries + 1)
+  have h : min ((countersOf s id).firstMessageDeliveries + counterUnit)
       tp.firstMessageDeliveriesCap ≤ tp.firstMessageDeliveriesCap :=
     Nat.min_le_right _ _
   simpa [firstDelivery, hcfg, setCounters, countersOf, lookupCounters_upsert_same] using h
@@ -817,7 +834,7 @@ theorem meshDelivery_le_cap {p : Params} {s : PeerState} {id : TopicId} {tp : To
     (hcfg : p.topics id = some tp) :
     (countersOf (meshDelivery p s id) id).meshMessageDeliveries ≤
       tp.meshMessageDeliveriesCap := by
-  have h : min ((countersOf s id).meshMessageDeliveries + 1)
+  have h : min ((countersOf s id).meshMessageDeliveries + counterUnit)
       tp.meshMessageDeliveriesCap ≤ tp.meshMessageDeliveriesCap :=
     Nat.min_le_right _ _
   simpa [meshDelivery, hcfg, setCounters, countersOf, lookupCounters_upsert_same] using h
@@ -832,10 +849,12 @@ private theorem p1_invalidStep (tp : TopicParams) (now : Millis) (t : TopicCount
 private theorem p3_invalidStep (tp : TopicParams) (now : Millis) (t : TopicCounters) :
     p3 tp now (invalidStep t) = p3 tp now t := rfl
 
-/-- The `P4` square does not fall when the counter grows. -/
+/-- The `P4` square does not fall when the counter grows. The floor division by `counterUnit`
+keeps the order of the squares. -/
 private theorem p4_invalidStep_mono (t : TopicCounters) :
-    p4 t ≤ p4 (invalidStep t) :=
-  Nat.mul_le_mul (Nat.le_succ _) (Nat.le_succ _)
+    p4 t ≤ p4 (invalidStep t) := by
+  unfold p4 squareUnits invalidStep
+  exact Nat.div_le_div_right (Nat.mul_le_mul (Nat.le_add_right _ _) (Nat.le_add_right _ _))
 
 /-- One invalid delivery does not raise the topic score, when the `P4` weight is at or below
 0. -/
@@ -865,7 +884,7 @@ private theorem topicContribution_invalidStep_le (p : Params) (now : Millis)
       tp.topicWeight * topicScore tp now t :=
     Int.mul_le_mul_of_nonneg_left hts hW
   have hdiv := Int.tdiv_le_tdiv
-    (by decide : (0 : Int) < (scoreScale : Int)) hmul
+    (by decide : (0 : Int) < ((scoreScale * counterUnit : Nat) : Int)) hmul
   simpa [topicContribution, htp] using hdiv
 
 /-- The contribution of a fresh counters value after one invalid delivery is at or below 0,
@@ -874,15 +893,18 @@ private theorem topicContribution_invalidStep_zero_nonpos (p : Params) (now : Mi
     (id : TopicId) {tp : TopicParams} (htp : p.topics id = some tp)
     (hW : 0 ≤ tp.topicWeight) (hw : tp.invalidMessageDeliveriesWeight ≤ 0) :
     topicContribution p now (id, invalidStep TopicCounters.zero) ≤ 0 := by
+  -- One event is `counterUnit` units, and its square divided by `counterUnit` is one event.
   have hts : topicScore tp now (invalidStep TopicCounters.zero) =
-      tp.invalidMessageDeliveriesWeight := by
-    simp [topicScore, p1, p3, p4, elapsed, invalidStep, TopicCounters.zero]
-  have hmul : tp.topicWeight * tp.invalidMessageDeliveriesWeight ≤ 0 :=
-    Int.mul_nonpos_of_nonneg_of_nonpos hW hw
-  have hdiv : (tp.topicWeight * tp.invalidMessageDeliveriesWeight).tdiv
-      (scoreScale : Int) ≤ 0 := by
-    have h0 : (0 : Int).tdiv (scoreScale : Int) = 0 := by decide
-    have := Int.tdiv_le_tdiv (by decide : (0 : Int) < (scoreScale : Int)) hmul
+      tp.invalidMessageDeliveriesWeight * (counterUnit : Int) := by
+    simp [topicScore, p1, p3, p4, squareUnits, elapsed, invalidStep, TopicCounters.zero,
+      counterUnit]
+  have hmul : tp.topicWeight * (tp.invalidMessageDeliveriesWeight * (counterUnit : Int)) ≤ 0 :=
+    Int.mul_nonpos_of_nonneg_of_nonpos hW
+      (Int.mul_nonpos_of_nonpos_of_nonneg hw (Int.natCast_nonneg _))
+  have hdiv : (tp.topicWeight * (tp.invalidMessageDeliveriesWeight * (counterUnit : Int))).tdiv
+      ((scoreScale * counterUnit : Nat) : Int) ≤ 0 := by
+    have h0 : (0 : Int).tdiv ((scoreScale * counterUnit : Nat) : Int) = 0 := by decide
+    have := Int.tdiv_le_tdiv (by decide : (0 : Int) < ((scoreScale * counterUnit : Nat) : Int)) hmul
     omega
   simpa [topicContribution, htp, hts] using hdiv
 
@@ -986,8 +1008,8 @@ theorem freshPeer_scores_zero (p : Params) (now : Millis) :
 /-! ## Prune -/
 
 /-- A prune with an active delivery deficit adds the square of the deficit to the failure
-penalty. The peer is in the mesh, the topic is configured, the activation window has passed,
-and the delivery count is below the threshold. -/
+penalty, in counter units (`squareUnits`). The peer is in the mesh, the topic is configured, the
+activation window has passed, and the delivery count is below the threshold. -/
 theorem prune_adds_deficit {p : Params} {s : PeerState} {now : Millis} {id : TopicId}
     {tp : TopicParams} {t : TopicCounters}
     (hcfg : p.topics id = some tp) (ht : countersOf s id = t) (hin : t.inMesh)
@@ -995,8 +1017,7 @@ theorem prune_adds_deficit {p : Params} {s : PeerState} {now : Millis} {id : Top
     (hdef : t.meshMessageDeliveries < tp.meshMessageDeliveriesThreshold) :
     (countersOf (prune p s now id) id).meshFailurePenalty =
       t.meshFailurePenalty +
-        (tp.meshMessageDeliveriesThreshold - t.meshMessageDeliveries) *
-          (tp.meshMessageDeliveriesThreshold - t.meshMessageDeliveries) := by
+        squareUnits (tp.meshMessageDeliveriesThreshold - t.meshMessageDeliveries) := by
   have hprune : prune p s now id = setCounters s id (pruneCounters p now id t) := by
     simp [prune, ht, hin]
   rw [hprune]
