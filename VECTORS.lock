@@ -217,8 +217,8 @@ dir = "vendor/lighthouse"
 repo = "https://github.com/sigp/lighthouse"
 commit = "bee5677194e3cc528fd22a49415330dc7adbe723"
 branch = "unstable"
-paths = ["/beacon_node/lighthouse_network/src/rpc/codec.rs", "/beacon_node/lighthouse_network/src/rpc/methods.rs", "/LICENSE"]
-used-for = "the req/resp decisions: the frame decoder, the length handling, and the error payload of every non-zero result (W6.3)"
+paths = ["/beacon_node/lighthouse_network/src/rpc/codec.rs", "/beacon_node/lighthouse_network/src/rpc/methods.rs", "/beacon_node/lighthouse_network/src/rpc/handler.rs", "/beacon_node/lighthouse_network/src/rpc/protocol.rs", "/beacon_node/lighthouse_network/src/peer_manager/mod.rs", "/LICENSE"]
+used-for = "the req/resp decisions: the frame decoder, the length handling, and the error payload of every non-zero result (W6.3); handler.rs, protocol.rs, peer_manager/mod.rs: the close at the end of a response and the score of a failed close"
 
 [[vendor]]
 dir = "vendor/prysm"

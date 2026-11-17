@@ -18,7 +18,8 @@ interaction"). The stream arrives negotiated, so the shell works on any
   side ("The requester MUST close the write side"), and reads chunks
   until the core is done: the peer closed, an error chunk came, or
   `maxChunks` chunks came. Each chunk goes to `deliver` as it finishes,
-  so a long response never sits in memory whole.
+  so a long response never sits in memory whole. After the last
+  expected chunk, it waits for the responder's close (`closedClean`).
 * `serve` is the responder. It reads the request to the end of the
   stream, answers a malformed one with an `InvalidRequest` chunk ("If
   steps (1), (2), or (3) fail ... the responder MUST respond in
@@ -46,6 +47,19 @@ and the call joins the set after the race (PRINCIPLES 3.2). The reset
 resolves the parked `read`, which answers `.error .reset`, and the read
 loop ends on it.
 
+## The end of a response
+
+The responder closes its write side right after its last chunk
+("Responding side", step 5). A requester that reset the stream at its
+last chunk could land the reset first, and the responder's close then
+fails. Lighthouse reports that failure as an `IoError`, and its peer
+manager scores it against the requester (the package ARCHITECTURE,
+"Decisions"). So after the last expected chunk the requester reads on,
+under a second deadline of `timeoutMs`. The responder's close ends the
+exchange with no reset. A byte after the last chunk, or the expiry,
+resets the stream. The chunks are delivered already, so the answer stays
+`.ok` on every one of these paths.
+
 ## The read loop
 
 `pump` is `partial`: a peer may keep sending forever, and the bound is
@@ -71,12 +85,15 @@ def deliverAll (deliver : Chunk → Async Unit) : List Core.Action → Async Uni
   | .finished :: rest => deliverAll deliver rest
 
 /-- Read the stream into the core until it is done or the stream ends.
-The answer says whether the end of the stream came. Park: `s.read`,
-which the peer's close, a reset, or the session's end wakes. -/
+The answer is `none` when the end of the stream came, and the core's
+last state when the requester stopped at its last chunk: bytes that
+arrived in the same read as that chunk stay in the core's buffer. Park:
+`s.read`, which the peer's close, a reset, or the session's end
+wakes. -/
 partial def pump (s : Streams.Stream) (st : Core.State) (deliver : Chunk → Async Unit) :
-    Async (Except Error Bool) := do
+    Async (Except Error (Option Core.State)) := do
   -- The requester stops at its last chunk; the responder waits for the end.
-  if st.done ∧ st.config.side = .response then return .ok false
+  if st.done ∧ st.config.side = .response then return .ok (some st)
   match ← s.read with
   | .error e => return .error (.stream e)
   | .ok none =>
@@ -84,7 +101,7 @@ partial def pump (s : Streams.Stream) (st : Core.State) (deliver : Chunk → Asy
     | .error e => return .error e
     | .ok (_, acts) =>
       deliverAll deliver acts
-      return .ok true
+      return .ok none
   | .ok (some b) =>
     match Core.step st (.bytes b) with
     | .error e => return .error e
@@ -112,23 +129,42 @@ def Method.responseConfig (m : Method) : Core.Config :=
 def Method.requestConfig (m : Method) : Core.Config :=
   ⟨.request, m.request.getD ⟨0, 0⟩, 0, 1⟩
 
+/-- After the last expected chunk: true when the responder's close comes
+with no byte before it. A byte that the core still holds, or one that
+arrives, follows the last chunk the requester asked for, and the
+answer is false. Park: `s.read`, which the peer's close, a reset, or
+the session's end wakes. -/
+def closedClean (s : Streams.Stream) (st : Core.State) : Async Bool := do
+  if st.buf.size ≠ 0 then return false
+  match ← s.read with
+  | .ok none => return true
+  | _ => return false
+
 /-- Send one request on `s` and hand each response chunk to `deliver`.
 The stream is negotiated for `m.id`. A protocol error resets the stream
-("they SHOULD reset the stream immediately"), and so does a stop before
-the peer's end, since the rest of the response is no longer relevant. -/
+("they SHOULD reset the stream immediately"). After the last expected
+chunk, the call waits for the responder's close under a second deadline
+of `timeoutMs`, and it resets the stream on a byte after that chunk or
+at the expiry (the module doc, "The end of a response"). -/
 def request (s : Streams.Stream) (m : Method) (clock : Conc.Clock) (timeoutMs : Nat)
     (payload : Option ByteArray) (deliver : Chunk → Async Unit) : Async (Except Error Unit) := do
   match encodeRequestB m payload with
   | .error e => return .error e
   | .ok bytes =>
-    let work : Async (Except Error Bool) := do
+    let work : Async (Except Error (Option Core.State)) := do
       if 0 < bytes.size then
         if let .error e ← s.write bytes then return .error (.stream e)
       s.close
       pump s (Core.init m.responseConfig) deliver
     match ← underDeadline s clock timeoutMs work with
-    | .ok true => return .ok ()
-    | .ok false => s.reset; return .ok ()
+    | .ok none => return .ok ()
+    | .ok (some st) =>
+      match ← underDeadline s clock timeoutMs (.ok <$> closedClean s st) with
+      | .ok true => pure ()
+      -- The expiry reset the stream already (`underDeadline`).
+      | .error .timeout => pure ()
+      | _ => s.reset
+      return .ok ()
     | .error e => s.reset; return .error e
 
 /-- The host's call that opens a stream to one peer and negotiates one
@@ -189,7 +225,9 @@ method with no request content) and gives the chunks to send. -/
 def serve (s : Streams.Stream) (m : Method) (clock : Conc.Clock) (timeoutMs : Nat)
     (respond : Option ByteArray → Async (List Chunk)) : Async (Except Error Unit) := do
   let got ← Conc.OnceRef.new (none : Option ByteArray)
-  let read : Async (Except Error Bool) :=
+  -- The responder reads to the end of the stream, so the answer is
+  -- `none` here: only the requester stops at its last chunk.
+  let read : Async (Except Error (Option Core.State)) :=
     pump s (Core.init m.requestConfig m.request.isSome) fun c => got.set (some c.payload)
   match ← underDeadline s clock timeoutMs read with
   | .error (.stream e) => return .error (.stream e)
