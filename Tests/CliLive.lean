@@ -10,6 +10,8 @@ import Libp2p.Host
 import Libp2p.Negotiate
 import Libp2p.Protocols.Ping
 import Libp2p.Protocols.Identify
+import Interop
+import GossipsubSession
 import Tests.Cli
 import Tests.Support
 
@@ -612,6 +614,104 @@ private def dialNoEcho (runner : Runner) : IO Unit := do
   fault ← closeHost host fault
   if let some e := fault then throw e
 
+/-- Dial a host that serves `handlers` on loopback, run `act` on the
+client host and the server's peer id, and close both hosts. -/
+private def withLoopback (handlers : List Libp2p.Core.StreamHandler)
+    (act : Host → PeerId → IO Unit) : IO Unit := do
+  let server ← hosted handlers
+  let client ← clientHost
+  let mut fault : Option IO.Error := none
+  try
+    let loop ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/0" with
+      | .ok addr => pure addr
+      | .error e => throw <| IO.userError (reprStr e)
+    let bound ← match ← Conc.Async.run (server.startListening loop) with
+      | .error e => throw <| IO.userError e.render
+      | .ok bound => pure bound
+    match ← Conc.Async.run (client.dial bound (some server.localPeer)) with
+    | .error e => throw <| IO.userError s!"dial: {e.render}"
+    | .ok _ => pure ()
+    act client server.localPeer
+  catch e =>
+    fault := some e
+  fault ← closeHost client fault
+  fault ← closeHost server fault
+  if let some e := fault then throw e
+
+/-- The transport-interop dialer's ping against a peer that reads the
+payload and never echoes: the deadline ends it, where the bare ping
+would park until the runner killed the run. -/
+private def interopPingNoEcho (runner : Runner) : IO Unit := do
+  withLoopback [silentPing] fun client peer => do
+    let payload ← match ← (Crypto.randomBytes Libp2p.Protocols.Ping.payloadSize).run with
+      | .error e => throw <| IO.userError (reprStr e)
+      | .ok payload => pure payload
+    let stream ← match ← Conc.Async.run (client.newStream peer [Libp2p.Protocols.Ping.protocolId]) with
+      | .error e => throw <| IO.userError s!"ping stream: {e.render}"
+      | .ok (_, stream) => pure stream
+    let tc ← Conc.TestClock.new
+    let answer ← Conc.Async.run do
+      let owner ← Conc.TaskSet.new
+      let got : Conc.OnceRef (Option (Option (Except Libp2p.Protocols.Ping.Error (Option Nat)))) ←
+        Conc.OnceRef.new none
+      owner.spawn do got.set (some (← Interop.pingWithin tc.clock 500 stream payload))
+      runner.check "interop ping no echo: the deadline arms" (← tc.nextTimer)
+      tc.advance 500
+      owner.joinAll
+      got.get
+    runner.check "interop ping no echo: the deadline ends the ping"
+      (match answer with | some none => true | _ => false)
+    tc.close
+
+/-- The gossipsub participant's identify answer names the addresses the
+session starts with, before any listen, and nothing else. -/
+private def gossipsubIdentifyAddrs (runner : Runner) : IO Unit := do
+  let seed ← match ← Crypto.ed25519Generate.run with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok seed => pure seed
+  let key ← match PrivKey.ofData? .ed25519 seed.bytes with
+    | .error e => throw <| IO.userError (reprStr e)
+    | .ok key => pure key
+  let named ← match Multiformats.Multiaddr.parse? "/ip4/10.0.0.7/tcp/9000" with
+    | .ok addr => pure addr
+    | .error e => throw <| IO.userError (reprStr e)
+  let running ← match ← Cli.GossipsubSession.start key [named] with
+    | .error e => throw <| IO.userError e
+    | .ok running => pure running
+  let client ← clientHost
+  let mut fault : Option IO.Error := none
+  try
+    let loop ← match Multiformats.Multiaddr.parse? "/ip4/127.0.0.1/tcp/0" with
+      | .ok addr => pure addr
+      | .error e => throw <| IO.userError (reprStr e)
+    let bound ← match ← Conc.Async.run (running.host.startListening loop) with
+      | .error e => throw <| IO.userError e.render
+      | .ok bound => pure bound
+    let peer := running.host.localPeer
+    match ← Conc.Async.run (client.dial bound (some peer)) with
+    | .error e => throw <| IO.userError s!"dial: {e.render}"
+    | .ok _ => pure ()
+    match ← Conc.Async.run (client.newStream peer [Libp2p.Protocols.Identify.protocolId]) with
+    | .error e => throw <| IO.userError s!"identify stream: {e.render}"
+    | .ok (_, stream) =>
+      match ← Conc.Async.run (Libp2p.Protocols.Identify.client stream Conc.Clock.system
+          Streams.unauthDeadlineMs (some peer)) with
+      | .ok (some (msg, _)) =>
+        Conc.Async.run stream.close
+        runner.check "gossipsub identify: the answer names the session's address"
+          (msg.listenAddrs == [named.toBytes])
+      | _ =>
+        Conc.Async.run stream.reset
+        runner.check "gossipsub identify: the answer names the session's address" false
+  catch e =>
+    fault := some e
+  fault ← closeHost client fault
+  try
+    Conc.Async.run (Cli.GossipsubSession.stop running)
+  catch e =>
+    if fault.isNone then fault := some e
+  if let some e := fault then throw e
+
 /-- The text between `head` and `tail`, when both ends match. -/
 private def between (text head tail : String) : Option String :=
   if text.startsWith head && text.endsWith tail then
@@ -695,6 +795,10 @@ def run (runner : Runner) : IO Unit := do
   dialMismatch runner
   dialStall runner
   dialNoEcho runner
+  runner.section "transport-interop dialer" "packages/cli/Interop.lean"
+  interopPingNoEcho runner
+  runner.section "gossipsub participant" "packages/cli/GossipsubSession.lean"
+  gossipsubIdentifyAddrs runner
   runner.section "demo" "packages/cli/Demo.lean"
   demoOk runner
   demoClosedStdout runner

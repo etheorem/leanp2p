@@ -84,7 +84,8 @@ work.
   its defaults, so the matrix skips those cells, and
   `scripts/mplex-interop.sh` covers `Mux.mplex`. The listener publishes its dialable
   multiaddr with the `/p2p/<id>` suffix through Redis, and the dialer
-  fetches it, dials, pings once, and prints the timing JSON with the
+  fetches it, dials, pings once under the time left of
+  `test_timeout_seconds` (`Interop.pingWithin`), and prints the timing JSON with the
   test plan's keys verbatim, `handshakePlusOneRTTMillis` and
   `pingRTTMilllis`, typo included, because the runner compares the
   JSON keys literally. Diagnostics go to stderr, and
@@ -904,6 +905,24 @@ the same `headSha`. Two later body edits reran the license guard as
 - **The demo composition doubles as the composition documentation**
   (root §2: "shows, as running code, how to compose the stack"). A
   reader who wants to compose the stack reads `Demo.lean`.
+- **The transport-interop dialer pings under the test timeout.** A peer
+  that takes the ping stream and never echoes would hold the run until
+  the runner killed it, and the run would end with no message.
+  `Interop.pingWithin` runs the ping under the time left until the
+  run's deadline, and its expiry resets the stream, which wakes the
+  parked read. The check: "interop ping no echo: the deadline ends the
+  ping".
+- **The gossipsub participant's identify answer names its own
+  address.** The participant listens on `0.0.0.0`, which no peer can
+  dial. Its peers reach it at the address of its name in `/etc/hosts`,
+  the same file the participant reads to dial them. `Main.lean` builds
+  that address before the session starts, and
+  `GossipsubSession.start` installs identify with it, before the
+  listen. An answer installed after the listen would race the first
+  peer: a peer that asks first learns no served protocol, and
+  go-libp2p-pubsub then opens no gossipsub stream to it (the module
+  doc of `GossipsubSession.lean`). The check: "gossipsub identify: the
+  answer names the session's address".
 
 ## The stack
 
