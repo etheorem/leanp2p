@@ -327,11 +327,20 @@ the arithmetic (§6).
   have not yet been acknowledged", and implementations "SHOULD at most
   allow an ACK backlog of 256 streams" (the spec, lines 164 to 167). So
   at most 256 of our streams wait for the peer's ACK. A further open
-  waits in the state, in order, and an ACK lets it through. rust-yamux
-  waits the same way (`MAX_ACK_BACKLOG`,
+  waits in the state, in order. Two events let it through: an ACK, and
+  the end of one of our streams before its ACK, the peer's RST, its FIN
+  after ours, or our own reset (`onEntryEnd`). rust-yamux waits the
+  same way (`MAX_ACK_BACKLOG`,
   `vendor/rust-yamux/yamux/src/connection.rs`, line 499), and go-yamux
   blocks its opener on a semaphore of `AcceptBacklog` places (`synCh`,
   `vendor/go-yamux/session.go`, lines 84 to 86 and 205 to 212).
+  go-yamux returns the place of a stream that closes before its ACK
+  (`closeStream`, lines 905 to 918). rust-yamux wakes the waiting
+  opener on an ACK alone (`connection.rs`, lines 583 to 585). It counts
+  the backlog from its live streams at each poll (line 868), so any
+  later poll of its task lets the open through. The core has no such
+  poll, so it opens the waiting requests when the stream retires. The
+  check: "core: a stream that ends before its ACK frees its place".
 - **A close refuses the parked writes.** No data may follow a FIN, so
   `close` closes the stream's credit channel, and the writers parked on
   it wake with `closed`. go-yamux's `CloseWrite` wakes its parked

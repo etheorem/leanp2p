@@ -344,6 +344,27 @@ private def coreFlowChecks (r : Runner) : IO Unit := do
     (match feed client (opens ++ [bytesEvent (wf ackFlags 1)]) with
       | .ok (_, a) => a.contains (.opened backlogCap ⟨2 * backlogCap + 1, backlogCap⟩)
       | _ => false)
+  -- A stream of ours that ends before its ACK frees its place, and the
+  -- waiting open takes it (`onEntryEnd`). Stream 1 has no ACK in each
+  -- case, and the open waits behind it.
+  let freed : List Event → Bool := fun evs =>
+    match feed client (opens ++ evs) with
+    | .ok (s, a) => a.contains (.opened backlogCap ⟨2 * backlogCap + 1, backlogCap⟩) &&
+        s.streams.length == backlogCap && s.pendingOpens.isEmpty
+    | _ => false
+  r.check "core: a stream that ends before its ACK frees its place: the peer's RST"
+    (freed [bytesEvent (wf rstFlags 1)])
+  r.check "core: a stream that ends before its ACK frees its place: our reset"
+    (freed [.reset ⟨1, 0⟩])
+  r.check "core: a stream that ends before its ACK frees its place: our close after the peer's FIN"
+    (freed [bytesEvent (wf finFlags 1), .close ⟨1, 0⟩])
+  r.check "core: a stream that ends before its ACK frees its place: the peer's FIN on data after ours"
+    (freed [.close ⟨1, 0⟩, bytesEvent (df finFlags 1 (b "x"))])
+  r.check "core: a stream that stays live frees no place"
+    (match feed client (opens ++ [bytesEvent (wf finFlags 1)]) with
+      | .ok (s, a) => !a.contains (.opened backlogCap ⟨2 * backlogCap + 1, backlogCap⟩) &&
+          s.pendingOpens == [backlogCap]
+      | _ => false)
 
 private def coreCloseChecks (r : Runner) : IO Unit := do
   -- Half-close: our FIN ends our direction only, and the response after

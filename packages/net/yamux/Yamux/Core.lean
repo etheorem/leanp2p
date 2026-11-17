@@ -765,6 +765,25 @@ def onEntry (s : State) (p : Entry → Bool) (f : Entry → StreamState × Array
     let (st, acts) := f e
     (s.put e st, acts)
 
+/-- `onEntry` for an operation that can end the stream: the peer's FIN at
+the end of a payload, and our consume, close, and reset. A stream of
+ours that retires before its ACK frees a place in our ACK backlog, and
+the waiting opens take it, as an ACK lets them (`recvStream`). go-yamux
+gives the place back the same way, when the stream closes
+(`closeStream`, `vendor/go-yamux/session.go`, lines 905 to 918). With no
+retired stream, the waiting opens stay as they are, so an operation on
+a stale key changes nothing (`stepStale`). -/
+def onEntryEnd (s : State) (p : Entry → Bool) (f : Entry → StreamState × Array Action)
+    (missing : Array Action) : State × Array Action :=
+  match s.streams.find? p with
+  | none => (s, missing)
+  | some e =>
+    -- The pair stays whole: the invariant proofs split on the `if`
+    -- alone, with no match on the pair.
+    let r := f e
+    if r.1.live then (s.put e r.1, r.2)
+    else openPending (s.put e r.1) s.pendingOpens r.2
+
 /-- We go away: the go-away frame goes out, and from now on no stream
 opens on either side. The waiting opens are refused. -/
 def onGoAway (s : State) : State × Array Action :=
@@ -907,8 +926,10 @@ def recvStream (s : State) (h : Header) : Except ProtocolError (State × Array A
       | .error err => .error err
       | .ok (st, acts, rx) =>
         let s := { s.put e st with rx }
-        -- An ACK frees a place in our backlog for a waiting open.
-        if h.flags.ack then .ok (openPending s s.pendingOpens acts) else .ok (s, acts)
+        -- An ACK frees a place in our backlog for a waiting open, and so
+        -- does a stream that this frame retires, the peer's RST or its
+        -- FIN after ours (`onEntryEnd`).
+        if h.flags.ack || !st.live then .ok (openPending s s.pendingOpens acts) else .ok (s, acts)
 
 /-- A complete header: the frame by its type. -/
 def recvHeader (s : State) (h : Header) : Except ProtocolError (State × Array Action) :=
@@ -927,7 +948,7 @@ def recvChunk (s : State) (id : Nat) (chunk : ByteArray) (deliver : Bool) : Stat
 
 /-- The end of a data payload: a FIN on its frame applies now. -/
 def finishPayload (s : State) (id : Nat) (deliver fin : Bool) : State × Array Action :=
-  if deliver && fin then onEntry s (State.byId id) (fun e => Entry.finRemote e.id.val e.state) #[]
+  if deliver && fin then onEntryEnd s (State.byId id) (fun e => Entry.finRemote e.id.val e.state) #[]
   else (s, #[])
 
 /-- Walk the bytes `b` from `pos`, frame by frame. `fuel` bounds the
@@ -980,9 +1001,9 @@ def step (s : State) : Event → Except ProtocolError (State × List Action)
   | .openStream tag => let (s, a) := onOpen s tag; .ok (s, a.toList)
   | .write k tag p =>
     let (s, a) := onEntry s (State.byKey k) (·.write tag p) #[.refused tag .closed]; .ok (s, a.toList)
-  | .consumed k n => let (s, a) := onEntry s (State.byKey k) (·.consume n) #[]; .ok (s, a.toList)
-  | .close k => let (s, a) := onEntry s (State.byKey k) Entry.closeLocal #[]; .ok (s, a.toList)
-  | .reset k => let (s, a) := onEntry s (State.byKey k) Entry.resetLocal #[]; .ok (s, a.toList)
+  | .consumed k n => let (s, a) := onEntryEnd s (State.byKey k) (·.consume n) #[]; .ok (s, a.toList)
+  | .close k => let (s, a) := onEntryEnd s (State.byKey k) Entry.closeLocal #[]; .ok (s, a.toList)
+  | .reset k => let (s, a) := onEntryEnd s (State.byKey k) Entry.resetLocal #[]; .ok (s, a.toList)
   | .ping tag => let (s, a) := onPing s tag; let (s, a) := schedule s a; .ok (s, a.toList)
   | .goAway => let (s, a) := onGoAway s; .ok (s, a.toList)
 

@@ -378,6 +378,18 @@ private theorem stepsOnEntry (s : State) (p : Entry → Bool) (f : Entry → Str
   · exact Steps.refl s
   · next e he => exact stepsPut (List.mem_of_find?_eq_some he) _
 
+private theorem stepsOnEntryEnd (s : State) (p : Entry → Bool)
+    (f : Entry → StreamState × Array Action) (missing : Array Action) :
+    Steps s (onEntryEnd s p f missing).1 := by
+  unfold onEntryEnd
+  split
+  · exact Steps.refl s
+  · next e he =>
+    dsimp only
+    split
+    · exact stepsPut (List.mem_of_find?_eq_some he) _
+    · exact (stepsPut (List.mem_of_find?_eq_some he) _).trans (stepsOpenPending _ _ _)
+
 private theorem stepsOnGoAway (s : State) : Steps s (onGoAway s).1 := by
   unfold onGoAway
   split
@@ -472,7 +484,7 @@ private theorem stepsFinishPayload (s : State) (id : Nat) (deliver fin : Bool) :
     Steps s (finishPayload s id deliver fin).1 := by
   unfold finishPayload
   split
-  · exact stepsOnEntry _ _ _ _
+  · exact stepsOnEntryEnd _ _ _ _
   · exact Steps.refl s
 
 private theorem stepsRecvChunk (s : State) (id : Nat) (chunk : ByteArray) (deliver : Bool) :
@@ -571,15 +583,15 @@ theorem stepsStep {s s' : State} {ev : Event} {acts : List Action}
   | consumed k n =>
     simp only [step, Except.ok.injEq, Prod.mk.injEq] at hr
     obtain ⟨rfl, -⟩ := hr
-    exact stepsOnEntry _ _ _ _
+    exact stepsOnEntryEnd _ _ _ _
   | close k =>
     simp only [step, Except.ok.injEq, Prod.mk.injEq] at hr
     obtain ⟨rfl, -⟩ := hr
-    exact stepsOnEntry _ _ _ _
+    exact stepsOnEntryEnd _ _ _ _
   | reset k =>
     simp only [step, Except.ok.injEq, Prod.mk.injEq] at hr
     obtain ⟨rfl, -⟩ := hr
-    exact stepsOnEntry _ _ _ _
+    exact stepsOnEntryEnd _ _ _ _
   | ping tag =>
     simp only [step, Except.ok.injEq, Prod.mk.injEq] at hr
     obtain ⟨rfl, -⟩ := hr
@@ -727,7 +739,7 @@ theorem stepStale {s : State} {k : StreamKey} {n tag : Nat} {p : Bytes.Blob}
     rw [List.find?_eq_none]
     intro e he
     simp [State.byKey, hk e he]
-  simp [step, onEntry, hnone]
+  simp [step, onEntry, onEntryEnd, hnone]
 
 /-! ## No byte is dropped -/
 
@@ -884,6 +896,19 @@ private theorem rxOkOnEntry {s : State} {p : Entry → Bool} {f : Entry → Stre
   split
   · exact h
   · next e he => exact rxOkPut (List.mem_of_find?_eq_some he) (hf e) h
+
+private theorem rxOkOnEntryEnd {s : State} {p : Entry → Bool}
+    {f : Entry → StreamState × Array Action} {missing : Array Action}
+    (hf : ∀ e rem, Charged rem e.state → Charged rem (f e).1)
+    (h : RxOk s) : RxOk (onEntryEnd s p f missing).1 := by
+  unfold onEntryEnd
+  split
+  · exact h
+  · next e he =>
+    dsimp only
+    split
+    · exact rxOkPut (List.mem_of_find?_eq_some he) (hf e) h
+    · exact rxOkOpenPending _ _ _ (rxOkPut (List.mem_of_find?_eq_some he) (hf e) h)
 
 /-! ### The entry operations keep the charge -/
 
@@ -1255,15 +1280,15 @@ theorem rxOkStep {s s' : State} {ev : Event} {acts : List Action} (hs : Inv s) (
   | consumed k n =>
     simp only [step, Except.ok.injEq, Prod.mk.injEq] at hr
     obtain ⟨rfl, -⟩ := hr
-    exact rxOkOnEntry (fun e rem hc => chargedConsume e n rem hc) h0
+    exact rxOkOnEntryEnd (fun e rem hc => chargedConsume e n rem hc) h0
   | close k =>
     simp only [step, Except.ok.injEq, Prod.mk.injEq] at hr
     obtain ⟨rfl, -⟩ := hr
-    exact rxOkOnEntry (fun e rem hc => chargedCloseLocal e rem hc) h0
+    exact rxOkOnEntryEnd (fun e rem hc => chargedCloseLocal e rem hc) h0
   | reset k =>
     simp only [step, Except.ok.injEq, Prod.mk.injEq] at hr
     obtain ⟨rfl, -⟩ := hr
-    exact rxOkOnEntry (fun e rem _ => chargedResetLocal e rem) h0
+    exact rxOkOnEntryEnd (fun e rem _ => chargedResetLocal e rem) h0
   | ping tag =>
     simp only [step, Except.ok.injEq, Prod.mk.injEq] at hr
     obtain ⟨rfl, -⟩ := hr
