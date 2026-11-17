@@ -60,9 +60,17 @@ open Libp2p.Mux.Mplex.Wire
 open Libp2p.Mux.Mplex.State
 open Conc hiding Error
 
-/-- The chunks one stream inbox holds. A chunk is one message, at most
-`mplexMessageCap` bytes. -/
+/-- The chunks one stream inbox holds. -/
 def inboxCap : Nat := 8
+
+/-- The bytes of one inbox chunk at most: 4096, the `BufferSize` in
+which go-mplex v0.7.0 reads and hands on each message (`multiplex.go`,
+line 26, and lines 478 to 499). The reader splits a message into chunks
+of this size. mplex has no flow control, so the inboxes bound what a
+peer can make a session hold: `liveStreamCap × inboxCap ×
+inboxChunkBytes`, 32 MiB, plus the one message the reader decodes. With
+a whole message per chunk, the bound was 8 GiB. -/
+def inboxChunkBytes : Nat := 4096
 
 /-- The inbound streams that wait for `accept`. go-mplex uses 16. -/
 def acceptCap : Nat := 16
@@ -236,6 +244,17 @@ private def writer (rt : Runtime) : Async Unit := do
 
 /-! ## The reader -/
 
+/-- Hand `payload` to `inbox` in chunks of at most `inboxChunkBytes`, in
+order. Park: each send waits for room, which a read makes. A reset or
+the session close closes the inbox, and the first failed send ends the
+delivery, since the stream reads no more. -/
+private def deliverChunks (inbox : Chan ByteArray) (payload : ByteArray) : Async Unit := do
+  -- The count of chunks is fixed before the loop, so the loop ends.
+  for i in [0:(payload.size + inboxChunkBytes - 1) / inboxChunkBytes] do
+    let start := i * inboxChunkBytes
+    let chunk := payload.extract start (start + inboxChunkBytes)
+    if let .error _ ← inbox.send chunk then return
+
 /-- Apply one inbound message. `.error` is a protocol error that ends
 the session. -/
 private def dispatch (rt : Runtime) (f : Frame) : Async (Except Core.Error Unit) := do
@@ -259,7 +278,7 @@ private def dispatch (rt : Runtime) (f : Frame) : Async (Except Core.Error Unit)
     if let some port := t.dataPort? key then
       -- Park: a read wakes it. A reset or the session close closes the
       -- inbox, and the send then fails at once.
-      discard <| port.inbox.send f.payload
+      deliverChunks port.inbox f.payload
     return .ok ()
   | .close key =>
     if let some port ← (rt.table.updateGet (Table.closeRemote key) : BaseIO (Option Port)) then
