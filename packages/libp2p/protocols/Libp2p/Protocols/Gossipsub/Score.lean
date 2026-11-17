@@ -487,11 +487,17 @@ private def setCounters (s : PeerState) (id : TopicId) (t : TopicCounters) : Pee
 /-! ## Counter updates -/
 
 /-- The graft update: when the peer is not in the mesh, set `inMesh` and record the graft time,
-so the mesh time starts at zero. A peer that is already in the mesh is unchanged. -/
-def graft (s : PeerState) (now : Millis) (id : TopicId) : PeerState :=
-  let t := countersOf s id
-  if t.inMesh then s
-  else setCounters s id { t with inMesh := true, graftTime := now }
+so the mesh time starts at zero. A peer that is already in the mesh is unchanged. An
+unconfigured topic is unchanged too: no term reads its counters, and an entry would only grow
+the table. go-libp2p-pubsub v0.19.0 keeps no counters for such a topic either (`score.go`,
+lines 896 to 899). -/
+def graft (p : Params) (s : PeerState) (now : Millis) (id : TopicId) : PeerState :=
+  match p.topics id with
+  | none => s
+  | some _ =>
+      let t := countersOf s id
+      if t.inMesh then s
+      else setCounters s id { t with inMesh := true, graftTime := now }
 
 /-- The counter part of a prune: leave the mesh, which ends the mesh time, and add the square
 of the delivery deficit to the failure penalty when the activation window has passed and the

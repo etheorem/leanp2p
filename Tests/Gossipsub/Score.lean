@@ -84,7 +84,7 @@ Each step applies one update to the state of the step before.
 -/
 
 /-- Step 2: the peer is grafted at time 0. -/
-private def s1 : PeerState := graft PeerState.zero 0 eth
+private def s1 : PeerState := graft walkParams PeerState.zero 0 eth
 
 /-- Step 3: one mesh delivery and one first delivery. -/
 private def s2 : PeerState := firstDelivery walkParams (meshDelivery walkParams s1 eth) eth
@@ -107,7 +107,7 @@ private def s6 : PeerState := prune walkParams s5 30000 eth
 private def s7 : PeerState := decay walkParams s6
 
 /-- Step 10: a second graft at time 40000. The mesh time starts again at zero. -/
-private def s8 : PeerState := graft s7 40000 eth
+private def s8 : PeerState := graft walkParams s7 40000 eth
 
 /-! ## Strictness fixtures -/
 
@@ -370,6 +370,12 @@ def run (r : Runner) : IO Unit := do
   r.check "score.cap-at-increment"
     ((countersOf (firstDelivery walkParams (capState 9) eth) eth).firstMessageDeliveries == 10000 &&
       (countersOf (firstDelivery walkParams (capState 10) eth) eth).firstMessageDeliveries == 10000)
+
+  -- A graft to a topic with no parameters keeps no counters: no term reads them, and an entry
+  -- would only grow the table. A graft to `"eth"` keeps one entry.
+  r.check "score.graft.unconfigured-keeps-no-counters"
+    ((graft walkParams PeerState.zero 0 other).topics.isEmpty &&
+      (graft walkParams PeerState.zero 0 eth).topics.length == 1)
 
   -- A delivery to a topic with no parameters leaves the score alone. The state s3 scores 210 at
   -- 30000, and the first delivery to `"other"` is a no-op.

@@ -493,7 +493,7 @@ def applyPlanScores (p : Params) (s : State) (plans : List TopicPlan) : State :=
     { pd with
       score := plans.foldl (fun sc pl =>
         if memB q pl.pruned then Score.prune p.score sc s.now pl.topic
-        else if memB q pl.added then Score.graft sc s.now pl.topic
+        else if memB q pl.added then Score.graft p.score sc s.now pl.topic
         else sc) pd.score })
 
 /-- The actions of the plans: a prune to each pruned peer, then a graft
@@ -607,6 +607,33 @@ actions of the plan, the negative prune, and the gossip. -/
 def heartbeat (p : Params) (s : State) (now : Millis) (order : List Peer) :
     State × List Action :=
   (heartbeatNext p s now order, heartbeatActions p s now order)
+
+/-- `heartbeat` with each part computed once. The parts above name each
+other: `negativeActions` calls `planScored` for every kept peer of every
+plan, and each call plans every topic again. Lean evaluates strictly and
+hoists no call out of a lambda, so a part named twice runs twice, and the
+heartbeat costs time quadratic in the topic count. Here each `let`
+evaluates once, before the lambdas that read it. `heartbeat_eq_heartbeatOnce`
+proves the two equal, so the compiler runs this definition, and the
+theorems keep reasoning about the parts. -/
+def heartbeatOnce (p : Params) (s : State) (now : Millis) (order : List Peer) :
+    State × List Action :=
+  let fresh := freshState p s now
+  let plans := planList p fresh now order
+  let scored := applyPlanScores p fresh plans
+  let next := settleMesh p scored plans
+  let negative := plans.flatMap (fun pl =>
+    (pl.kept.filter (fun q => decide (scoreOf p scored q < 0))).map
+      (fun q => Action.sendRpc q (pruneRpc pl.topic p.pruneBackoff)))
+  (next, plans.flatMap (planActions p) ++ negative ++
+    gossipActions p { next with mcache := s.mcache } order)
+
+/-- The two heartbeats are equal: every part of `heartbeatOnce` unfolds to
+the part of `heartbeat` that it binds. `@[csimp]` makes the compiler use
+`heartbeatOnce` for every call of `heartbeat`. -/
+@[csimp] theorem heartbeat_eq_heartbeatOnce : @heartbeat = @heartbeatOnce := by
+  funext p s now order
+  rfl
 
 /-! ## The event handlers -/
 
@@ -754,7 +781,7 @@ def handleGraft (p : Params) (s : State) (sender : Peer) (g : Rpc.ControlGraft) 
       match peerOf s sender with
       | some pd =>
           (setPeer (setTopicMesh s ⟨g.topicId⟩ (sender :: meshOf s ⟨g.topicId⟩)) sender
-            { pd with score := Score.graft pd.score s.now ⟨g.topicId⟩ }, [])
+            { pd with score := Score.graft p.score pd.score s.now ⟨g.topicId⟩ }, [])
       | none => (s, [])
   else (s, [])
 
@@ -832,6 +859,29 @@ def handleControl (p : Params) (s : State) (sender : Peer) :
     Option Rpc.ControlMessage → State × List Action
   | none => (s, [])
   | some c => (controlPrunes p s sender c, controlActions p s sender c)
+
+/-- `handleControl` with each stage run once. Each stage above starts from
+the state of the stage before, so it runs every stage before it again,
+and `controlActions` runs them all once more: the IHAVE handlers run five
+times per RPC. Here each stage runs once and hands its state on.
+`handleControl_eq_runControl` proves the two equal, so the compiler runs
+this definition, and the theorems keep reasoning about the stages. -/
+def runControl (p : Params) (s : State) (sender : Peer) :
+    Option Rpc.ControlMessage → State × List Action
+  | none => (s, [])
+  | some c =>
+      let r1 := mapHandlers (fun st b => handleIhave p st sender b) c.ihave s
+      let r2 := mapHandlers (fun st b => handleIwant p st sender b) c.iwant r1.1
+      let r3 := mapHandlers (fun st b => handleGraft p st sender b) c.graft r2.1
+      let r4 := mapHandlers (fun st b => handlePrune p st sender b) c.prune r3.1
+      (r4.1, r1.2 ++ r2.2 ++ r3.2 ++ r4.2)
+
+/-- The two control handlers are equal: each stage of `runControl` unfolds
+to the stage of `handleControl` that it binds. `@[csimp]` makes the
+compiler use `runControl` for every call of `handleControl`. -/
+@[csimp] theorem handleControl_eq_runControl : @handleControl = @runControl := by
+  funext p s sender c
+  cases c <;> rfl
 
 /-- Handle a decoded RPC: subscriptions, published messages, control. -/
 def handleRpc (p : Params) (s : State) (sender : Peer) (rpc : Rpc.RPC) :
@@ -1201,7 +1251,7 @@ private theorem handleGraft_add (p : Params) (s : State) (sender : Peer)
     (hpd : peerOf s sender = some pd) :
     handleGraft p s sender g =
       (setPeer (setTopicMesh s ⟨g.topicId⟩ (sender :: meshOf s ⟨g.topicId⟩)) sender
-        { pd with score := Score.graft pd.score s.now ⟨g.topicId⟩ }, []) := by
+        { pd with score := Score.graft p.score pd.score s.now ⟨g.topicId⟩ }, []) := by
   simp [handleGraft, hsub, hm, hb, hd, hpd]
 
 private theorem handleGraft_add_none (p : Params) (s : State) (sender : Peer)
