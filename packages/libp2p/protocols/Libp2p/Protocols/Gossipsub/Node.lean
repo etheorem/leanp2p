@@ -6,6 +6,7 @@ import Libp2p.Core
 import Libp2p.Protocols.StreamError
 import Libp2p.Protocols.Gossipsub.HostSeam
 import Libp2p.Protocols.Gossipsub.Core
+import Libp2p.Protocols.Gossipsub.Payload
 
 /-!
 # Gossipsub node: the loop over the router core
@@ -144,6 +145,15 @@ structure Config where
   onRpc : Peer → List Nat → BaseIO Unit := fun _ _ => pure ()
   /-- Called for every outbound RPC before it enters the peer queue. -/
   onSend : Peer → Rpc.RPC → BaseIO Unit := fun _ _ => pure ()
+  /-- The `ByteArray` payload path (`Gossipsub.Payload`): the message id of
+  a payload on a topic, or `none` for a local fault such as a failed hash.
+  When set, the node keeps every payload as a `ByteArray`, and the core
+  sees only its id, so a block-sized message never becomes a `List Nat`.
+  The node then sets `params.msgId` to read the handle. A delivery
+  callback gets the message with its handle in `data`, and `Node.payload`
+  reads the bytes. An inbound RPC with a payload that has no id is
+  dropped, and a publish with no id answers `false`. -/
+  payloadId : Option (String → ByteArray → Option MessageId) := none
 
 /-- A running node. Every field is a seam over the loop task, which is the
 only owner of the router state. -/
@@ -178,6 +188,10 @@ structure Node where
   /-- Frames dropped by a full or closed peer queue, or by the 256-send
   pending-gossip bound. -/
   dropped : BaseIO Nat
+  /-- The payload of a message id on the `ByteArray` path
+  (`Config.payloadId`). `none` off that path, or once the payload expired
+  with the message cache. -/
+  payload : MessageId → BaseIO (Option ByteArray)
 
 /-! ## One outbound RPC -/
 
@@ -248,7 +262,8 @@ before emptyWithCapacity allocates the body. This is the pinned Lean name
 for the capacity constructor. Each copySlice writes only the next slice at
 cursor, without retaining an earlier body value. EOF between frames is clean.
 The repeat loop uses constant stack space for any number of chunks or frames. -/
-private def readFrames (events : Conc.Chan Input) (peer : Peer)
+private def readFrames (events : Conc.Chan Input)
+    (split : ByteArray → BaseIO (Option ByteArray)) (peer : Peer)
     (stream : Streams.Stream) : Conc.Async (Except Libp2p.Core.Error Unit) := do
   let mut header := ByteArray.emptyWithCapacity Varint.maxBytes
   let mut body := ByteArray.empty
@@ -259,9 +274,12 @@ private def readFrames (events : Conc.Chan Input) (peer : Peer)
   repeat
     if let some size := expected then
       if cursor = size then
-        -- Park: the loop frees a slot, or stop closes the event queue.
-        if let .error _ ← events.send (.event (.rpc peer (Bytes.toNatList body))) then
-          return .ok ()
+        -- On the payload path the core gets the RPC with handles. An RPC
+        -- that the split refuses is dropped.
+        if let some small ← (split body : BaseIO (Option ByteArray)) then
+          -- Park: the loop frees a slot, or stop closes the event queue.
+          if let .error _ ← events.send (.event (.rpc peer (Bytes.toNatList small))) then
+            return .ok ()
         body := ByteArray.empty
         expected := none
         cursor := 0
@@ -335,8 +353,12 @@ lines 77 to 90). A new stream replaces the entry of its peer in `inbound`,
 resets the old stream, and waits for the old handler to end before it reads,
 so the RPCs of the two streams do not mix. The reset wakes the parked read of
 the old handler, and that handler ends with `.ok`. On exit a handler drops its
-entry only when it still owns it (lines 60 to 65). -/
-def handler (events : Conc.Chan Input) (inbound : Conc.OnceRef InboundTable) :
+entry only when it still owns it (lines 60 to 65).
+
+`split` turns each frame into the RPC the core gets: the frame as it is
+by default, or the frame with handles on the payload path. -/
+def handler (events : Conc.Chan Input) (inbound : Conc.OnceRef InboundTable)
+    (split : ByteArray → BaseIO (Option ByteArray) := fun b => pure (some b)) :
     Libp2p.Core.StreamHandler where
   id := Constants.meshsubId
   handle ctx stream := ExceptT.mk do
@@ -353,7 +375,7 @@ def handler (events : Conc.Chan Input) (inbound : Conc.OnceRef InboundTable) :
       if let .error _ ← events.send (.event (.peerJoined peer .meshsub)) then
         stream.close
         return .ok ()
-      let answer ← readFrames events peer stream
+      let answer ← readFrames events split peer stream
       -- A replaced stream ends by the reset of its successor, which is no
       -- fault of the peer.
       let replaced ← (inbound.get : BaseIO InboundTable) <&> fun t =>
@@ -415,13 +437,28 @@ private structure Env where
   closing : Conc.OnceRef Bool
   /-- Frames refused by a full or closed outbound queue. -/
   drops : Conc.OnceRef Nat
+  /-- The payloads of the `ByteArray` path, by id, with the time each was
+  stored. -/
+  payloads : Conc.OnceRef (Std.HashMap MessageId (ByteArray × Millis))
+
+/-- The frame of one RPC under the cap. On the payload path the published
+messages carry handles, and the frame takes the stored payloads back
+(`Payload.joinOutbound`). `none` when the RPC is over the cap. -/
+private def frameOf (env : Env) (rpc : Rpc.RPC) : BaseIO (Option ByteArray) := do
+  if env.config.payloadId.isSome && !rpc.publish.isEmpty then
+    let store ← env.payloads.get
+    let body := Payload.joinOutbound rpc (fun h => (store.get? h).map (·.1))
+    return if body.size ≤ Constants.rpcCap then
+      some (Bytes.ofNatList (Streams.Framing.encodeLength .uvarint body.size) ++ body)
+      else none
+  return (Rpc.encodeFrame? rpc).map Bytes.ofNatList
 
 /-- Encode and offer one RPC to a peer's queue. This operation never parks.
 A full queue drops its frame. Each peer has one writer and one stream. -/
 private def enqueue (env : Env) (peer : Peer) (rpc : Rpc.RPC) : BaseIO Unit := do
   if ← env.closing.get then return ()
   (env.config.onSend peer rpc : BaseIO Unit)
-  let some frame := Rpc.encodeFrame? rpc | return ()
+  let some frame ← frameOf env rpc | return ()
   let table ← env.outbound.get
   let ob ← match table.find? (fun e => e.1 == peer) with
     | some (_, ob) => pure ob
@@ -434,7 +471,7 @@ private def enqueue (env : Env) (peer : Peer) (rpc : Rpc.RPC) : BaseIO Unit := d
   if ← env.closing.get then
     ob.queue.close
     return ()
-  if !(← ob.queue.trySend (Bytes.ofNatList frame)) then env.drops.update (· + 1)
+  if !(← ob.queue.trySend frame) then env.drops.update (· + 1)
 
 /-- Retire a peer writer after its disconnect event. -/
 private def removePeer (env : Env) (peer : Peer) : BaseIO Unit := do
@@ -562,6 +599,11 @@ private def onWake (env : Env) (st : LoopState) (now : Millis) : BaseIO LoopStat
     enqueue env p.peer p.rpc
   let st := { st with pending := later }
   if st.nextTick ≤ now then
+    -- A stored payload lives one heartbeat past the message cache's window,
+    -- so an IWANT answer still finds it.
+    if env.config.payloadId.isSome then
+      let ttl := (env.config.params.window.historyLength + 1) * env.config.params.heartbeatInterval
+      env.payloads.update fun m => m.filter fun _ (_, t) => now < t + ttl
     let order := env.config.order st.ticks (st.router.peers.map (·.1))
     let st ← stepAndAct env st (.tick now order)
     return { st with nextTick := now + env.config.params.heartbeatInterval, ticks := st.ticks + 1 }
@@ -613,11 +655,32 @@ queue holds 64 events. A full queue parks an inbound handler, which carries
 the back-pressure to the peer, and it refuses a `BaseIO` post of the
 application. `subscribeWait` is the one application post that parks. -/
 def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
+  -- On the payload path a message's `data` is its handle, the id bytes, so
+  -- the core's id function reads it back.
+  let config := if config.payloadId.isSome then
+      { config with params := { config.params with msgId := fun m => ⟨m.data.getD []⟩ } }
+    else config
   let now ← config.clock.nowMs
   let subs : Conc.OnceRef Subscriptions ← Conc.OnceRef.new { next := 0, entries := [] }
   let events : Conc.Chan Input ← Conc.Chan.new 64
   let inbound : Conc.OnceRef InboundTable ← Conc.OnceRef.new { next := 0, entries := [] }
-  host.setHandler (handler events inbound)
+  let payloads ← Conc.OnceRef.new ({} : Std.HashMap MessageId (ByteArray × Millis))
+  -- The inbound split of the payload path (`Payload.splitInbound`). A
+  -- malformed RPC goes to the core as it came, and the core's decoder
+  -- reports it. An RPC with a payload that has no id is dropped.
+  let split : ByteArray → BaseIO (Option ByteArray) := fun body => do
+    match config.payloadId with
+    | none => return some body
+    | some idOf =>
+      match Payload.splitInbound body idOf with
+      | .error .malformed => return some body
+      | .error .noId => return none
+      | .ok (small, ps) =>
+        let t ← config.clock.nowMs
+        payloads.update fun m =>
+          ps.foldl (fun m (id, d) => if m.contains id then m else m.insert id (d, t)) m
+        return some small
+  host.setHandler (handler events inbound split)
   let tasks ← Conc.TaskSet.new
   let alarm ← Conc.Alarm.new
   let outbound ← Conc.OnceRef.new ([] : List (Peer × Outbound))
@@ -625,7 +688,8 @@ def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
   let closing ← Conc.OnceRef.new false
   let drops ← Conc.OnceRef.new 0
   tasks.spawn <| alarm.run config.clock (fun now => events.send (.wake now))
-  tasks.spawn <| loop { host, config, subs, events, alarm, tasks, outbound, nextOutbound, closing, drops }
+  tasks.spawn <| loop
+    { host, config, subs, events, alarm, tasks, outbound, nextOutbound, closing, drops, payloads }
     { router := initialState config.params now
       pending := []
       nextTick := now + config.params.heartbeatInterval
@@ -649,7 +713,18 @@ def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
   let unregister : Nat → BaseIO Unit := fun id =>
     subs.update fun s => { s with entries := s.entries.filter (fun entry => entry.id != id) }
   return {
-    publish := fun topic payload => post (.publish (messageOf topic payload))
+    publish := fun topic payload =>
+      match config.payloadId with
+      | some idOf =>
+        -- The payload path: store the bytes, and publish the handle. A
+        -- payload with no id is a local fault, and the publish fails.
+        match idOf topic.name payload with
+        | none => pure false
+        | some id => do
+          let t ← config.clock.nowMs
+          payloads.update (·.insert id (payload, t))
+          post (.publish { messageOf topic .empty with data := some id.bytes })
+      | none => post (.publish (messageOf topic payload))
     subscribe := fun topic callback => do
       if ← closing.get then return false
       let id ← register topic callback
@@ -670,6 +745,7 @@ def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
     peerJoined := fun peer proto => post (.peerJoined peer proto)
     peerLeft := fun peer => post (.peerLeft peer)
     dropped := drops.get
+    payload := fun id => do return ((← payloads.get).get? id).map (·.1)
     stop := do
       let first ← (closing.updateGet (fun was => (!was, true)) : BaseIO Bool)
       if first then

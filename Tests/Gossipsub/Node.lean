@@ -550,6 +550,44 @@ private def pairChecks (r : Tests.Runner) : Async Unit := do
   r.check "node.pair.no-local-delivery" ((← (b.deliveries.tryRecv : BaseIO (Option Message))).isNone)
   finish sw [a, b]
 
+/-- The `ByteArray` payload path between two nodes. The receiver's callback
+gets the handle in `data`, and `Node.payload` gives back the bytes that the
+sender published. An id function that gives no id, as a failed hash does,
+fails a publish and drops an inbound message. -/
+private def payloadPairChecks (r : Tests.Runner) : Async Unit := do
+  let idOf (topic : String) (d : ByteArray) : Option MessageId :=
+    some ⟨topic.length :: d.size % 256 :: d.size / 256 % 256 :: (d.extract 0 8).toList.map (·.toNat)⟩
+  let sw ← (Switch.new : BaseIO Switch)
+  let a ← fixture sw pa { payloadId := some idOf }
+  let b ← fixture sw pb { payloadId := some idOf }
+  discard (subscribe a : BaseIO Bool)
+  r.check "node.payload.subscribe-barrier" (← barrier a)
+  discard (b.node.peerJoined pa .meshsub : BaseIO Bool)
+  r.check "node.payload.hello-reaches-publisher" ((← receive b.receipts).isSome)
+  let payload : ByteArray := ⟨(Array.range 600).map (·.toUInt8)⟩
+  r.check "node.payload.publish-takes-bytes" (← (b.node.publish topic payload : BaseIO Bool))
+  match ← receive a.deliveries with
+  | some m =>
+    let handle : MessageId := ⟨m.data.getD []⟩
+    r.check "node.payload.handle-is-the-id" (some handle == idOf topic.name payload)
+    r.check "node.payload.receiver-bytes-equal-sent-bytes"
+      ((← (a.node.payload handle : BaseIO (Option ByteArray))).map (·.toList) ==
+        some payload.toList)
+  | none => r.check "node.payload.receiver-gets-the-message" false
+  -- A node whose id function gives no id.
+  let c ← fixture sw pc { payloadId := some fun _ _ => none }
+  discard (subscribe c : BaseIO Bool)
+  r.check "node.payload.no-id-subscribe-barrier" (← barrier c)
+  r.check "node.payload.no-id-publish-fails"
+    (!(← (c.node.publish topic (Bytes.ofNatList [8]) : BaseIO Bool)))
+  -- A publish written on its raw inbound stream finds no id, so the node
+  -- drops it. The barrier after it orders the check behind the drop.
+  discard <| c.control.write (frame (Core.publishRpc (message [9])))
+  r.check "node.payload.no-id-inbound-barrier" (← barrier c)
+  r.check "node.payload.no-id-inbound-dropped"
+    ((← (c.deliveries.tryRecv : BaseIO (Option Message))).isNone)
+  finish sw [a, b, c]
+
 /-- A subscription made before a peer joins is sent once to that peer. -/
 private def postJoinSubscriptionChecks (r : Tests.Runner) : Async Unit := do
   let sw ← (Switch.new : BaseIO Switch)
@@ -876,6 +914,7 @@ def run (r : Tests.Runner) : IO Unit := do
     outboundFailureChecks r
     inboundReplaceChecks r
     inboundTableChecks r
+    payloadPairChecks r
     readerCopyChecks r
     pairChecks r
     postJoinSubscriptionChecks r
