@@ -400,6 +400,38 @@ def run (r : Runner) : IO Unit := do
      | .ok (_, acts) => publishCount acts = 1
      | _ => false)
 
+  -- A prune for a topic we do not hold records no backoff pair, so a
+  -- peer cannot grow the table with topics we never joined.
+  r.check "core.prune.unheld-topic-no-backoff"
+    (match step baseParams { known with now := 1000 }
+        (.rpc pa (Pb.encodeMessage (rpcOfControl (controlOf [] [pruneOf tb])))) with
+     | .ok (s', _) => s'.backoff.isEmpty
+     | _ => false)
+
+  -- An IHAVE for a topic we hold asks for the unseen id; for a topic we
+  -- do not hold, it asks for nothing and records no promise.
+  r.check "core.ihave.held-topic-asks"
+    (match step baseParams known (.rpc pa (Pb.encodeMessage (ihaveRpc ta [⟨[9]⟩]))) with
+     | .ok (s', acts) => sendsTo pa acts = 1 && !s'.iwant.isEmpty
+     | _ => false)
+  r.check "core.ihave.unheld-topic-ignored"
+    (match step baseParams known (.rpc pa (Pb.encodeMessage (ihaveRpc tb [⟨[9]⟩]))) with
+     | .ok (s', acts) => acts = [] && s'.iwant.isEmpty
+     | _ => false)
+
+  -- A peer below the gossip threshold has its gossip ignored: its IHAVE
+  -- asks for nothing, and its IWANT gets no answer.
+  r.check "core.ihave.below-gossip-threshold-ignored"
+    (match step gossipParams known (.rpc pa (Pb.encodeMessage (ihaveRpc ta [⟨[9]⟩]))) with
+     | .ok (s', acts) => acts = [] && s'.iwant.isEmpty
+     | _ => false)
+  r.check "core.iwant.below-gossip-threshold-ignored"
+    (match step gossipParams
+        { known with mcache := (Cache.MessageCache.empty baseParams.window).put ⟨[7]⟩ (msgOf ta [7]) }
+        (.rpc pa (Pb.encodeMessage (iwantRpc [⟨[7]⟩]))) with
+     | .ok (_, acts) => publishCount acts = 0
+     | _ => false)
+
   -- The transcript driver runs two events in order and appends the
   -- actions.
   r.check "core.run.transcript"

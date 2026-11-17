@@ -30,6 +30,11 @@ at or above the gossip threshold that are in neither the mesh nor the
 fanout of the topic, up to `dLazy` per topic. `gossipFactor` is stored
 and never read, so the emission count is not adaptive.
 
+The control handlers refuse the gossip work that go-libp2p-pubsub
+v0.19.0 refuses. An IHAVE or an IWANT from a peer below the gossip
+threshold gets nothing. An IHAVE for a topic the router does not hold
+asks for nothing. A PRUNE for such a topic records no backoff pair.
+
 Several fields of the spec are stored and never read, and several
 behaviors are absent:
 
@@ -618,28 +623,43 @@ def handlePubs (p : Params) (s : State) (sender : Peer) (ms : List Message) :
 def promised (ps : Cache.PromiseTable) (q : Peer) (id : MessageId) : Bool :=
   ps.any (fun e => decide (e.peer = q ∧ e.id = id))
 
+/-- True when the score of `sender` is below the gossip threshold. The
+spec ignores the gossip of such a peer: "when a peer's score drops below
+this threshold, no gossip is emitted towards that peer and gossip from
+that peer is ignored" (`gossipsub-v1.1.md`, "Score Thresholds"). go
+skips its IHAVE and its IWANT the same way (go-libp2p-pubsub v0.19.0,
+`gossipsub.go`, lines 941 and 1015). -/
+def gossipIgnored (p : Params) (s : State) (sender : Peer) : Bool :=
+  decide (scoreOf p s sender < p.thresholds.gossipThreshold)
+
 /-- Handle one IHAVE: request the ids that are unseen, uncached, and not
-promised, and record the promise. -/
+promised, and record the promise. An IHAVE from a peer below the gossip
+threshold, or for a topic we do not hold, asks for nothing, as in go
+(`gossipsub.go`, lines 958 to 962). -/
 def handleIhave (p : Params) (s : State) (sender : Peer) (i : Rpc.ControlIHave) :
     State × List Action :=
-  let wanted := i.messageIds.filter (fun id =>
-    !(s.seen.contains id s.now) && (Cache.MessageCache.get s.mcache id).isNone &&
-      !(promised s.iwant sender id))
-  let s1 : State :=
-    { s with
-      iwant := wanted.foldl
-        (fun ps id => ps.promise sender id (s.now + p.iwantDeadline)) s.iwant }
-  (s1, if wanted = [] then [] else [Action.sendRpc sender (iwantRpc wanted)])
+  if gossipIgnored p s sender || !memB (⟨i.topicId⟩ : TopicId) s.topics then (s, [])
+  else
+    let wanted := i.messageIds.filter (fun id =>
+      !(s.seen.contains id s.now) && (Cache.MessageCache.get s.mcache id).isNone &&
+        !(promised s.iwant sender id))
+    let s1 : State :=
+      { s with
+        iwant := wanted.foldl
+          (fun ps id => ps.promise sender id (s.now + p.iwantDeadline)) s.iwant }
+    (s1, if wanted = [] then [] else [Action.sendRpc sender (iwantRpc wanted)])
 
 /-- Handle one IWANT: answer each id that the message cache holds under
-the same id. -/
+the same id. A peer below the gossip threshold gets no answer. -/
 def handleIwant (p : Params) (s : State) (sender : Peer) (w : Rpc.ControlIWant) :
     State × List Action :=
-  let answers := w.messageIds.filterMap (fun id =>
-    match Cache.MessageCache.get s.mcache id with
-    | some m => if p.msgId m = id then some m else none
-    | none => none)
-  (s, answers.map (fun m => Action.sendRpc sender (publishRpc m)))
+  if gossipIgnored p s sender then (s, [])
+  else
+    let answers := w.messageIds.filterMap (fun id =>
+      match Cache.MessageCache.get s.mcache id with
+      | some m => if p.msgId m = id then some m else none
+      | none => none)
+    (s, answers.map (fun m => Action.sendRpc sender (publishRpc m)))
 
 /-- Handle one GRAFT. An unknown topic is ignored. A member is a no-op.
 A peer in backoff, or a mesh at `dHigh`, gets a prune. Otherwise the
@@ -660,13 +680,18 @@ def handleGraft (p : Params) (s : State) (sender : Peer) (g : Rpc.ControlGraft) 
       | none => (s, [])
   else (s, [])
 
-/-- The state after a prune records the backoff pair. -/
+/-- The state after a prune records the backoff pair, for a topic we
+hold. A prune for any other topic changes nothing, so a peer cannot grow
+the backoff table with topics we never joined. go's `handlePrune` takes
+the topics of its mesh alone (`gossipsub.go`, lines 1161 to 1166). -/
 def pruneState (p : Params) (s : State) (sender : Peer) (q : Rpc.ControlPrune) : State :=
-  { s with
-    backoff := Cache.Backoff.add s.backoff sender ⟨q.topicId⟩
-      (match q.backoff with
-        | some sec => sec * 1000
-        | none => p.pruneBackoff) s.now }
+  if memB (⟨q.topicId⟩ : TopicId) s.topics then
+    { s with
+      backoff := Cache.Backoff.add s.backoff sender ⟨q.topicId⟩
+        (match q.backoff with
+          | some sec => sec * 1000
+          | none => p.pruneBackoff) s.now }
+  else s
 
 /-- Handle one PRUNE: record the backoff pair, and remove the sender
 from the topic mesh with the prune score update. -/
@@ -1201,7 +1226,8 @@ private theorem filter_ne_self (l : List Peer) (sender : Peer) (h : memB sender 
 private theorem meshOf_pruneState (p : Params) (s : State) (sender : Peer)
     (q : Rpc.ControlPrune) (topic : TopicId) :
     meshOf (pruneState p s sender q) topic = meshOf s topic := by
-  simp [pruneState, meshOf]
+  unfold pruneState
+  split <;> simp [meshOf]
 
 private theorem meshOf_setPeer (s : State) (q : Peer) (pd : PeerData) (topic : TopicId) :
     meshOf (setPeer s q pd) topic = meshOf s topic := by
@@ -1267,12 +1293,14 @@ private theorem handlePrunes_mesh (p : Params) (s : State) (sender : Peer)
 private theorem handleIhave_mesh (p : Params) (s : State) (sender : Peer)
     (i : Rpc.ControlIHave) (topic : TopicId) :
     meshOf (handleIhave p s sender i).1 topic = meshOf s topic := by
-  simp [handleIhave, meshOf]
+  unfold handleIhave
+  split <;> simp [meshOf]
 
 private theorem handleIwant_mesh (p : Params) (s : State) (sender : Peer)
     (w : Rpc.ControlIWant) (topic : TopicId) :
     meshOf (handleIwant p s sender w).1 topic = meshOf s topic := by
-  simp [handleIwant]
+  unfold handleIwant
+  split <;> simp
 
 private theorem handleIhaves_mesh (p : Params) (s : State) (sender : Peer)
     (is : List Rpc.ControlIHave) (topic : TopicId) :
@@ -1304,11 +1332,13 @@ private theorem topics_mapHandlers {β : Type} (f : State → β → State × Li
 
 private theorem handleIhave_topics (p : Params) (s : State) (sender : Peer)
     (i : Rpc.ControlIHave) : (handleIhave p s sender i).1.topics = s.topics := by
-  simp [handleIhave]
+  unfold handleIhave
+  split <;> simp
 
 private theorem handleIwant_topics (p : Params) (s : State) (sender : Peer)
     (w : Rpc.ControlIWant) : (handleIwant p s sender w).1.topics = s.topics := by
-  simp [handleIwant]
+  unfold handleIwant
+  split <;> simp
 
 private theorem handleGraft_topics (p : Params) (s : State) (sender : Peer)
     (g : Rpc.ControlGraft) : (handleGraft p s sender g).1.topics = s.topics := by
@@ -1324,7 +1354,8 @@ private theorem handleGraft_topics (p : Params) (s : State) (sender : Peer)
 
 private theorem pruneState_topics (p : Params) (s : State) (sender : Peer)
     (q : Rpc.ControlPrune) : (pruneState p s sender q).topics = s.topics := by
-  simp [pruneState]
+  unfold pruneState
+  split <;> simp
 
 private theorem handlePrune_topics (p : Params) (s : State) (sender : Peer)
     (q : Rpc.ControlPrune) : (handlePrune p s sender q).1.topics = s.topics := by
@@ -1335,7 +1366,8 @@ private theorem handlePrune_topics (p : Params) (s : State) (sender : Peer)
         exact pruneState_topics p s sender q
     | some pd =>
         simp only [handlePrune, hm, ite_true, hpd]
-        simp [setPeer, setTopicMesh, pruneState]
+        simp only [setPeer, setTopicMesh]
+        exact pruneState_topics p s sender q
   · simp only [handlePrune, hm]
     exact pruneState_topics p s sender q
 
@@ -1703,13 +1735,17 @@ private theorem handleIhave_not_deliver (p : Params) (s : State) (sender : Peer)
     (i : Rpc.ControlIHave) (m : Message) :
     Action.deliver m ∉ (handleIhave p s sender i).2 := by
   simp only [handleIhave]
-  split <;> simp
+  split
+  · simp
+  · split <;> simp
 
 private theorem handleIwant_not_deliver (p : Params) (s : State) (sender : Peer)
     (w : Rpc.ControlIWant) (m : Message) :
     Action.deliver m ∉ (handleIwant p s sender w).2 := by
   simp only [handleIwant]
-  simp [List.mem_map]
+  split
+  · simp
+  · simp [List.mem_map]
 
 private theorem handlePrune_not_deliver (p : Params) (s : State) (sender : Peer)
     (q : Rpc.ControlPrune) (m : Message) :
