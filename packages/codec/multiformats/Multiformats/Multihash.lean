@@ -174,9 +174,11 @@ theorem encodeBytes (value : Multihash) : ∀ b ∈ encode value, b < 256 := by
 /-- A production cursor parser checks the cap before allocating the payload. -/
 def decodeAtB? (input : ByteArray) (position : Nat := 0) : Except Error (Multihash × Nat) := do
   let (rawCode, next) ← Wire.readVarintAt input position
+  -- The code check of the model (`decodeAt?`): the registry member
+  -- carries the code on the wire.
   let code ← match HashCode.ofCode? rawCode.val with
     | none => .error .unknownHash
-    | some code => .ok code
+    | some code => if code.toCode = rawCode.val then .ok code else .error .unknownHash
   let (length, next) ← Wire.readVarintAt input next
   let (payload, after) ← Wire.takeBytesAt input next length.val maxDigestBytes
   let value ← ofDigest? code payload

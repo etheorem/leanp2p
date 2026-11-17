@@ -227,9 +227,12 @@ instance : Bytes.LawfulCodec Frame where
 /-- The independent cursor path uses the same documented widths and caps. -/
 def decodeAtB? (input : ByteArray) (position : Nat := 0) : Except Error (Frame × Nat) := do
   let (rawProtocol, next) ← Wire.readVarintAt input position
+  -- The code check of the model (`decodeAt?`): the registry member
+  -- carries the code on the wire.
   let protocol ← match Protocol.ofCode? rawProtocol.val with
     | none => .error .unknownProtocol
-    | some protocol => .ok protocol
+    | some protocol =>
+      if protocol.toCode = rawProtocol.val then .ok protocol else .error .unknownProtocol
   let (value, after) ← match protocol.fixedBytes? with
     | some count => Wire.takeBytesAt input next count maxComponentBytes
     | none => do

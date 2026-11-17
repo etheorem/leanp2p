@@ -203,9 +203,11 @@ def decodeAtB? (input : ByteArray) (position : Nat := 0) : Except Error (Cid × 
     .ok (value, after)
   else if version.val = 1 then
     let (rawCodec, next) ← Wire.readVarintAt input next
+    -- The code check of the model (`decodeAt?`): the registry member
+    -- carries the code on the wire.
     let codec ← match ContentCodec.ofCode? rawCodec.val with
       | none => .error .badCid
-      | some codec => .ok codec
+      | some codec => if codec.toCode = rawCodec.val then .ok codec else .error .badCid
     let (hash, after) ← Multihash.decodeAtB? input next
     .ok (.v1 codec hash, after)
   else .error .badCid
