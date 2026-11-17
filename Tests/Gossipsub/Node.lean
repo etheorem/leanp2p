@@ -331,6 +331,7 @@ private def frameBoundaryChecks (r : Tests.Runner) : Async Unit := do
     let remaining ← (OnceRef.new chunks : BaseIO (OnceRef (List ByteArray)))
     let reset ← (OnceRef.new false : BaseIO (OnceRef Bool))
     let events ← (Chan.new 16 : BaseIO (Chan Input))
+    let table ← (OnceRef.new { next := 0, entries := [] } : BaseIO (OnceRef InboundTable))
     let stream : Streams.Stream :=
       { read := do
           let next ← (remaining.updateGet (fun xs => (xs.head?, xs.drop 1)) : BaseIO (Option ByteArray))
@@ -338,7 +339,7 @@ private def frameBoundaryChecks (r : Tests.Runner) : Async Unit := do
         write := fun _ => pure (.ok ())
         close := pure ()
         reset := (reset.set true : BaseIO Unit) }
-    let result ← ((handler events).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } stream).run
+    let result ← ((handler events table).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } stream).run
     r.check s!"node.framing.{name}"
       ((match result with | .error (.protocol _) => true | _ => false) &&
         (← (reset.get : BaseIO Bool)))
@@ -391,6 +392,103 @@ private def outboundFailureChecks (r : Tests.Runner) : Async Unit := do
   n.stop
   (tc.close : BaseIO Unit)
 
+/-- A second inbound stream of a peer resets the first, as go does. The
+first handler ends with no failure, and the node reads the second stream. -/
+private def inboundReplaceChecks (r : Tests.Runner) : Async Unit := do
+  let deliveries ← (Chan.new 8 : BaseIO (Chan Message))
+  let saved ← (OnceRef.new (none : Option Libp2p.Core.StreamHandler) : BaseIO (OnceRef (Option Libp2p.Core.StreamHandler)))
+  let host : HostSeam := {
+    setHandler := fun h => saved.set (some h)
+    newStream := fun _ _ => return .ok (Constants.meshsubId, {
+      read := pure (.ok none)
+      write := fun _ => pure (.ok ())
+      close := pure ()
+      reset := pure () }) }
+  let tc ← (TestClock.new : BaseIO TestClock)
+  let n ← (start host { clock := tc.clock } : BaseIO Node)
+  discard (n.subscribe topic (fun m => discard <| deliveries.trySend m) : BaseIO Bool)
+  let some h ← (saved.get : BaseIO (Option Libp2p.Core.StreamHandler))
+    | throw <| IO.userError "missing node handler"
+  -- A stream over a pipe. Its reset records itself and closes the pipe,
+  -- which wakes a parked read.
+  let pipeStream (p : Pipe) (wasReset : OnceRef Bool) : Streams.Stream := {
+    read := return .ok (← p.read)
+    write := fun _ => pure (.ok ())
+    close := pure ()
+    reset := do
+      (wasReset.set true : BaseIO Unit)
+      (p.close : BaseIO Unit) }
+  let first ← (Pipe.new 16 : BaseIO Pipe)
+  let second ← (Pipe.new 16 : BaseIO Pipe)
+  let firstReset ← (OnceRef.new false : BaseIO (OnceRef Bool))
+  let secondReset ← (OnceRef.new false : BaseIO (OnceRef Bool))
+  let firstAnswer ← (OnceRef.new (none : Option (Except Libp2p.Core.Error Unit)) :
+    BaseIO (OnceRef (Option (Except Libp2p.Core.Error Unit))))
+  -- Each handler has its own owner, so the checks can join the first one
+  -- alone. The first handler lets the second one read from its `finally`,
+  -- before its task records the answer.
+  let firstOwner ← (TaskSet.new : BaseIO TaskSet)
+  let secondOwner ← (TaskSet.new : BaseIO TaskSet)
+  firstOwner.spawn do
+    let answer ← (h.handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty }
+      (pipeStream first firstReset)).run
+    (firstAnswer.set (some answer) : BaseIO Unit)
+  discard <| first.write (frame (Core.publishRpc (message [41])))
+  r.check "node.inbound.first-stream-delivers" ((← receive deliveries) == some (message [41]))
+  secondOwner.spawn do
+    discard <| (h.handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty }
+      (pipeStream second secondReset)).run
+  discard <| second.write (frame (Core.publishRpc (message [42])))
+  r.check "node.inbound.second-stream-delivers" ((← receive deliveries) == some (message [42]))
+  -- The second stream delivered, so the reset of the first one woke its
+  -- handler. Join it before the checks read its answer.
+  firstOwner.joinAll
+  r.check "node.inbound.second-stream-resets-first" (← (firstReset.get : BaseIO Bool))
+  r.check "node.inbound.first-handler-ends-clean"
+    (match ← (firstAnswer.get : BaseIO (Option (Except Libp2p.Core.Error Unit))) with
+     | some (.ok ()) => true
+     | _ => false)
+  r.check "node.inbound.second-stream-not-reset" (!(← (secondReset.get : BaseIO Bool)))
+  (second.close : BaseIO Unit)
+  secondOwner.joinAll
+  n.stop
+  (tc.close : BaseIO Unit)
+
+/-- The inbound table itself. After the replacement it holds the second
+stream alone: the end of the first handler drops only its own entry. The
+end of the second handler empties it. -/
+private def inboundTableChecks (r : Tests.Runner) : Async Unit := do
+  let events ← (Chan.new 16 : BaseIO (Chan Input))
+  let table ← (OnceRef.new { next := 0, entries := [] } : BaseIO (OnceRef InboundTable))
+  let h := handler events table
+  let pipeStream (p : Pipe) : Streams.Stream := {
+    read := return .ok (← p.read)
+    write := fun _ => pure (.ok ())
+    close := pure ()
+    reset := (p.close : BaseIO Unit) }
+  let first ← (Pipe.new 4 : BaseIO Pipe)
+  let second ← (Pipe.new 4 : BaseIO Pipe)
+  let firstOwner ← (TaskSet.new : BaseIO TaskSet)
+  let secondOwner ← (TaskSet.new : BaseIO TaskSet)
+  firstOwner.spawn do
+    discard <| (h.handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty }
+      (pipeStream first)).run
+  -- The first handler posts its join once it holds the table entry.
+  discard <| receive events
+  secondOwner.spawn do
+    discard <| (h.handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty }
+      (pipeStream second)).run
+  -- The second handler posts its join after the first one ended.
+  discard <| receive events
+  firstOwner.joinAll
+  let held ← (table.get : BaseIO InboundTable)
+  r.check "node.inbound.table-holds-the-second-stream-alone"
+    (held.entries.map (fun e => (e.1, e.2.id)) == [(pa, 1)])
+  (second.close : BaseIO Unit)
+  secondOwner.joinAll
+  r.check "node.inbound.table-empty-after-the-second-ends"
+    ((← (table.get : BaseIO InboundTable)).entries.isEmpty)
+
 /-- A legal body arrives one byte per read. The direct handler queue records
 all frame bodies in order, without a router changing or deduplicating them. -/
 private def readerCopyChecks (r : Tests.Runner) : Async Unit := do
@@ -400,6 +498,7 @@ private def readerCopyChecks (r : Tests.Runner) : Async Unit := do
   let all := frame first ++ frame second ++ frame third
   let cursor ← (OnceRef.new 0 : BaseIO (OnceRef Nat))
   let events ← (Chan.new 16 : BaseIO (Chan Input))
+  let table ← (OnceRef.new { next := 0, entries := [] } : BaseIO (OnceRef InboundTable))
   let dribble : Streams.Stream := {
     read := do
       let i ← (cursor.updateGet (fun i => (i, i + 1)) : BaseIO Nat)
@@ -407,7 +506,7 @@ private def readerCopyChecks (r : Tests.Runner) : Async Unit := do
     write := fun _ => pure (.ok ())
     close := pure ()
     reset := pure () }
-  let result ← ((handler events).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } dribble).run
+  let result ← ((handler events table).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } dribble).run
   let inputs ← (events.drain : BaseIO (List Input))
   let bodies := inputs.filterMap fun
     | .event (.rpc _ bytes) => some bytes
@@ -423,7 +522,7 @@ private def readerCopyChecks (r : Tests.Runner) : Async Unit := do
   let mixed := { dribble with read := do
     let bytes ← (pending.updateGet (fun xs => (xs.head?, xs.drop 1)) : BaseIO (Option ByteArray))
     return .ok bytes }
-  let mixedResult ← ((handler mixedEvents).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } mixed).run
+  let mixedResult ← ((handler mixedEvents table).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } mixed).run
   let mixedInputs ← (mixedEvents.drain : BaseIO (List Input))
   let mixedBodies := mixedInputs.filterMap fun
     | .event (.rpc _ bytes) => some bytes
@@ -775,6 +874,8 @@ def run (r : Tests.Runner) : IO Unit := do
     inboundChecks r
     frameBoundaryChecks r
     outboundFailureChecks r
+    inboundReplaceChecks r
+    inboundTableChecks r
     readerCopyChecks r
     pairChecks r
     postJoinSubscriptionChecks r

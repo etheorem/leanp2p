@@ -75,9 +75,13 @@ updateGet (root ARCHITECTURE §4.1). Only the first stop caller joins.
   explicit spread because issue #23 names the trickle regressions. The delay
   applies only to heartbeat IHAVEs. Publish, forward, graft and hello sends
   leave at once.
+- **Each peer has one inbound stream.** A second inbound stream of a peer
+  resets the first, and its handler waits for the first handler to end, as
+  go-libp2p-pubsub v0.19.0 does (comm.go, lines 77 to 90). `handler` keeps
+  the table.
 - **Each peer has one writer task.** The pinned go pubsub version a01777894f4c
-  resets duplicate inbound streams (comm.go, lines 55 to 65). Its sender uses
-  one stream and a bounded queue per peer (lines 181 to 233). Our writer
+  uses one stream and a bounded queue per peer (comm.go, lines 181 to 233).
+  Our writer
   writes frames in queue order. A failed write retires its outbound entry
   and closes its queue. Transport notifications own peerLeft. Stop resets
   installed streams to wake parked writes and joins
@@ -296,22 +300,72 @@ private def readFrames (events : Conc.Chan Input) (peer : Peer)
           header := ByteArray.emptyWithCapacity Varint.maxBytes
   return .ok ()
 
+/-- The inbound stream that the handler of a peer reads. `done` closes when
+that handler ends. -/
+structure Inbound where
+  id : Nat
+  stream : Streams.Stream
+  done : Conc.Chan Unit
+
+/-- The one inbound stream of each peer. -/
+structure InboundTable where
+  next : Nat
+  entries : List (Peer × Inbound)
+
+/-- Make `stream` the inbound stream of `peer`. The answer holds its entry id
+and the entry it replaces. -/
+private def installInbound (table : InboundTable) (peer : Peer) (stream : Streams.Stream)
+    (done : Conc.Chan Unit) : (Nat × Option Inbound) × InboundTable :=
+  let prev := (table.entries.find? (·.1 == peer)).map (·.2)
+  ((table.next, prev),
+    { next := table.next + 1
+      entries := (peer, ⟨table.next, stream, done⟩) :: table.entries.filter (·.1 != peer) })
+
+/-- Drop the entry `id` of `peer`. A newer stream of the peer owns the entry
+after a replacement, and the drop leaves that one. -/
+private def removeInbound (table : InboundTable) (peer : Peer) (id : Nat) : InboundTable :=
+  { table with entries := table.entries.filter fun e => !(e.1 == peer && e.2.id == id) }
+
 /-- Serve every RPC of a peer's stream in arrival order. Frame errors reset
 both directions. A clean EOF closes our write direction. The host owns and
-joins this handler task. -/
-def handler (events : Conc.Chan Input) : Libp2p.Core.StreamHandler where
+joins this handler task.
+
+A peer has one inbound stream, as in go-libp2p-pubsub v0.19.0 (`comm.go`,
+lines 77 to 90). A new stream replaces the entry of its peer in `inbound`,
+resets the old stream, and waits for the old handler to end before it reads,
+so the RPCs of the two streams do not mix. The reset wakes the parked read of
+the old handler, and that handler ends with `.ok`. On exit a handler drops its
+entry only when it still owns it (lines 60 to 65). -/
+def handler (events : Conc.Chan Input) (inbound : Conc.OnceRef InboundTable) :
+    Libp2p.Core.StreamHandler where
   id := Constants.meshsubId
   handle ctx stream := ExceptT.mk do
     let peer := ctx.remotePeer
-    -- The opener joins before its first RPC. Repeat joins are loop no-ops.
-    if let .error _ ← events.send (.event (.peerJoined peer .meshsub)) then
-      stream.close
-      return .ok ()
-    let answer ← readFrames events peer stream
-    match answer with
-    | .ok () => stream.close
-    | .error _ => stream.reset
-    return answer
+    let done : Conc.Chan Unit ← (Conc.Chan.new 1 : BaseIO (Conc.Chan Unit))
+    let (id, prev) ← (inbound.updateGet (installInbound · peer stream done) :
+      BaseIO (Nat × Option Inbound))
+    try
+      if let some old := prev then
+        old.stream.reset
+        -- Park: the old handler closes `done` as it ends.
+        discard <| old.done.recv
+      -- The opener joins before its first RPC. Repeat joins are loop no-ops.
+      if let .error _ ← events.send (.event (.peerJoined peer .meshsub)) then
+        stream.close
+        return .ok ()
+      let answer ← readFrames events peer stream
+      -- A replaced stream ends by the reset of its successor, which is no
+      -- fault of the peer.
+      let replaced ← (inbound.get : BaseIO InboundTable) <&> fun t =>
+        !(t.entries.any fun e => e.1 == peer && e.2.id == id)
+      match answer with
+      | .ok () => stream.close; return .ok ()
+      | .error _ =>
+        stream.reset
+        return if replaced then .ok () else answer
+    finally
+      (inbound.update (removeInbound · peer id) : BaseIO Unit)
+      (done.close : BaseIO Unit)
 
 /-! ## The subscription table -/
 
@@ -561,7 +615,8 @@ def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
   let now ← config.clock.nowMs
   let subs : Conc.OnceRef Subscriptions ← Conc.OnceRef.new { next := 0, entries := [] }
   let events : Conc.Chan Input ← Conc.Chan.new 64
-  host.setHandler (handler events)
+  let inbound : Conc.OnceRef InboundTable ← Conc.OnceRef.new { next := 0, entries := [] }
+  host.setHandler (handler events inbound)
   let tasks ← Conc.TaskSet.new
   let alarm ← Conc.Alarm.new
   let outbound ← Conc.OnceRef.new ([] : List (Peer × Outbound))
