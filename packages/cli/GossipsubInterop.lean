@@ -217,7 +217,9 @@ def provisionalOnRpc (observer : ReceiptObserver) (sender : String) (bytes : Lis
 /-- Host-free callbacks used by the script driver. -/
 structure Driver where
   connect : Int → Conc.Async (Except String Unit) := fun _ => pure (.error "host wiring is provisional")
-  subscribe : String → Bool → BaseIO Bool := fun _ _ => pure false
+  /-- Subscribe to a topic. It may park, so a script that subscribes to
+  many topics at once loses none (`Node.subscribeWait`). -/
+  subscribe : String → Bool → Conc.Async Bool := fun _ _ => pure false
   publish : String → ByteArray → BaseIO Bool := fun _ _ => pure false
   validationDelay : String → Nat → BaseIO Unit := fun _ _ => pure ()
 
@@ -231,7 +233,7 @@ def runScript (driver : Driver) (clock : Conc.Clock) (start : Nat) (actions : Li
           if outcome.isOk then outcome ← driver.connect peer
         pure outcome
     | .subscribeToTopic topic isPartial =>
-        if ← driver.subscribe topic isPartial then pure (.ok ()) else pure (.error "subscribe queue refused")
+        if ← driver.subscribe topic isPartial then pure (.ok ()) else pure (.error "the node stopped")
     | .publish id size topic => do
         match publishPayload id size with
         | .error e => pure (.error e)

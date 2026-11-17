@@ -151,6 +151,13 @@ structure Node where
   it must not park. `false` under the same conditions as `publish`, and the
   callback then stays unregistered. -/
   subscribe : TopicId → (Message → BaseIO Unit) → BaseIO Bool
+  /-- `subscribe`, which parks while the queue of the loop is full. A
+  consensus node subscribes to about 200 topics at once, more than the
+  queue holds, and `subscribe` refuses the ones past a full queue. `false`
+  only when the node stopped, and the callback then stays unregistered.
+  The loop task must not call it: a callback that parks on the loop's own
+  queue would wait on itself. -/
+  subscribeWait : TopicId → (Message → BaseIO Unit) → Conc.Async Bool
   /-- Drop every callback of the topic, and leave the topic. `false` under the
   same conditions as `publish`. -/
   unsubscribe : TopicId → BaseIO Bool
@@ -549,7 +556,7 @@ private def messageOf (topic : TopicId) (payload : ByteArray) : Message :=
 /-- Build the state, register the handler, and start the loop. The event
 queue holds 64 events. A full queue parks an inbound handler, which carries
 the back-pressure to the peer, and it refuses a `BaseIO` post of the
-application. -/
+application. `subscribeWait` is the one application post that parks. -/
 def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
   let now ← config.clock.nowMs
   let subs : Conc.OnceRef Subscriptions ← Conc.OnceRef.new { next := 0, entries := [] }
@@ -571,17 +578,34 @@ def start (host : HostSeam) (config : Config := {}) : BaseIO Node := do
   let post : Core.Event → BaseIO Bool := fun e => do
     if ← closing.get then return false
     events.trySend (.event e)
+  -- The post that parks: it waits for room, and the stop closes the queue.
+  let postWait : Core.Event → Conc.Async Bool := fun e => do
+    if ← (closing.get : BaseIO Bool) then return false
+    match ← events.send (.event e) with
+    | .ok () => return true
+    | .error _ => return false
+  -- One callback entry, and its removal when the post fails.
+  let register : TopicId → (Message → BaseIO Unit) → BaseIO Nat := fun topic callback =>
+    subs.updateGet fun s =>
+      (s.next,
+        { next := s.next + 1
+          entries := s.entries ++ [{ id := s.next, topic, callback }] })
+  let unregister : Nat → BaseIO Unit := fun id =>
+    subs.update fun s => { s with entries := s.entries.filter (fun entry => entry.id != id) }
   return {
     publish := fun topic payload => post (.publish (messageOf topic payload))
     subscribe := fun topic callback => do
       if ← closing.get then return false
-      let id ← subs.updateGet fun s =>
-        (s.next,
-          { next := s.next + 1
-            entries := s.entries ++ [{ id := s.next, topic, callback }] })
+      let id ← register topic callback
       let sent ← post (.subscribe topic)
-      if !sent then
-        subs.update fun s => { s with entries := s.entries.filter (fun entry => entry.id != id) }
+      if !sent then unregister id
+      return sent
+    subscribeWait := fun topic callback => do
+      if ← (closing.get : BaseIO Bool) then return false
+      let id ← (register topic callback : BaseIO Nat)
+      -- Park: the loop takes a queued input, or the stop closes the queue.
+      let sent ← postWait (.subscribe topic)
+      if !sent then (unregister id : BaseIO Unit)
       return sent
     unsubscribe := fun topic => do
       if ← closing.get then return false

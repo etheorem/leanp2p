@@ -731,6 +731,39 @@ private def publisherOrder (r : Tests.Runner) : Async Unit := do
   IO.println s!"node.measure.publishers countA={seqA.length} countB={seqB.length} streamsA={oa} streamsB={ob} inversionsA={ia} inversionsB={ib}"
   finish sw [a,b,sink]
 
+/-- A burst of subscriptions larger than the queue of the loop:
+`subscribeWait` parks while the queue is full, so every subscription
+lands, and a peer that joins after the burst gets all of them in its
+hello. -/
+private def subscribeWaitChecks (r : Tests.Runner) : Async Unit := do
+  let sw ← (Switch.new : BaseIO Switch)
+  let seen ← (Chan.new 64 : BaseIO (Chan Seen))
+  let ended ← (Chan.new 16 : BaseIO (Chan Unit))
+  let peerHost ← (probe sw pb seen ended : BaseIO HostSeam)
+  let (host, _) ← (sw.host pa : BaseIO (HostSeam × TaskSet))
+  let tc ← (TestClock.new : BaseIO TestClock)
+  let n ← (start host { clock := tc.clock } : BaseIO Node)
+  -- 200 topics, as a consensus node subscribes, past the queue of 64.
+  let mut accepted := 0
+  for i in [0:200] do
+    if ← n.subscribeWait ⟨s!"topic-{i}"⟩ (fun _ => pure ()) then accepted := accepted + 1
+  r.check "node.subscribe-wait.burst-all-accepted" (accepted == 200)
+  -- The peer joins after the burst through an inbound stream. The handler
+  -- posts the join with a `send` that parks, so the join lands behind the
+  -- 200 subscribes in the queue. The hello then lists every topic in one
+  -- frame. One announcement per topic would pass through the peer's queue
+  -- of 32 frames, which drops a frame when the writer falls behind.
+  let joined ← openStream peerHost pa
+  let hello ← receiveWhere seen fun s => !s.rpc.subscriptions.isEmpty
+  r.check "node.subscribe-wait.hello-lists-every-topic"
+    (hello.any fun s => (s.rpc.subscriptions.filter (·.subscribe)).length == 200)
+  joined.close
+  n.stop
+  r.check "node.subscribe-wait.refused-after-stop"
+    (!(← n.subscribeWait ⟨"late"⟩ (fun _ => pure ())))
+  sw.close
+  (tc.close : BaseIO Unit)
+
 /-- Run the node regressions and print the measured queue and ordering counts. -/
 def run (r : Tests.Runner) : IO Unit := do
   r.section "gossipsub Node" "packages/libp2p/protocols/docs/PLAN.md, unit 3"
@@ -752,5 +785,6 @@ def run (r : Tests.Runner) : IO Unit := do
     pendingBound r
     stalledAndDrops r
     publisherOrder r
+    subscribeWaitChecks r
 
 end Tests.Gossipsub.Node

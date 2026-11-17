@@ -127,7 +127,9 @@ back.
 - **Gossipsub.** `publish` hands a topic and payload bytes to the node,
   and `subscribe` registers a delivery callback. Both sit at the seam
   over the loop; the mesh decisions live in the core, and no caller
-  sees them.
+  sees them. `subscribe` refuses a post that finds the loop's queue
+  full. `subscribeWait` parks on that queue, so a consensus node can
+  subscribe to its 200 topics at once (etheorem/leanp2p#110, item 9).
 
 The client sides live in this package because §2 bans protocol logic in
 `cli/`. `Identify.client` replaces the spike's `Identify.request`

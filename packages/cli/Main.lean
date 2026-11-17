@@ -102,7 +102,7 @@ def run (args : List String) : IO UInt32 := do
             if ← active.node.peerJoined joined .meshsub then pure (.ok ())
             else pure (.error "peerJoined queue refused")
           | .error e => pure (.error (reprStr e))
-      subscribe := fun topic _ => active.node.subscribe ⟨topic⟩ (fun _ => pure ())
+      subscribe := fun topic _ => active.node.subscribeWait ⟨topic⟩ (fun _ => pure ())
       publish := fun topic payload => active.node.publish ⟨topic⟩ payload
       validationDelay := fun topic delay => delayTable.set topic delay }
     match ← (runScript driver Conc.Clock.system start actions).run with
