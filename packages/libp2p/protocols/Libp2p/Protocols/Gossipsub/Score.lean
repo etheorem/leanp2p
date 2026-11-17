@@ -68,9 +68,16 @@ The comparison is strict, as the spec's pseudocode writes it.
 
 ## Time
 
-`elapsed` computes the mesh time lazily from `timeInMesh`, `graftTime`, and `now`. `Nat`
-subtraction saturates at zero. The caller passes `now >= graftTime`; no theorem consumes that
-precondition.
+`elapsed` computes the mesh time lazily from `graftTime` and `now`. `Nat` subtraction saturates
+at zero. The caller passes `now >= graftTime`; no theorem consumes that precondition.
+
+The mesh time counts the current mesh period alone, as rust-libp2p does (`c449090`,
+`protocols/gossipsub/src/peer_score.rs`). A graft starts the period at zero (lines 643 to 650),
+and a prune ends it (lines 667 to 674). Out of the mesh, `P1` is 0 (lines 299 to 310), and `P3`
+is 0 too, since its activation reads the mesh time. go-libp2p-pubsub v0.19.0 differs in one
+place: its prune keeps `meshMessageDeliveriesActive` (`score.go`, lines 689 to 696), so `P3`
+still charges a pruned peer on top of the `P3b` penalty until the next graft. This module follows
+rust and charges `P3b` alone.
 
 ## The Boolean validity mirror
 
@@ -272,12 +279,9 @@ theorem GlobalParams.validB_iff (g : GlobalParams) :
 
 /-! ## Peer state -/
 
-/-- The counters of one peer in one topic. `timeInMesh` holds the accrued mesh time, and
-`graftTime` holds the start of the current mesh period. `elapsed` sums the two when `inMesh` is
-true. -/
+/-- The counters of one peer in one topic. `graftTime` holds the start of the current mesh
+period, and `elapsed` reads it while `inMesh` is true. -/
 structure TopicCounters where
-  /-- The mesh time accrued in earlier mesh periods. -/
-  timeInMesh : Millis
   /-- The time of the last graft. -/
   graftTime : Millis
   /-- Whether the peer is in the mesh of the topic. -/
@@ -293,7 +297,6 @@ structure TopicCounters where
 
 /-- The all-zero counters of a peer that has no history in a topic. -/
 def TopicCounters.zero : TopicCounters where
-  timeInMesh := 0
   graftTime := 0
   inMesh := false
   firstMessageDeliveries := 0
@@ -322,11 +325,11 @@ def PeerState.zero : PeerState where
 
 /-! ## Scoring -/
 
-/-- The mesh time of a peer in a topic. The peer accrues time from `graftTime` to `now` while
-`inMesh` is true, and the stored `timeInMesh` holds the earlier periods. The `Nat` subtraction
-saturates at zero. The caller passes `now >= graftTime`. -/
+/-- The mesh time of a peer in a topic: the time from `graftTime` to `now` while `inMesh` is
+true, and 0 out of the mesh (the module doc, "Time"). The `Nat` subtraction saturates at zero.
+The caller passes `now >= graftTime`. -/
 def elapsed (now : Millis) (t : TopicCounters) : Millis :=
-  t.timeInMesh + (if t.inMesh then now - t.graftTime else 0)
+  if t.inMesh then now - t.graftTime else 0
 
 /-- `P1`, the time in mesh: the elapsed time in quanta, capped. -/
 def p1 (tp : TopicParams) (now : Millis) (t : TopicCounters) : Nat :=
@@ -406,8 +409,8 @@ zero the result when it falls below `decayToZero`. The comparison is strict. -/
 def decayCounter (d : Nat) (decayToZero : Nat) (c : Nat) : Nat :=
   if c * d / scoreScale < decayToZero then 0 else c * d / scoreScale
 
-/-- One decay step of the topic counters. The four decaying counters move; `timeInMesh`,
-`graftTime`, and `inMesh` stay. -/
+/-- One decay step of the topic counters. The four decaying counters move; `graftTime` and
+`inMesh` stay. -/
 def decayTopic (tp : TopicParams) (decayToZero : Nat) (t : TopicCounters) : TopicCounters :=
   { t with
     firstMessageDeliveries :=
@@ -465,20 +468,20 @@ private def setCounters (s : PeerState) (id : TopicId) (t : TopicCounters) : Pee
 
 /-! ## Counter updates -/
 
-/-- The graft update: when the peer is not in the mesh, set `inMesh` and record the graft time.
-A peer that is already in the mesh is unchanged. -/
+/-- The graft update: when the peer is not in the mesh, set `inMesh` and record the graft time,
+so the mesh time starts at zero. A peer that is already in the mesh is unchanged. -/
 def graft (s : PeerState) (now : Millis) (id : TopicId) : PeerState :=
   let t := countersOf s id
   if t.inMesh then s
   else setCounters s id { t with inMesh := true, graftTime := now }
 
-/-- The counter part of a prune: fold the elapsed mesh time into `timeInMesh`, leave the mesh,
-and add the square of the delivery deficit to the failure penalty when the activation window
-has passed and the delivery count is below the threshold. -/
+/-- The counter part of a prune: leave the mesh, which ends the mesh time, and add the square
+of the delivery deficit to the failure penalty when the activation window has passed and the
+delivery count is below the threshold. -/
 private def pruneCounters (p : Params) (now : Millis) (id : TopicId)
     (t : TopicCounters) : TopicCounters :=
   let e := elapsed now t
-  let t1 := { t with timeInMesh := e, inMesh := false }
+  let t1 := { t with inMesh := false }
   match p.topics id with
   | some tp =>
       if tp.meshMessageDeliveriesActivation < e ∧
@@ -489,8 +492,8 @@ private def pruneCounters (p : Params) (now : Millis) (id : TopicId)
       else t1
   | none => t1
 
-/-- The prune update: a peer in the mesh folds its mesh time and adds the failure penalty, per
-spec. A peer that is not in the mesh is unchanged. -/
+/-- The prune update: a peer in the mesh leaves it and adds the failure penalty, per spec. A peer
+that is not in the mesh is unchanged. -/
 def prune (p : Params) (s : PeerState) (now : Millis) (id : TopicId) : PeerState :=
   let t := countersOf s id
   if t.inMesh then setCounters s id (pruneCounters p now id t) else s
@@ -715,9 +718,9 @@ theorem decay_behaviourPenalty_le {p : Params} (h : Params.Valid p) (s : PeerSta
     decayCounter_le p.global.behaviourPenaltyDecay p.global.decayToZero
       s.behaviourPenalty h.global.behaviourPenaltyDecay_le
 
-/-- A decay step leaves the mesh time, the graft time, and the mesh membership unchanged. -/
+/-- A decay step leaves the graft time and the mesh membership unchanged, so the mesh time
+stays. -/
 theorem decay_preserves_mesh {p : Params} (s : PeerState) (id : TopicId) :
-    (countersOf (decay p s) id).timeInMesh = (countersOf s id).timeInMesh ∧
     (countersOf (decay p s) id).graftTime = (countersOf s id).graftTime ∧
     (countersOf (decay p s) id).inMesh = (countersOf s id).inMesh := by
   rw [countersOf_decay]

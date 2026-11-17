@@ -100,6 +100,9 @@ private def s6 : PeerState := prune walkParams s5 30000 eth
 /-- Step 8: one decay interval. -/
 private def s7 : PeerState := decay walkParams s6
 
+/-- Step 10: a second graft at time 40000. The mesh time starts again at zero. -/
+private def s8 : PeerState := graft s7 40000 eth
+
 /-! ## Strictness fixtures -/
 
 /-- Counters with the peer in the mesh since time 0 and no deliveries. -/
@@ -267,14 +270,14 @@ def run (r : Runner) : IO Unit := do
   r.check "score.walk.p7" (score walkParams s5 30000 == -890)
 
   -- Step 7: prune at 30000. The elapsed time 30000 passes the activation, and the count 3 is
-  -- below the threshold 4, so the failure penalty grows by (4 - 3)^2 = 1. P1 = 300, P2 = 10,
-  -- P3 = -100, P3b = -100 * 1 = -100, P4 = -1000: topic score = -890. Global P7 = -100.
-  -- Total = -990.
-  r.check "score.walk.prune" (score walkParams s6 30000 == -990)
+  -- below the threshold 4, so the failure penalty grows by (4 - 3)^2 = 1. The peer leaves the
+  -- mesh, so P1 = 0 and P3 = 0 (the module doc of the score, "Time"). P2 = 10, P3b = -100 * 1
+  -- = -100, P4 = -1000: topic score = -1090. Global P7 = -100. Total = -1190.
+  r.check "score.walk.prune" (score walkParams s6 30000 == -1190)
 
   -- Step 8: one decay. Each factor is 500, so a counter c becomes c * 500 / 1000, and a result
   -- below 1 becomes 0. First deliveries 1 -> 0, mesh deliveries 3 -> 1, failure penalty 1 -> 0,
-  -- invalid deliveries 1 -> 0, behavior penalty 1 -> 0. The mesh time and the membership stay.
+  -- invalid deliveries 1 -> 0, behavior penalty 1 -> 0. The graft time and the membership stay.
   r.check "score.walk.decay.first-message-deliveries"
     ((countersOf s7 eth).firstMessageDeliveries == 0)
   r.check "score.walk.decay.mesh-message-deliveries"
@@ -284,13 +287,19 @@ def run (r : Runner) : IO Unit := do
   r.check "score.walk.decay.invalid-message-deliveries"
     ((countersOf s7 eth).invalidMessageDeliveries == 0)
   r.check "score.walk.decay.behavior-penalty" (s7.behaviourPenalty == 0)
-  r.check "score.walk.decay.keeps-mesh-time"
-    ((countersOf s7 eth).timeInMesh == 30000 && (countersOf s7 eth).inMesh == false)
+  r.check "score.walk.decay.keeps-graft-time"
+    ((countersOf s7 eth).graftTime == 0 && (countersOf s7 eth).inMesh == false)
 
-  -- Step 9: score after the decay, at 30000. P1 = 300, P2 = 0, P3 = (4 - 1)^2 = 9 with term
-  -- -900, P3b = 0, P4 = 0. Topic score = 300 - 900 = -600. Contribution = -600. Global P7 = 0.
-  -- Total = -600.
-  r.check "score.walk.final" (score walkParams s7 30000 == -600)
+  -- Step 9: score after the decay, at 30000. Out of the mesh P1 = 0 and P3 = 0, and P2, P3b,
+  -- and P4 decayed to 0. Topic score = 0. Global P7 = 0. Total = 0.
+  r.check "score.walk.final" (score walkParams s7 30000 == 0)
+
+  -- Step 10: a second graft at 40000. The mesh time starts at zero, so at 40000 P1 = 0, and P3
+  -- waits for its activation again: total 0. A model that resumed the earlier 30000 ms would
+  -- give P1 = 300 and P3 = -900 at once. At 61000 the mesh time is 21000: P1 = 21, term 210, and
+  -- P3 = (4 - 1)^2 = 9, term -900. Total = -690.
+  r.check "score.walk.regraft-starts-at-zero" (score walkParams s8 40000 == 0)
+  r.check "score.walk.regraft-after-activation" (score walkParams s8 61000 == -690)
 
   -- The P3 activation boundary. At 20000 ms the activation is equal, so the strict comparison
   -- fails and P3 = 0. At 20001 ms the deficit is (4 - 0)^2 = 16.
