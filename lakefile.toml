@@ -26,6 +26,8 @@ defaultTargets = [
   "Libp2pNegotiate",
   "Libp2pHost",
   "Libp2pProtocols",
+  "Libp2pDiscv5",
+  "Libp2pEth2",
   "CliHarness",
   "demo",
   "pingnode",
@@ -233,6 +235,20 @@ name = "Libp2pProtocols"
 srcDir = "packages/libp2p/protocols"
 roots = ["Libp2p.Protocols"]
 globs = ["Libp2p.Protocols.*"]
+
+# Node Discovery v5.1 over UDP, the consensus discovery (root PLAN W6.11).
+[[lean_lib]]
+name = "Libp2pDiscv5"
+srcDir = "packages/libp2p/discv5"
+roots = ["Libp2p.Discv5"]
+
+# The consensus networking of an Ethereum client: the topics and the
+# message id, the ENR fields, the req/resp methods, and the service over
+# the host, gossipsub, and discv5 (root PLAN W6.12).
+[[lean_lib]]
+name = "Libp2pEth2"
+srcDir = "packages/libp2p/eth2"
+roots = ["Libp2p.Eth2"]
 
 [[lean_lib]]
 name = "CliHarness"

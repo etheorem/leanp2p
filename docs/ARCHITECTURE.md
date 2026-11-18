@@ -60,14 +60,17 @@ packages/
     tls/                       TLS 1.3 over a Connection (libssl shim)
     quic/                      QUIC over UDP (ngtcp2 shim)
   libp2p/                      the protocol stack
-    identity/                  keys, peer ids
+    identity/                  keys, peer ids, ENR
     core/                      ProtocolId, Core.Error, the libp2p seam types
+    discv5/                    Node Discovery v5 over UDP, the consensus discovery
     security/                  Noise XX and libp2p TLS as SecurityProtocol values
     mux/                       Muxer values: yamux (over net/yamux), mplex
     negotiate/                 multistream-select, upgrader
     quic/                      QUIC as a SecuredTransport value
     host/                      swarm/host, peerstore, dedup, deadlines
     protocols/                 identify, ping, req/resp, gossipsub
+    eth2/                      the consensus networking: topics, message id,
+                               ENR fields, methods, the service
   cli/                         command-line executables: demo node,
                                ping node, interop harness; config and wiring
 ```
@@ -81,9 +84,12 @@ them:
   `{net/yamux, net/tls} → net/streams`,
   `codec/{proto,multiformats} → codec/varint`, and inside `libp2p`
   `identity → core → {security, mux} → {negotiate, quic} → host →
-  protocols`. Implementations import `core`. `negotiate` and `host`
+  protocols → eth2`. Implementations import `core`. `negotiate` and `host`
   import `core` and no implementation (§3.1); `cli/` hands the host the
-  `quic` value.
+  `quic` value. Inside `libp2p`, `discv5` imports `identity` only, so it
+  has the rank of `core`. It speaks no libp2p. `eth2` sits above
+  `protocols` and joins discv5 to the host, the gossipsub node, and the
+  req/resp methods.
 - No package left of `libp2p` mentions libp2p, so other projects can
   use these packages.
 
@@ -1043,10 +1049,12 @@ interface seams exist, and no implementation work is scheduled.
 | keys + peer id, **Ed25519** (+ secp256k1 host keys) | host identity; clients use Ed25519/secp256k1 | done (Ed25519 and secp256k1) |
 | identify (+ identify-push) | peer metadata; gossipsub peer scoring | done (push is trivial) |
 | protobuf codec + key/identify messages | identify, ENR, host keys | done |
-| **req/resp framework** (`/eth2/beacon_chain/req/.../ssz_snappy`) | Status, BlocksByRange/ByRoot, BlobSidecarsByRange/ByRoot, Metadata, Ping, Goodbye; SSZ with **snappy** framing over libp2p streams | **new work** (snappy is a new dependency, bound FFI first per the §4 dependency strategy; the framing format and its CRC-32C are pure Lean over the block binding; SSZ encoding is pure Lean) |
+| **req/resp framework** (`/eth2/beacon_chain/req/.../ssz_snappy`) | Status, BlocksByRange/ByRoot, BlobSidecarsByRange/ByRoot, Metadata, Ping, Goodbye; SSZ with **snappy** framing over libp2p streams | **new work** (snappy is a new dependency, bound FFI first per the §4 dependency strategy; the framing format and its CRC-32C are pure Lean over the block binding; the SSZ payloads stay with the client) |
 | **gossipsub v1.1** | blocks, aggregates, slashings, exits, blob sidecars | **new work** (the largest component) |
 | host/upgrade/peerstore, dedup, deadlines | everything above composes through them | done (TTLs/limits deferred) |
-| ENR ↔ multiaddr/peer-id mapping | discovery integration (discv5 sits outside libp2p and outside this scope) | multiaddr side done; ENR codec new (simple RLP) |
+| ENR ↔ multiaddr/peer-id mapping | discovery integration | done (W6.1); the consensus reading of the address keys is W6.10 |
+| **discv5** (Node Discovery v5.1) | "The discovery domain: discv5" (phase0 `p2p-interface.md`): every consensus client finds its peers through it, over UDP beside libp2p | **new work** (v2, W6.11: `libp2p/discv5`) |
+| **the consensus profile and service** | the topics and the message id, the ENR fields, the req/resp methods, the `Status` duty, and the fork changes over the schedule that the client hands in (phase0 to fulu `p2p-interface.md`). The client owns every consensus type and its SSZ, and the service carries bytes | **new work** (v2, W6.12: `libp2p/eth2`) |
 
 **Optional (the spec allows them; build them when cheap):**
 
@@ -1058,6 +1066,14 @@ interface seams exist, and no implementation work is scheduled.
   spike already built it.
 - Hole punching (DCUtR, AUTONAT) and circuit relay. Some clients
   support them as experiments, and consensus works without them.
+- Gossipsub v1.2 (IDONTWANT) and v1.3 (the Extensions message and
+  partial messages). No phase spec requires them. The Fulu
+  `partial-columns` feature sends data columns as partial messages.
+  go-libp2p-pubsub and rust-libp2p speak both versions. v2 builds them
+  (W6.7).
+- floodsub peers. gossipsub v1.0 forwards to them for backward
+  compatibility, and Prysm and Lodestar accept them. v2 builds the
+  option, off by default (W6.6).
 
 **Not needed for consensus (defer, keep the seams only):**
 
@@ -1066,6 +1082,10 @@ interface seams exist, and no implementation work is scheduled.
   does not use it.
 - **Peer records and signed envelopes (RFC 0002, RFC 0003).** Consensus
   does not use them. The spike work is done.
+- **Gossipsub peer exchange.** The spec makes it optional, and no
+  consensus client sends it: Teku sets its PX limits to 0, and the
+  others leave their library's switch off. The router sends no PX and
+  ignores the peers of a PRUNE (#95).
 - **kad-dht, peer routing, content routing.** Consensus has no DHT.
 - **rendezvous, fetch, mDNS.** discv5 does the discovery.
 - **WebSockets, WebRTC, pnet (private networks), libp2p-HTTP.**
