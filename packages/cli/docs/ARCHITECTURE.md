@@ -473,13 +473,14 @@ cleanup failure exits 1. Every host `openHost` returns reaches
 `Tests/CliLive.lean` covers a successful dial, a port the test
 bound and then closed, an expected-peer mismatch, a peer that stays
 silent during protocol selection, and a peer that reads the payload
-and writes no echo. The two silent peers run until the command
-budget. The capture bound is 50 seconds, and the command exits
-inside it. Stdout is empty on each failure before a successful ping.
+and writes no echo. The silent selection ends at the host's
+negotiation deadline of 10 s (`Host.streamNegotiationMs`), and the
+missing echo runs until the command budget. The capture bound is 50
+seconds, and the command exits inside it. Stdout is empty on each failure before a successful ping.
 The refused dial prints `nobody listens at <addr>`. The mismatch
 prints `upgrade failed: authentication failure: remote peer id
 differs from the expected peer id`. The silent selection prints
-`stream failed: timeout: the stream opening deadline expired`. The
+`stream failed: timeout: stream negotiation: the deadline expired`. The
 missing echo prints `stream failed: timeout: the ping exchange
 deadline expired`.
 

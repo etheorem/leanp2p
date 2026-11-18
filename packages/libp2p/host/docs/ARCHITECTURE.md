@@ -25,7 +25,7 @@ libp2p group is §7, row 10).
 | `Libp2p/Host/Shutdown.lean` | `Host.close`, the §5.5 sequence |
 | `Libp2p/Host/Policy.lean` | the permissive default gater, and the permissive and denying test doubles the core pair assigned here; the default resource manager (admits everything) and the default ranker (keeps the order, no delay) |
 | `Libp2p/Host/Upgrade.lean` | `upgrade` and `Upgraded`: the stages of `libp2p/negotiate`, with the peer checkpoint between the handshake and the muxer stage, under one deadline |
-| `Libp2p/Host/StreamSelect.lean` | `negotiateStream`, multistream-select on a muxed stream, a shell over the pure core of `libp2p/negotiate` |
+| `Libp2p/Host/StreamSelect.lean` | `negotiateStream`, multistream-select on a muxed stream, a shell over the pure core of `libp2p/negotiate`, and `negotiateWithin`, the same under the deadline of `streamNegotiationMs` |
 
 All declarations live in the `Libp2p.Host` namespace, and the root
 module re-exports the public submodules.
@@ -284,13 +284,20 @@ fixes them as follows.
   resets a stream whose negotiation fails in the same place
   (`vendor/go-libp2p/p2p/host/basic/basic_host.go`, line 347). A
   stream the peer ends before it picks a protocol is an orderly end,
-  and no failure.
+  and no failure. The negotiation runs under one deadline of
+  `streamNegotiationMs`, 10 s, on the host's clock (`negotiateWithin`).
+  The expiry resets the stream, and the stream's reservation comes
+  back. go-libp2p sets the same 10 s on an inbound stream before it
+  negotiates (the same file, lines 39 and 327).
 - **Outbound streams.** `newStream` dials the peer through the
   peerstore when no session is live, as go-libp2p's `NewStream` calls
   `Connect` first (`basic_host.go`, line 452). It opens a stream,
   negotiates one of the caller's ids in order, and answers the
   selected id and the stream; a failed negotiation resets the stream.
-  The caller owns the stream.
+  The caller owns the stream. The negotiation runs under the same 10 s
+  deadline as an inbound one, and its expiry answers the `timeout` arm.
+  go's `NewStream` takes that bound when the caller gives no deadline
+  (`basic_host.go`, lines 443 to 447).
 - **Stream shares.** Every stream takes a share from its connection's
   scope (`ConnectionScope.reserveStream`). A served stream returns it
   when its handler ends. An outbound stream returns it at a reset, or

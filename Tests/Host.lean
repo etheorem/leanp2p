@@ -346,7 +346,8 @@ private def failHandler : StreamHandler where
 /-- A host of the suite on `net`, its peer id, and the channel its
 failures arrive on. -/
 private def mkHost (net : Sim.Net) (idByte : UInt8) (tc : TestClock)
-    (gater : ConnectionGater := Policy.permissiveGater) :
+    (gater : ConnectionGater := Policy.permissiveGater)
+    (resources : ResourceManager := Policy.unlimited) :
     Async (Host × Chan Failure) := do
   let cfg ← cfgOf idByte
   let failures : Chan Failure ← Chan.new 16
@@ -357,6 +358,7 @@ private def mkHost (net : Sim.Net) (idByte : UInt8) (tc : TestClock)
     muxers := [Libp2p.Mux.yamux, Libp2p.Mux.mplex]
     handlers := [echoHandler, failHandler]
     gater
+    resources
     clock := tc.clock
     onFailure := fun f => discard (failures.trySend f) }
   match ← (Host.new config : BaseIO _) with
@@ -665,6 +667,152 @@ private def mplexChecks (r : Runner) : Async Unit := do
   a.close
   tc.close
 
+/-- A resource manager that admits everything and counts the stream
+reservations: `taken` counts every one, and `live` the ones still held,
+so a check can see a share come back. -/
+private def countingResources (taken live : OnceRef Nat) : ResourceManager where
+  openConnection _ _ _ := pure (some {
+    setPeer := fun _ => pure true
+    reserveStream := do
+      taken.update (· + 1)
+      live.update (· + 1)
+      let held ← OnceRef.new true
+      -- A second release returns nothing (`Reservation`).
+      return some { release := do
+        if ← held.updateGet fun h => (h, false) then live.update (· - 1) }
+    reserveMemory := fun _ => pure (some { release := pure () })
+    release := pure () })
+
+/-- `act` under a bound of 5 s of real time, so a host deadline that
+never fires fails its check with no hang. `wake` reaches the park of
+`act`. `none` at the bound. -/
+private def inRealTime {α : Type} (wake : BaseIO Unit) (act : Async α) : Async (Option α) := do
+  match ← withinDeadline Clock.system 5000 wake act with
+  | .ok a => return some a
+  | .error _ => return none
+
+/-- Move the test clock a second at a time, with a pause of 20 ms of
+real time between steps, until `cond` holds or `rounds` steps have run.
+The test clock moves only when the test moves it, and yamux runs its
+write deadline of 10 s on the same clock. One jump of 10 s could fire
+that deadline on a write whose task has not had its turn yet. The pause
+gives every task its turn. -/
+private def advanceUntil (tc : TestClock) (cond : BaseIO Bool) : Nat → Async Bool
+  | 0 => cond
+  | rounds + 1 => do
+    if ← cond then return true
+    tc.advance 1000
+    discard <| select #[← (Park.sleep 20 () : BaseIO (Park Unit))]
+    advanceUntil tc cond rounds
+
+/-- Read until the stream ends, and set `reset` when it ends in a
+reset. -/
+private def readToReset (s : Stream) (reset : OnceRef Bool) : Async Unit := do
+  repeat
+    match ← s.read with
+    | .ok (some _) => pure ()
+    | .error .reset => reset.set true; break
+    | _ => break
+
+/-- The peer id of the identity byte `idByte`. -/
+private def peerOfByte (idByte : UInt8) : Async PeerId := do
+  match (← cfgOf idByte).identity.toPublic.bind PeerId.ofPubKey with
+  | .ok p => return p
+  | .error _ => throw <| IO.userError "test peer id does not build"
+
+/-- The negotiation deadline of an inbound stream (#120). A peer sends
+the multistream header on a new stream, then stays silent. At the
+deadline the host resets the stream, the failure reaches the owner,
+the stream reservation comes back, and the session stays. -/
+private def negotiationResponderChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let taken ← OnceRef.new 0
+  let live ← OnceRef.new 0
+  let (a, failsA) ← mkHost net 15 tc (resources := countingResources taken live)
+  let addrA ← listenOn a "/memory/171"
+  let peerRaw ← peerOfByte 16
+  let some conn ← net.transport.dial addrA | throw <| IO.userError "dial failed"
+  -- The raw peer upgrades on the system clock, so only the host's
+  -- timers run on the test clock.
+  match ← (Libp2p.Negotiate.upgradeWith Clock.system .initiator conn .empty (some a.localPeer)
+      [← noiseOf 16] [Libp2p.Mux.yamux]).run with
+  | .error e => r.check s!"host: the silent stream's peer upgrades ({e})" false
+  | .ok (session, _) =>
+    match ← (session.openStream echoId).run with
+    | .error e => r.check s!"host: the silent stream opens ({e})" false
+    | .ok s =>
+      discard <| s.write (Bytes.ofNatList (Libp2p.Negotiate.encodeText "/multistream/1.0.0"))
+      -- The host may send its own header first, so the reader takes
+      -- the data until the stream ends.
+      let reset ← OnceRef.new false
+      let reader ← TaskSet.new
+      reader.spawn (readToReset s reset)
+      let ended ← advanceUntil tc reset.get 40
+      -- On a failure, our own reset ends the reader, so the join returns.
+      unless ended do s.reset
+      reader.joinAll
+      r.check "host: the deadline resets a silent inbound stream" ended
+      match ← inRealTime failsA.close failsA.recv with
+      | some (some f) =>
+        r.check "host: the expiry reaches the owner as a stream timeout"
+          (f.peer == some peerRaw && f.error matches .stream (.timeout _))
+      | _ => r.check "host: the expiry reaches the owner as a stream timeout" false
+      -- Without the host's reset, our own reset above would return the
+      -- share too, so the check needs the host's reset first.
+      r.check "host: the expiry returns the stream reservation"
+        (ended && (← (taken.get : BaseIO Nat)) == 1 && (← (live.get : BaseIO Nat)) == 0)
+      r.check "host: the session stays after the expiry"
+        (← (a.connected peerRaw : BaseIO Bool))
+    discard session.close.toBaseIO
+    discard session.join.run
+  a.close
+  tc.close
+
+/-- The negotiation deadline of an outbound stream (#120). The peer
+accepts the stream and never answers the proposal. `newStream` answers
+the `timeout` arm at the deadline, and the session stays. -/
+private def negotiationInitiatorChecks (r : Runner) : Async Unit := do
+  let net ← Sim.Net.new
+  let tc ← TestClock.new
+  let (b, _) ← mkHost net 17 tc
+  let listener ← net.listen (← ma "/memory/172")
+  let peerRaw ← peerOfByte 18
+  let noise ← noiseOf 18
+  -- The raw responder upgrades, takes one stream, and reads it to its
+  -- end with no answer. The host's reset ends that read, and the close
+  -- of the host ends the session.
+  let responder ← TaskSet.new
+  responder.spawn do
+    let some conn ← listener.accept | return
+    match ← (Libp2p.Negotiate.upgradeWith Clock.system .responder conn .empty none
+        [noise] [Libp2p.Mux.yamux]).run with
+    | .error _ => return
+    | .ok (session, _) =>
+      if let some s ← session.accept then discard <| readAll s
+      discard session.join.run
+  match ← b.dial (← withPeer listener.addr peerRaw) with
+  | .error e => r.check s!"host: the silent responder upgrades ({e})" false
+  | .ok _ =>
+    let answer : OnceRef (Option (Except Libp2p.Host.Error (ProtocolId × Stream))) ←
+      OnceRef.new none
+    let asker ← TaskSet.new
+    asker.spawn do answer.set (some (← b.newStream peerRaw [echoId]))
+    let ended ← advanceUntil tc (return (← answer.get).isSome) 40
+    r.check "host: newStream answers timeout at the deadline"
+      (ended && (← (answer.get : BaseIO _)) matches some (.error (.stream (.timeout _))))
+    r.check "host: the session stays after the expiry"
+      (← (b.connected peerRaw : BaseIO Bool))
+    -- On a failure, the close of the host ends the parked negotiation,
+    -- so the join returns.
+    unless ended do b.close
+    asker.joinAll
+  b.close
+  discard listener.close.toBaseIO
+  responder.joinAll
+  listener.join
+  tc.close
+
 end Swarm
 
 def Host.run (r : Runner) : IO Unit := do
@@ -678,7 +826,9 @@ def Host.run (r : Runner) : IO Unit := do
   for (label, act) in [("pipeline", pipelineChecks r), ("answers", answerChecks r),
       ("policy", policyChecks r), ("silent peer", silentPeerChecks r),
       ("shutdown", shutdownChecks r), ("hand-over", handOverChecks r),
-      ("mplex", mplexChecks r)] do
+      ("mplex", mplexChecks r),
+      ("negotiation deadline, responder", negotiationResponderChecks r),
+      ("negotiation deadline, initiator", negotiationInitiatorChecks r)] do
     try act.run
     catch e => r.check s!"host {label}: runs ({e})" false
 

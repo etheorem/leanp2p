@@ -529,7 +529,8 @@ private def stallSession (listener : Streams.Listener)
         discard <| session.join.run
 
 /-- The peer finishes Noise and yamux, then stays silent during
-protocol selection. The dialer's own budget ends the command. -/
+protocol selection. The host's negotiation deadline of 10 s ends the
+command, before the dialer's own budget. -/
 private def dialStall (runner : Runner) : IO Unit := do
   let seed ← match ← Crypto.ed25519Generate.run with
     | .error e => throw <| IO.userError (reprStr e)
@@ -562,8 +563,8 @@ private def dialStall (runner : Runner) : IO Unit := do
     runner.check "dial stall exits" (!out.timedOut && out.exitCode == 1)
     runner.check "dial stall stdout" (out.stdout == "")
     runner.check "dial stall stderr"
-      (out.stderr == "stream failed: timeout: the stream opening deadline expired\n")
-    runner.check "dial stall bounded" (elapsed ≥ 25000 && elapsed < 45000)
+      (out.stderr == "stream failed: timeout: stream negotiation: the deadline expired\n")
+    runner.check "dial stall bounded" (elapsed ≥ 8000 && elapsed < 25000)
   catch e =>
     fault := some e
   listener.close

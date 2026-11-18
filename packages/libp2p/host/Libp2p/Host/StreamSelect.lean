@@ -2,6 +2,7 @@ import Streams
 import Bytes
 import Libp2p.Core
 import Libp2p.Negotiate
+import Libp2p.Host.Constants
 
 /-!
 # Protocol selection on a muxed stream
@@ -27,6 +28,12 @@ protocol. `Stream.prependBytes` hands them on to the handler
 The read parks for as long as the peer stays silent, so no measure
 bounds the loop (root §3.3). The `repeat` form keeps the definition free
 of a `partial` marker, as in `Negotiate.negotiate`.
+
+The host calls `negotiateWithin`, which bounds the exchange in time.
+One deadline of `streamNegotiationMs` runs on the host's clock, in both
+roles, and its expiry resets the stream. The reset wakes the parked
+read, and the exchange ends by itself (root §4.1, rule 1: never cancel,
+wake by close).
 -/
 
 set_option autoImplicit false
@@ -78,5 +85,24 @@ def negotiateStream (role : Libp2p.Core.Role) (stream : Streams.Stream)
   -- Every arm above returns or loops, so the `repeat` never falls
   -- through. The tail gives the `do` block its result type.
   throw (.closed "stream negotiation ended without a selection")
+
+/-- `negotiateStream` under the deadline of `streamNegotiationMs` on
+`clock`. The expiry resets the stream, and the answer is the `timeout`
+arm. The reset reaches the selected stream too, since the selection
+wraps the same stream, so a selection that lost the race holds
+nothing. -/
+def negotiateWithin (clock : Conc.Clock) (role : Libp2p.Core.Role) (stream : Streams.Stream)
+    (ids : List Libp2p.Core.ProtocolId) :
+    ExceptT Libp2p.Core.Error Conc.Async (Libp2p.Core.ProtocolId × Streams.Stream) := do
+  -- The expiry hook is `BaseIO` and must not park, so the reset runs on
+  -- a task that this call owns and joins (root §4.1, rule 2).
+  let owner ← Conc.TaskSet.new
+  let answer ← Conc.withinDeadline clock streamNegotiationMs (owner.spawn stream.reset)
+    (negotiateStream role stream ids).run
+  owner.joinAll
+  match answer with
+  | .ok r => ExceptT.mk (pure r)
+  | .error .deadlineExpired => throw (.timeout "stream negotiation: the deadline expired")
+  | .error e => throw (.closed s!"stream negotiation: {repr e}")
 
 end Libp2p.Host

@@ -280,14 +280,16 @@ private def upgradeConn (h : Host) (role : Role) (conn : Connection) (expected :
 the handler table, and run the handler. A refused admission, a failed
 negotiation, an id with no handler, and a failed handler each reset
 the stream, and the session stays (contracts 5 and 6; the package
-ARCHITECTURE, public surface). -/
+ARCHITECTURE, public surface). The negotiation runs under the deadline
+of `streamNegotiationMs`, so a silent stream gives its reservation back
+at the expiry. -/
 private def serveStream (h : Host) (ctx : StreamContext) (scope : ConnectionScope)
     (s : Stream) : Async Unit := do
   let peer := ctx.remotePeer
   let some share ← (scope.reserveStream : BaseIO (Option Reservation))
     | s.reset
   let ids := Handlers.ids (← (h.handlers.get : BaseIO Handlers))
-  match ← (negotiateStream .responder s ids).run with
+  match ← (negotiateWithin h.config.clock .responder s ids).run with
   | .error e =>
     s.reset
     share.release
@@ -502,7 +504,9 @@ def startListening (h : Host) (addr : Multiaddr) : Async (Except Error Multiaddr
 preference order. The host dials the peer through the peerstore when no
 session is live. The answer is the selected id and the stream, with
 the bytes the negotiation over-read at its front (§4.7). The caller
-owns the stream. -/
+owns the stream. The negotiation runs under the deadline of
+`streamNegotiationMs`. A peer that never answers gives the `timeout`
+arm at the expiry, and the stream is reset. -/
 def newStream (h : Host) (peer : PeerId) (protocols : List ProtocolId) :
     Async (Except Error (ProtocolId × Stream)) := do
   let some first := protocols.head?
@@ -518,7 +522,7 @@ def newStream (h : Host) (peer : PeerId) (protocols : List ProtocolId) :
     share.release
     return .error (.stream err)
   | .ok s =>
-    match ← (negotiateStream .initiator s protocols).run with
+    match ← (negotiateWithin h.config.clock .initiator s protocols).run with
     | .error err =>
       s.reset
       share.release
