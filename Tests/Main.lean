@@ -4,6 +4,7 @@ import Tests.Gossipsub.Sign
 import Tests.Gossipsub.Cache
 import Tests.Gossipsub.Score
 import Tests.Gossipsub.Rpc
+import Tests.Gossipsub.Payload
 import Tests.Gossipsub.Node
 import Tests.Gossipsub.Wire
 import Tests.Gossipsub.Interop
@@ -70,6 +71,7 @@ def main : IO UInt32 := do
   Tests.Gossipsub.Cache.run r
   Tests.Gossipsub.Score.run r
   Tests.Gossipsub.Rpc.run r
+  Tests.Gossipsub.Payload.run r
   Tests.Gossipsub.Node.run r
   Tests.Gossipsub.Wire.run r
   Tests.Gossipsub.Interop.run r

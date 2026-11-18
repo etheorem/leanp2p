@@ -264,6 +264,13 @@ root = "Tests.Interop.Noise"
 name = "tls-interop"
 root = "Tests.Interop.Tls"
 
+# The Lean side of the gossipsub interop check against go-libp2p-pubsub;
+# run it through `scripts/pubsub-interop.sh`. Like `noise-interop`, it is
+# not part of `lake test`.
+[[lean_exe]]
+name = "pubsub-interop"
+root = "Tests.Interop.Pubsub"
+
 [[lean_exe]]
 name = "gossipsub-interop"
 srcDir = "packages/cli"

@@ -16,6 +16,11 @@ stores one flat list instead and carries each entry's age, which states
 the same bound (`age < historyLength`) and makes each theorem one list
 induction.
 
+The message cache and the seen cache are models. The router runs a
+keyed index for each (`MessageIndex`, `SeenIndex`), because each list
+operation walks every entry. A property test pins each index to its
+model.
+
 The spec sections are `vendor/specs/pubsub/gossipsub/gossipsub-v1.0.md`
 ("Message Cache", and the `seen` cache paragraph) and
 `vendor/specs/pubsub/gossipsub/gossipsub-v1.1.md` ("Prune Backoff and
@@ -283,6 +288,70 @@ theorem shift_preserves_windowInvariant (c : MessageCache) :
   intro _ e he
   exact shift_age_lt (c := c) he
 
+/-! ## The message index: the production message cache
+
+`MessageCache` is the model, with the theorems above. Its `get` walks
+every cached message, and the router calls it once per id of every
+IHAVE and IWANT. `MessageIndex` is the structure the router runs: a
+`HashMap` from id to the newest message and the heartbeat it was put
+in, and one list of `(id, topic)` per history window, newest window
+first. `shift` drops the oldest window, and erases an id of it only
+when no later `put` renewed it.
+
+The two agree on `get` and `gossipIds` after every sequence of `put`
+and `shift`. The property test in `Tests/Gossipsub/Cache.lean` pins it
+(CLAUDE.md, "Proofs and tests", rule 2). -/
+
+/-- The production message cache. -/
+structure MessageIndex where
+  /-- The window counts, shared with the model. -/
+  params : WindowParams
+  /-- Each cached id: its newest message and the heartbeat of that put. -/
+  byId : Std.HashMap MessageId (Message × Nat) := {}
+  /-- One list of `(id, topic)` per window, newest window first, each
+  newest first. At most `historyLength` windows. -/
+  windows : List (List (MessageId × TopicId)) := [[]]
+  /-- The heartbeats so far. -/
+  tick : Nat := 0
+
+namespace MessageIndex
+
+/-- An empty index. -/
+def empty (p : WindowParams) : MessageIndex := { params := p }
+
+/-- Add a message to the current window: `MessageCache.put`. -/
+def put (c : MessageIndex) (id : MessageId) (m : Message) : MessageIndex :=
+  { c with byId := c.byId.insert id (m, c.tick)
+           windows := match c.windows with
+             | w :: ws => ((id, m.topic) :: w) :: ws
+             | [] => [[(id, m.topic)]] }
+
+/-- The newest message of the id: `MessageCache.get`. -/
+def get (c : MessageIndex) (id : MessageId) : Option Message :=
+  (c.byId.get? id).map (·.1)
+
+/-- Shift one heartbeat: `MessageCache.shift`. The window that reaches
+`historyLength` leaves, with each of its ids whose newest put was in
+it. -/
+def shift (c : MessageIndex) : MessageIndex :=
+  let tick := c.tick + 1
+  let windows := [] :: c.windows
+  let kept := windows.take c.params.historyLength
+  let gone := (windows.drop c.params.historyLength).flatten
+  -- A put at heartbeat `t` has age `tick - t`. It leaves at age
+  -- `historyLength`.
+  let byId := gone.foldl (fun m (id, _) =>
+    match m.get? id with
+    | some (_, t) => if c.params.historyLength ≤ tick - t then m.erase id else m
+    | none => m) c.byId
+  { c with tick, windows := kept, byId }
+
+/-- The ids gossip lists for a topic: `MessageCache.gossipIds`. -/
+def gossipIds (c : MessageIndex) (topic : TopicId) : List MessageId :=
+  ((c.windows.take c.params.historyGossip).flatten.filter (·.2 == topic)).map (·.1)
+
+end MessageIndex
+
 /-! ## Seen cache
 
 The seen cache holds the message ids observed recently. An id is seen
@@ -404,6 +473,112 @@ theorem prune_removes_expired (c : SeenCache) (now : Millis) :
   intro e he
   simp only [SeenCache.prune, List.mem_filter] at he
   exact of_decide_eq_true he.2
+
+/-! ## The seen index: the production seen cache
+
+`SeenCache` is the model: a list, and the theorems above. Each of its
+operations walks the whole list. At the default capacity of 65536 ids,
+`contains` plus `add` costs about 50 ms a message
+(etheorem/leanp2p#110, item 7). `SeenIndex` is the structure the router
+runs: a `HashMap` from id to its add time, and a queue of `(id, number)`
+in add order. A re-add leaves its old queue entry behind. An entry whose
+number no longer matches the map is stale, and the front of the queue
+skips it (lazy deletion).
+
+The two agree on `contains` for every sequence of `add` and `prune`
+whose times never go back, which is how the router calls them. The
+property test in `Tests/Gossipsub/Cache.lean` pins it (CLAUDE.md,
+"Proofs and tests", rule 2). With times that go back, a model `prune`
+can drop an entry from the middle, and the index keeps it until it
+reaches the front.
+
+The index keys each id by its `IdKey`. A `MessageId` is a `List Nat`,
+one heap cell per byte. A full index of 262144 ids of 20 bytes, the
+consensus capacity, took about 166 MiB with list keys, 650 bytes an id,
+and takes about 23 MiB with `IdKey`, 90 bytes an id. Both figures are
+the peak resident memory above an empty index, in one run each. -/
+
+/-- A message id as a map key. An id whose every value is a byte keeps
+its bytes in a `ByteArray`. The model allows any `Nat` in an id, so an
+id with a larger value keeps its list, and two different ids never share
+a key. -/
+inductive IdKey where
+  | bytes (b : ByteArray)
+  | wide (l : List Nat)
+  deriving BEq, Hashable
+
+/-- The key of an id. -/
+def IdKey.of (id : MessageId) : IdKey :=
+  if id.bytes.all (· < 256) then .bytes ⟨(id.bytes.map (·.toUInt8)).toArray⟩
+  else .wide id.bytes
+
+/-- The production seen cache. -/
+structure SeenIndex where
+  /-- The bounds, shared with the model. -/
+  params : SeenParams
+  /-- Each live id, by its key: its add time, and the number of its queue
+  entry. -/
+  index : Std.HashMap IdKey (Millis × Nat) := {}
+  /-- `(id, number)` in add order, oldest first, stale entries included.
+  The number tells a stale entry: a re-add in the same millisecond
+  leaves two entries with one id and one time. The queue is two lists:
+  `front` oldest first, and `back` newest first. A peek that finds
+  `front` empty moves `back` over once and keeps the result, so each
+  entry is reversed at most once. -/
+  front : List (IdKey × Nat) := []
+  /-- The newer half of the queue, newest first. -/
+  back : List (IdKey × Nat) := []
+  /-- The queue's length, stale entries included: the fuel of a walk. -/
+  len : Nat := 0
+  /-- The next entry number. -/
+  next : Nat := 0
+
+namespace SeenIndex
+
+/-- An empty index. -/
+def empty (p : SeenParams) : SeenIndex := { params := p }
+
+/-- Whether the id is seen at `now`: `SeenCache.contains`. -/
+def contains (c : SeenIndex) (id : MessageId) (now : Millis) : Bool :=
+  match c.index.get? (IdKey.of id) with
+  | some (t, _) => decide (t + c.params.ttl > now)
+  | none => false
+
+/-- Drop queue entries from the front while `drop` holds for the live
+ones, at their add time, and erase each live one from the map. A stale
+entry always goes. `fuel` bounds the walk by the queue's length. -/
+def popWhile (fuel : Nat) (drop : SeenIndex → Millis → Bool) (c : SeenIndex) : SeenIndex :=
+  match fuel with
+  | 0 => c
+  | fuel + 1 =>
+    -- Move `back` over once when `front` runs out, and keep the move.
+    let c := if c.front.isEmpty then { c with front := c.back.reverse, back := [] } else c
+    match c.front with
+    | [] => c
+    | (id, n) :: rest =>
+      match c.index.get? id with
+      | some (t, n') =>
+        if n' != n then popWhile fuel drop { c with front := rest, len := c.len - 1 }
+        else if drop c t then
+          popWhile fuel drop { c with index := c.index.erase id, front := rest, len := c.len - 1 }
+        else c
+      | none => popWhile fuel drop { c with front := rest, len := c.len - 1 }
+
+/-- Record the id at `now`: `SeenCache.add`. Past the capacity, the
+oldest live ids go. -/
+def add (c : SeenIndex) (id : MessageId) (now : Millis) : SeenIndex :=
+  let key := IdKey.of id
+  let c := { c with index := c.index.insert key (now, c.next), back := (key, c.next) :: c.back,
+                    len := c.len + 1, next := c.next + 1 }
+  if c.index.size ≤ c.params.capacity then c
+  else popWhile c.len (fun c _ => c.params.capacity < c.index.size) c
+
+/-- Drop the expired ids: `SeenCache.prune`, for times that never go
+back. -/
+def prune (c : SeenIndex) (now : Millis) : SeenIndex :=
+  popWhile c.len (fun c t => !(decide (t + c.params.ttl > now))) c
+
+end SeenIndex
 
 /-! ## Backoff table
 

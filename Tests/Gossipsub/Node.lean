@@ -331,6 +331,7 @@ private def frameBoundaryChecks (r : Tests.Runner) : Async Unit := do
     let remaining ← (OnceRef.new chunks : BaseIO (OnceRef (List ByteArray)))
     let reset ← (OnceRef.new false : BaseIO (OnceRef Bool))
     let events ← (Chan.new 16 : BaseIO (Chan Input))
+    let table ← (OnceRef.new { next := 0, entries := [] } : BaseIO (OnceRef InboundTable))
     let stream : Streams.Stream :=
       { read := do
           let next ← (remaining.updateGet (fun xs => (xs.head?, xs.drop 1)) : BaseIO (Option ByteArray))
@@ -338,7 +339,7 @@ private def frameBoundaryChecks (r : Tests.Runner) : Async Unit := do
         write := fun _ => pure (.ok ())
         close := pure ()
         reset := (reset.set true : BaseIO Unit) }
-    let result ← ((handler events).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } stream).run
+    let result ← ((handler events table).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } stream).run
     r.check s!"node.framing.{name}"
       ((match result with | .error (.protocol _) => true | _ => false) &&
         (← (reset.get : BaseIO Bool)))
@@ -391,6 +392,103 @@ private def outboundFailureChecks (r : Tests.Runner) : Async Unit := do
   n.stop
   (tc.close : BaseIO Unit)
 
+/-- A second inbound stream of a peer resets the first, as go does. The
+first handler ends with no failure, and the node reads the second stream. -/
+private def inboundReplaceChecks (r : Tests.Runner) : Async Unit := do
+  let deliveries ← (Chan.new 8 : BaseIO (Chan Message))
+  let saved ← (OnceRef.new (none : Option Libp2p.Core.StreamHandler) : BaseIO (OnceRef (Option Libp2p.Core.StreamHandler)))
+  let host : HostSeam := {
+    setHandler := fun h => saved.set (some h)
+    newStream := fun _ _ => return .ok (Constants.meshsubId, {
+      read := pure (.ok none)
+      write := fun _ => pure (.ok ())
+      close := pure ()
+      reset := pure () }) }
+  let tc ← (TestClock.new : BaseIO TestClock)
+  let n ← (start host { clock := tc.clock } : BaseIO Node)
+  discard (n.subscribe topic (fun m => discard <| deliveries.trySend m) : BaseIO Bool)
+  let some h ← (saved.get : BaseIO (Option Libp2p.Core.StreamHandler))
+    | throw <| IO.userError "missing node handler"
+  -- A stream over a pipe. Its reset records itself and closes the pipe,
+  -- which wakes a parked read.
+  let pipeStream (p : Pipe) (wasReset : OnceRef Bool) : Streams.Stream := {
+    read := return .ok (← p.read)
+    write := fun _ => pure (.ok ())
+    close := pure ()
+    reset := do
+      (wasReset.set true : BaseIO Unit)
+      (p.close : BaseIO Unit) }
+  let first ← (Pipe.new 16 : BaseIO Pipe)
+  let second ← (Pipe.new 16 : BaseIO Pipe)
+  let firstReset ← (OnceRef.new false : BaseIO (OnceRef Bool))
+  let secondReset ← (OnceRef.new false : BaseIO (OnceRef Bool))
+  let firstAnswer ← (OnceRef.new (none : Option (Except Libp2p.Core.Error Unit)) :
+    BaseIO (OnceRef (Option (Except Libp2p.Core.Error Unit))))
+  -- Each handler has its own owner, so the checks can join the first one
+  -- alone. The first handler lets the second one read from its `finally`,
+  -- before its task records the answer.
+  let firstOwner ← (TaskSet.new : BaseIO TaskSet)
+  let secondOwner ← (TaskSet.new : BaseIO TaskSet)
+  firstOwner.spawn do
+    let answer ← (h.handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty }
+      (pipeStream first firstReset)).run
+    (firstAnswer.set (some answer) : BaseIO Unit)
+  discard <| first.write (frame (Core.publishRpc (message [41])))
+  r.check "node.inbound.first-stream-delivers" ((← receive deliveries) == some (message [41]))
+  secondOwner.spawn do
+    discard <| (h.handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty }
+      (pipeStream second secondReset)).run
+  discard <| second.write (frame (Core.publishRpc (message [42])))
+  r.check "node.inbound.second-stream-delivers" ((← receive deliveries) == some (message [42]))
+  -- The second stream delivered, so the reset of the first one woke its
+  -- handler. Join it before the checks read its answer.
+  firstOwner.joinAll
+  r.check "node.inbound.second-stream-resets-first" (← (firstReset.get : BaseIO Bool))
+  r.check "node.inbound.first-handler-ends-clean"
+    (match ← (firstAnswer.get : BaseIO (Option (Except Libp2p.Core.Error Unit))) with
+     | some (.ok ()) => true
+     | _ => false)
+  r.check "node.inbound.second-stream-not-reset" (!(← (secondReset.get : BaseIO Bool)))
+  (second.close : BaseIO Unit)
+  secondOwner.joinAll
+  n.stop
+  (tc.close : BaseIO Unit)
+
+/-- The inbound table itself. After the replacement it holds the second
+stream alone: the end of the first handler drops only its own entry. The
+end of the second handler empties it. -/
+private def inboundTableChecks (r : Tests.Runner) : Async Unit := do
+  let events ← (Chan.new 16 : BaseIO (Chan Input))
+  let table ← (OnceRef.new { next := 0, entries := [] } : BaseIO (OnceRef InboundTable))
+  let h := handler events table
+  let pipeStream (p : Pipe) : Streams.Stream := {
+    read := return .ok (← p.read)
+    write := fun _ => pure (.ok ())
+    close := pure ()
+    reset := (p.close : BaseIO Unit) }
+  let first ← (Pipe.new 4 : BaseIO Pipe)
+  let second ← (Pipe.new 4 : BaseIO Pipe)
+  let firstOwner ← (TaskSet.new : BaseIO TaskSet)
+  let secondOwner ← (TaskSet.new : BaseIO TaskSet)
+  firstOwner.spawn do
+    discard <| (h.handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty }
+      (pipeStream first)).run
+  -- The first handler posts its join once it holds the table entry.
+  discard <| receive events
+  secondOwner.spawn do
+    discard <| (h.handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty }
+      (pipeStream second)).run
+  -- The second handler posts its join after the first one ended.
+  discard <| receive events
+  firstOwner.joinAll
+  let held ← (table.get : BaseIO InboundTable)
+  r.check "node.inbound.table-holds-the-second-stream-alone"
+    (held.entries.map (fun e => (e.1, e.2.id)) == [(pa, 1)])
+  (second.close : BaseIO Unit)
+  secondOwner.joinAll
+  r.check "node.inbound.table-empty-after-the-second-ends"
+    ((← (table.get : BaseIO InboundTable)).entries.isEmpty)
+
 /-- A legal body arrives one byte per read. The direct handler queue records
 all frame bodies in order, without a router changing or deduplicating them. -/
 private def readerCopyChecks (r : Tests.Runner) : Async Unit := do
@@ -400,6 +498,7 @@ private def readerCopyChecks (r : Tests.Runner) : Async Unit := do
   let all := frame first ++ frame second ++ frame third
   let cursor ← (OnceRef.new 0 : BaseIO (OnceRef Nat))
   let events ← (Chan.new 16 : BaseIO (Chan Input))
+  let table ← (OnceRef.new { next := 0, entries := [] } : BaseIO (OnceRef InboundTable))
   let dribble : Streams.Stream := {
     read := do
       let i ← (cursor.updateGet (fun i => (i, i + 1)) : BaseIO Nat)
@@ -407,7 +506,7 @@ private def readerCopyChecks (r : Tests.Runner) : Async Unit := do
     write := fun _ => pure (.ok ())
     close := pure ()
     reset := pure () }
-  let result ← ((handler events).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } dribble).run
+  let result ← ((handler events table).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } dribble).run
   let inputs ← (events.drain : BaseIO (List Input))
   let bodies := inputs.filterMap fun
     | .event (.rpc _ bytes) => some bytes
@@ -423,7 +522,7 @@ private def readerCopyChecks (r : Tests.Runner) : Async Unit := do
   let mixed := { dribble with read := do
     let bytes ← (pending.updateGet (fun xs => (xs.head?, xs.drop 1)) : BaseIO (Option ByteArray))
     return .ok bytes }
-  let mixedResult ← ((handler mixedEvents).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } mixed).run
+  let mixedResult ← ((handler mixedEvents table).handle { remotePeer := pa, remoteAddr := Multiformats.Multiaddr.empty } mixed).run
   let mixedInputs ← (mixedEvents.drain : BaseIO (List Input))
   let mixedBodies := mixedInputs.filterMap fun
     | .event (.rpc _ bytes) => some bytes
@@ -450,6 +549,44 @@ private def pairChecks (r : Tests.Runner) : Async Unit := do
   r.check "node.pair.publisher-barrier" (← barrier b)
   r.check "node.pair.no-local-delivery" ((← (b.deliveries.tryRecv : BaseIO (Option Message))).isNone)
   finish sw [a, b]
+
+/-- The `ByteArray` payload path between two nodes. The receiver's callback
+gets the handle in `data`, and `Node.payload` gives back the bytes that the
+sender published. An id function that gives no id, as a failed hash does,
+fails a publish and drops an inbound message. -/
+private def payloadPairChecks (r : Tests.Runner) : Async Unit := do
+  let idOf (topic : String) (d : ByteArray) : Option MessageId :=
+    some ⟨topic.length :: d.size % 256 :: d.size / 256 % 256 :: (d.extract 0 8).toList.map (·.toNat)⟩
+  let sw ← (Switch.new : BaseIO Switch)
+  let a ← fixture sw pa { payloadId := some idOf }
+  let b ← fixture sw pb { payloadId := some idOf }
+  discard (subscribe a : BaseIO Bool)
+  r.check "node.payload.subscribe-barrier" (← barrier a)
+  discard (b.node.peerJoined pa .meshsub : BaseIO Bool)
+  r.check "node.payload.hello-reaches-publisher" ((← receive b.receipts).isSome)
+  let payload : ByteArray := ⟨(Array.range 600).map (·.toUInt8)⟩
+  r.check "node.payload.publish-takes-bytes" (← (b.node.publish topic payload : BaseIO Bool))
+  match ← receive a.deliveries with
+  | some m =>
+    let handle : MessageId := ⟨m.data.getD []⟩
+    r.check "node.payload.handle-is-the-id" (some handle == idOf topic.name payload)
+    r.check "node.payload.receiver-bytes-equal-sent-bytes"
+      ((← (a.node.payload handle : BaseIO (Option ByteArray))).map (·.toList) ==
+        some payload.toList)
+  | none => r.check "node.payload.receiver-gets-the-message" false
+  -- A node whose id function gives no id.
+  let c ← fixture sw pc { payloadId := some fun _ _ => none }
+  discard (subscribe c : BaseIO Bool)
+  r.check "node.payload.no-id-subscribe-barrier" (← barrier c)
+  r.check "node.payload.no-id-publish-fails"
+    (!(← (c.node.publish topic (Bytes.ofNatList [8]) : BaseIO Bool)))
+  -- A publish written on its raw inbound stream finds no id, so the node
+  -- drops it. The barrier after it orders the check behind the drop.
+  discard <| c.control.write (frame (Core.publishRpc (message [9])))
+  r.check "node.payload.no-id-inbound-barrier" (← barrier c)
+  r.check "node.payload.no-id-inbound-dropped"
+    ((← (c.deliveries.tryRecv : BaseIO (Option Message))).isNone)
+  finish sw [a, b, c]
 
 /-- A subscription made before a peer joins is sent once to that peer. -/
 private def postJoinSubscriptionChecks (r : Tests.Runner) : Async Unit := do
@@ -731,6 +868,171 @@ private def publisherOrder (r : Tests.Runner) : Async Unit := do
   IO.println s!"node.measure.publishers countA={seqA.length} countB={seqB.length} streamsA={oa} streamsB={ob} inversionsA={ia} inversionsB={ib}"
   finish sw [a,b,sink]
 
+/-- A burst of subscriptions larger than the queue of the loop:
+`subscribeWait` parks while the queue is full, so every subscription
+lands, and a peer that joins after the burst gets all of them in its
+hello. -/
+private def subscribeWaitChecks (r : Tests.Runner) : Async Unit := do
+  let sw ← (Switch.new : BaseIO Switch)
+  let seen ← (Chan.new 64 : BaseIO (Chan Seen))
+  let ended ← (Chan.new 16 : BaseIO (Chan Unit))
+  let peerHost ← (probe sw pb seen ended : BaseIO HostSeam)
+  let (host, _) ← (sw.host pa : BaseIO (HostSeam × TaskSet))
+  let tc ← (TestClock.new : BaseIO TestClock)
+  let n ← (start host { clock := tc.clock } : BaseIO Node)
+  -- 200 topics, as a consensus node subscribes, past the queue of 64.
+  let mut accepted := 0
+  for i in [0:200] do
+    if ← n.subscribeWait ⟨s!"topic-{i}"⟩ (fun _ => pure ()) then accepted := accepted + 1
+  r.check "node.subscribe-wait.burst-all-accepted" (accepted == 200)
+  -- The peer joins after the burst through an inbound stream. The handler
+  -- posts the join with a `send` that parks, so the join lands behind the
+  -- 200 subscribes in the queue. The hello then lists every topic in one
+  -- frame. One announcement per topic would pass through the peer's queue
+  -- of 32 frames, which drops a frame when the writer falls behind.
+  let joined ← openStream peerHost pa
+  let hello ← receiveWhere seen fun s => !s.rpc.subscriptions.isEmpty
+  r.check "node.subscribe-wait.hello-lists-every-topic"
+    (hello.any fun s => (s.rpc.subscriptions.filter (·.subscribe)).length == 200)
+  joined.close
+  n.stop
+  r.check "node.subscribe-wait.refused-after-stop"
+    (!(← n.subscribeWait ⟨"late"⟩ (fun _ => pure ())))
+  sw.close
+  (tc.close : BaseIO Unit)
+
+/-- A short real-time wait, so the node's tasks run. -/
+private def nap : Async Unit := do
+  let t ← (Park.sleep 20 () : BaseIO (Park Unit))
+  select #[t]
+
+/-- A host whose outbound streams hold every write until the test closes
+`gate`. It records the bytes it lets through, and it keeps the node's
+handler, so the test can feed inbound RPCs. With the gate shut, the writer
+holds one frame and the peer queue fills, so every later frame drops. -/
+private structure GatedHost where
+  seam : HostSeam
+  handler : OnceRef (Option Libp2p.Core.StreamHandler)
+  gate : Chan Unit
+  written : OnceRef (List Nat)
+
+private def gatedHost : BaseIO GatedHost := do
+  let handler ← OnceRef.new (none : Option Libp2p.Core.StreamHandler)
+  let gate : Chan Unit ← Chan.new 1
+  let written ← OnceRef.new ([] : List Nat)
+  let seam : HostSeam := {
+    setHandler := fun h => handler.set (some h)
+    newStream := fun _ _ => return .ok (Constants.meshsubId, {
+      read := pure (.ok none)
+      write := fun bytes => do
+        -- Park: the test closes the gate.
+        discard <| gate.recv
+        (written.update (· ++ Bytes.toNatList bytes) : BaseIO Unit)
+        return .ok ()
+      close := pure ()
+      reset := pure () }) }
+  return { seam, handler, gate, written }
+
+/-- The RPCs of the written bytes, in order. Each frame is at least one
+byte, so `fuel` of the byte count is enough. -/
+private def writtenRpcs : Nat → List Nat → List Rpc.RPC
+  | 0, _ => []
+  | fuel + 1, buf =>
+    match Rpc.decodeFrame? buf with
+    | .ok (some (body, rest)) =>
+      match Core.decodeRpc body with
+      | .ok rpc => rpc :: writtenRpcs fuel rest
+      | .error _ => writtenRpcs fuel rest
+    | _ => []
+
+/-- The RPCs that the gated host let through. -/
+private def gatedRpcs (h : GatedHost) : Async (List Rpc.RPC) := do
+  let buf ← (h.written.get : BaseIO (List Nat))
+  return writtenRpcs buf.length buf
+
+/-- The records of our own state come back after a drop, as go sends them
+again. With the peer's queue full, 200 subscription records mostly drop.
+Once the queue drains, the retries reach the peer, so it hears every topic.
+A GRAFT that drops reaches the peer in a later frame. -/
+private def stateRetryChecks (r : Tests.Runner) : Async Unit := do
+  -- The subscription records.
+  do
+    let h ← (gatedHost : BaseIO GatedHost)
+    let tc ← (TestClock.new : BaseIO TestClock)
+    let n ← (start h.seam { clock := tc.clock } : BaseIO Node)
+    r.check "node.retry.peer-joined" (← (n.peerJoined pb .meshsub : BaseIO Bool))
+    for i in [0:200] do
+      discard <| n.subscribeWait ⟨s!"topic-{i}"⟩ (fun _ => pure ())
+    -- The writer holds one frame and the queue 32, so at least 167 drop.
+    let mut dropped := 0
+    for _ in [0:250] do
+      dropped ← (n.dropped : BaseIO Nat)
+      if 167 ≤ dropped then break
+      nap
+    r.check "node.retry.subscription-records-drop" (167 ≤ dropped)
+    (h.gate.close : BaseIO Unit)
+    -- Each retry waits up to one second of the test clock, and a retry
+    -- that finds the queue full drops and waits again.
+    let mut heard : List String := []
+    for _ in [0:60] do
+      tc.advance 1000
+      nap
+      heard := ((← gatedRpcs h).flatMap (·.subscriptions)).filterMap fun o =>
+        if o.subscribe then some o.topicid else none
+      heard := heard.eraseDups
+      if heard.length == 200 then break
+    r.check "node.retry.peer-hears-every-topic" (heard.length == 200)
+    n.stop
+    (tc.close : BaseIO Unit)
+  -- A GRAFT record.
+  do
+    let h ← (gatedHost : BaseIO GatedHost)
+    let tc ← (TestClock.new : BaseIO TestClock)
+    let receipts ← (Chan.new 8 : BaseIO (Chan Peer))
+    let n ← (start h.seam { clock := tc.clock, onRpc := fun p _ => discard (receipts.trySend p) } :
+      BaseIO Node)
+    let some handler ← (h.handler.get : BaseIO (Option Libp2p.Core.StreamHandler))
+      | throw <| IO.userError "missing node handler"
+    -- The peer announces the topic on an inbound stream.
+    let wanted : TopicId := ⟨"graft-me"⟩
+    let inbound ← (Pipe.new 4 : BaseIO Pipe)
+    let owner ← (TaskSet.new : BaseIO TaskSet)
+    owner.spawn do
+      discard <| (handler.handle { remotePeer := pb, remoteAddr := Multiformats.Multiaddr.empty } {
+        read := return .ok (← inbound.read)
+        write := fun _ => pure (.ok ())
+        close := pure ()
+        reset := (inbound.close : BaseIO Unit) }).run
+    discard <| inbound.write (frame (subOptRpc wanted true))
+    -- The loop runs `onRpc` as it takes the RPC, so the posts below come
+    -- after the core learns the peer's topic.
+    r.check "node.retry.peer-announces" ((← receive receipts) == some pb)
+    -- Fill the peer's queue: 40 subscription records, past 33.
+    for i in [0:40] do
+      discard <| n.subscribeWait ⟨s!"filler-{i}"⟩ (fun _ => pure ())
+    -- The subscribe fills the mesh with the peer, and its GRAFT drops.
+    discard <| n.subscribeWait wanted (fun _ => pure ())
+    let mut graftDrops := 0
+    for _ in [0:250] do
+      graftDrops ← (n.dropped : BaseIO Nat)
+      if 8 ≤ graftDrops then break
+      nap
+    r.check "node.retry.graft-queue-full" (8 ≤ graftDrops)
+    (h.gate.close : BaseIO Unit)
+    -- The GRAFT rides on a later frame, or the heartbeat sends it.
+    let mut grafted := false
+    for _ in [0:30] do
+      tc.advance 1000
+      nap
+      grafted := (← gatedRpcs h).any fun rpc =>
+        rpc.control.any fun c => c.graft.any (·.topicId == wanted.name)
+      if grafted then break
+    r.check "node.retry.dropped-graft-reaches-the-peer" grafted
+    (inbound.close : BaseIO Unit)
+    owner.joinAll
+    n.stop
+    (tc.close : BaseIO Unit)
+
 /-- Run the node regressions and print the measured queue and ordering counts. -/
 def run (r : Tests.Runner) : IO Unit := do
   r.section "gossipsub Node" "packages/libp2p/protocols/docs/PLAN.md, unit 3"
@@ -742,6 +1044,9 @@ def run (r : Tests.Runner) : IO Unit := do
     inboundChecks r
     frameBoundaryChecks r
     outboundFailureChecks r
+    inboundReplaceChecks r
+    inboundTableChecks r
+    payloadPairChecks r
     readerCopyChecks r
     pairChecks r
     postJoinSubscriptionChecks r
@@ -752,5 +1057,7 @@ def run (r : Tests.Runner) : IO Unit := do
     pendingBound r
     stalledAndDrops r
     publisherOrder r
+    subscribeWaitChecks r
+    stateRetryChecks r
 
 end Tests.Gossipsub.Node

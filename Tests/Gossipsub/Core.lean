@@ -91,8 +91,8 @@ private def emptyState : State :=
   { peers := []
     mesh := []
     fanout := []
-    mcache := Cache.MessageCache.empty baseParams.window
-    seen := Cache.SeenCache.empty baseParams.seen
+    mcache := Cache.MessageIndex.empty baseParams.window
+    seen := Cache.SeenIndex.empty baseParams.seen
     backoff := []
     iwant := []
     topics := []
@@ -121,6 +121,9 @@ private def rpcOfPublish (ms : List Message) : Rpc.RPC :=
 
 private def rpcOfControl (c : Rpc.ControlMessage) : Rpc.RPC :=
   { subscriptions := [], publish := [], control := some c }
+
+private def rpcOfSubs (subs : List Rpc.SubOpts) : Rpc.RPC :=
+  { subscriptions := subs, publish := [], control := none }
 
 private def controlOf (grafts : List Rpc.ControlGraft) (prunes : List Rpc.ControlPrune) : Rpc.ControlMessage :=
   { ihave := [], iwant := [], graft := grafts, prune := prunes }
@@ -195,7 +198,7 @@ private def invalidCount (s : State) (q : Peer) (t : TopicId) : Nat :=
 /-- The counters of a peer with one invalid delivery. -/
 private def negCounters : Score.TopicCounters :=
   { Score.TopicCounters.zero with
-    inMesh := true, graftTime := 0, invalidMessageDeliveries := 1 }
+    inMesh := true, graftTime := 0, invalidMessageDeliveries := Score.counterUnit }
 
 /-- The score state of a peer with one invalid delivery in topic `t`. -/
 private def negPeerState : Score.PeerState :=
@@ -281,7 +284,7 @@ def run (r : Runner) : IO Unit := do
     (match step cfgParams { emptyState with peers := [(pa, peerRec [ta])], topics := [ta] }
         (.rpc pa (Pb.encodeMessage (rpcOfPublish [badMsg]))) with
      | .ok (s', acts) => delivers badMsg acts = 0 && publishCount acts = 0 &&
-         invalidCount s' pa ta = 1
+         invalidCount s' pa ta = Score.counterUnit
      | _ => false)
 
   -- A repeated id inside one event is delivered once.
@@ -320,10 +323,36 @@ def run (r : Runner) : IO Unit := do
      | .ok (s', acts) => meshIs s' ta [pc, pd] && pruneCount ta acts = 2
      | _ => false)
 
+  -- The decay cadence. The scores decay once per `decayInterval`, at the first heartbeat at
+  -- or after each boundary, and not at every heartbeat. The peer `pa` holds one behavior
+  -- penalty event, 1000 units, and each decay halves it. Each answer is the penalty and the
+  -- new `lastDecay`.
+  let decayParams : Params :=
+    { baseParams with
+      heartbeatInterval := 700
+      score := { baseParams.score with
+        global := { baseParams.score.global with
+          behaviourPenaltyDecay := 500, decayInterval := 12000 } } }
+  let penalized : State :=
+    { known with peers := [(pa, { peerRec [ta] with
+        score := { Score.PeerState.zero with behaviourPenalty := 1000 } })] }
+  let afterTick (s : State) (now : Nat) : Option (Nat × Nat) :=
+    match step decayParams s (.tick now []) with
+    | .ok (s', _) => (peerOf s' pa).map fun pd => (pd.score.behaviourPenalty, s'.lastDecay)
+    | _ => none
+  r.check "core.decay.waits-for-interval" (afterTick penalized 700 == some (1000, 0))
+  r.check "core.decay.at-interval"
+    (afterTick { penalized with lastHeartbeat := 11300 } 12000 == some (500, 12000))
+  -- A late heartbeat after two boundaries decays once, and `lastDecay` takes the last
+  -- boundary, 36000, so the period keeps its phase.
+  r.check "core.decay.once-after-missed-intervals"
+    (afterTick { penalized with lastHeartbeat := 35800, lastDecay := 12000 } 36500 ==
+      some (500, 36000))
+
   -- Gossip stays away from a peer below the gossip threshold.
   r.check "core.gossip.threshold"
     (match step gossipParams
-        { known with mcache := (Cache.MessageCache.empty baseParams.window).put ⟨[1]⟩ (msgOf ta [1]) }
+        { known with mcache := (Cache.MessageIndex.empty baseParams.window).put ⟨[1]⟩ (msgOf ta [1]) }
         (.tick 1000 [pa, pb, pc, pd]) with
      | .ok (_, acts) => ihaveCount acts = 0
      | _ => false)
@@ -335,7 +364,7 @@ def run (r : Runner) : IO Unit := do
     (match step baseParams
         { known with
           mesh := [(ta, [pa, pb])]
-          mcache := (Cache.MessageCache.empty baseParams.window).put ⟨[1]⟩ (msgOf ta [1]) }
+          mcache := (Cache.MessageIndex.empty baseParams.window).put ⟨[1]⟩ (msgOf ta [1]) }
         (.tick 1000 [pa, pb, pc, pd]) with
      | .ok (_, acts) => sendsTo pa acts = 0 && sendsTo pb acts = 0 &&
          sendsTo pc acts = 1 && sendsTo pd acts = 1 && ihaveCount acts = 2
@@ -395,9 +424,70 @@ def run (r : Runner) : IO Unit := do
   -- A cached id answers an IWANT with one publish.
   r.check "core.iwant.cached-answer"
     (match step baseParams
-        { known with mcache := (Cache.MessageCache.empty baseParams.window).put ⟨[7]⟩ (msgOf ta [7]) }
+        { known with mcache := (Cache.MessageIndex.empty baseParams.window).put ⟨[7]⟩ (msgOf ta [7]) }
         (.rpc pa (Pb.encodeMessage (iwantRpc [⟨[7]⟩]))) with
      | .ok (_, acts) => publishCount acts = 1
+     | _ => false)
+
+  -- A prune for a topic we do not hold records no backoff pair, so a
+  -- peer cannot grow the table with topics we never joined.
+  r.check "core.prune.unheld-topic-no-backoff"
+    (match step baseParams { known with now := 1000 }
+        (.rpc pa (Pb.encodeMessage (rpcOfControl (controlOf [] [pruneOf tb])))) with
+     | .ok (s', _) => s'.backoff.isEmpty
+     | _ => false)
+
+  -- An IHAVE for a topic we hold asks for the unseen id; for a topic we
+  -- do not hold, it asks for nothing and records no promise.
+  r.check "core.ihave.held-topic-asks"
+    (match step baseParams known (.rpc pa (Pb.encodeMessage (ihaveRpc ta [⟨[9]⟩]))) with
+     | .ok (s', acts) => sendsTo pa acts = 1 && !s'.iwant.isEmpty
+     | _ => false)
+  r.check "core.ihave.unheld-topic-ignored"
+    (match step baseParams known (.rpc pa (Pb.encodeMessage (ihaveRpc tb [⟨[9]⟩]))) with
+     | .ok (s', acts) => acts = [] && s'.iwant.isEmpty
+     | _ => false)
+
+  -- A peer below the gossip threshold has its gossip ignored: its IHAVE
+  -- asks for nothing, and its IWANT gets no answer.
+  r.check "core.ihave.below-gossip-threshold-ignored"
+    (match step gossipParams known (.rpc pa (Pb.encodeMessage (ihaveRpc ta [⟨[9]⟩]))) with
+     | .ok (s', acts) => acts = [] && s'.iwant.isEmpty
+     | _ => false)
+  r.check "core.iwant.below-gossip-threshold-ignored"
+    (match step gossipParams
+        { known with mcache := (Cache.MessageIndex.empty baseParams.window).put ⟨[7]⟩ (msgOf ta [7]) }
+        (.rpc pa (Pb.encodeMessage (iwantRpc [⟨[7]⟩]))) with
+     | .ok (_, acts) => publishCount acts = 0
+     | _ => false)
+
+  -- The subscription caps. The peer `pa` holds `ta`, and the RPC
+  -- subscribes it to three more topics. With no cap, every option lands.
+  -- An RPC over a cap changes no subscription of its sender.
+  let three : List Rpc.SubOpts :=
+    ["s1", "s2", "s3"].map fun n => { subscribe := true, topicid := n }
+  let topicsAfter (p : Params) (subs : List Rpc.SubOpts) : Option Nat :=
+    match step p known (.rpc pa (Pb.encodeMessage (rpcOfSubs subs))) with
+    | .ok (s', _) => (peerOf s' pa).map (·.subs.length)
+    | _ => none
+  r.check "core.subs.no-cap-admits" (topicsAfter baseParams three == some 4)
+  r.check "core.subs.count-cap-refuses"
+    (topicsAfter { baseParams with maxSubscriptionsPerRpc := some 2 } three == some 1)
+  r.check "core.subs.count-cap-admits-at-cap"
+    (topicsAfter { baseParams with maxSubscriptionsPerRpc := some 3 } three == some 4)
+  r.check "core.subs.topic-cap-refuses"
+    (topicsAfter { baseParams with maxSubscribedTopics := some 3 } three == some 1)
+  -- The topic cap counts the topics after the whole RPC, so an
+  -- unsubscribe in the same RPC makes room.
+  r.check "core.subs.topic-cap-counts-unsubscribes"
+    (topicsAfter { baseParams with maxSubscribedTopics := some 3 }
+      ({ subscribe := false, topicid := ta.name } :: three) == some 3)
+  -- As in rust, an RPC over a cap keeps its messages.
+  r.check "core.subs.over-cap-keeps-messages"
+    (match step { baseParams with maxSubscriptionsPerRpc := some 2 } known
+        (.rpc pa (Pb.encodeMessage { rpcOfSubs three with publish := [msgOf ta [5]] })) with
+     | .ok (s', acts) =>
+       delivers (msgOf ta [5]) acts = 1 && (peerOf s' pa).map (·.subs.length) == some 1
      | _ => false)
 
   -- The transcript driver runs two events in order and appends the

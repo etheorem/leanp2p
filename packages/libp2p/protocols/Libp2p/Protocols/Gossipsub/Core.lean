@@ -30,6 +30,11 @@ at or above the gossip threshold that are in neither the mesh nor the
 fanout of the topic, up to `dLazy` per topic. `gossipFactor` is stored
 and never read, so the emission count is not adaptive.
 
+The control handlers refuse the gossip work that go-libp2p-pubsub
+v0.19.0 refuses. An IHAVE or an IWANT from a peer below the gossip
+threshold gets nothing. An IHAVE for a topic the router does not hold
+asks for nothing. A PRUNE for such a topic records no backoff pair.
+
 Several fields of the spec are stored and never read, and several
 behaviors are absent:
 
@@ -136,6 +141,28 @@ structure Params where
   prims : Sign.Prims
   /-- The message id function. -/
   msgId : Sign.MsgIdFn
+  /-- The subscriptions one RPC may carry, or `none` for no cap. An RPC
+  over the cap changes no subscription of its sender (`admittedSubs`).
+
+  `none` is the default of go and rust, and it suits a closed test
+  network. A node that faces public peers sets both caps: with no cap,
+  one large RPC costs time quadratic in its size on the loop task.
+  Lighthouse sizes them from the topic count of its largest fork
+  (Lighthouse `ef55e2f`, `lighthouse_network/src/service/mod.rs`, lines
+  324 to 341): twice that count per RPC, and four times it per peer. It
+  counts the worst case of each fork, with every subnet and the light
+  client server (`types/topics.rs`, lines 49 to 95 and 140 to 150). A
+  Fulu fork then has 205 topics: 5 base, 64 attestation, 1 sync
+  contribution, 4 sync committee, 2 light client, 1 BLS change, and 128
+  column. Fulu deprecates the blob topics (`fulu/p2p-interface.md`,
+  "Deprecated `blob_sidecar_{subnet_id}`"). The caps then come to 410
+  and 820. The comment beside that code still counts 9 blob topics,
+  which the code no longer lists. -/
+  maxSubscriptionsPerRpc : Option Nat := none
+  /-- The topics one peer may hold, or `none` for no cap. An RPC that
+  would take its sender past the cap changes no subscription. The sizing
+  of `maxSubscriptionsPerRpc` covers this cap too. -/
+  maxSubscribedTopics : Option Nat := none
 
 /-- The parameter bound the mesh theorems consume: the target degree is
 at most the high water mark. -/
@@ -160,9 +187,9 @@ structure State where
   /-- The fanout of each topic. -/
   fanout : List (TopicId × Fanout)
   /-- The message cache. -/
-  mcache : Cache.MessageCache
+  mcache : Cache.MessageIndex
   /-- The seen cache. -/
-  seen : Cache.SeenCache
+  seen : Cache.SeenIndex
   /-- The backoff table. -/
   backoff : Cache.BackoffTable
   /-- The IWANT promises. -/
@@ -173,6 +200,8 @@ structure State where
   now : Millis
   /-- The time of the last heartbeat. -/
   lastHeartbeat : Millis
+  /-- The interval boundary of the last score decay (`freshState`). -/
+  lastDecay : Millis := 0
 
 /-- The external events. -/
 inductive Event where
@@ -401,13 +430,13 @@ structure Accept where
   /-- The ids the loop passed. -/
   done : List MessageId
   /-- The seen cache after the run. -/
-  cache : Cache.SeenCache
+  cache : Cache.SeenIndex
 
 /-- Accept a list of messages. The gate reads the pre-state cache `c0`,
 so a message that the pre-state cache holds as seen is never accepted.
 The local `done` list rejects a repeated id inside the one event. -/
-def accept (c0 : Cache.SeenCache) (now : Millis) (idf : Sign.MsgIdFn)
-    (done : List MessageId) (c : Cache.SeenCache) : List Message → Accept
+def accept (c0 : Cache.SeenIndex) (now : Millis) (idf : Sign.MsgIdFn)
+    (done : List MessageId) (c : Cache.SeenIndex) : List Message → Accept
   | [] => { accepted := [], done := done, cache := c }
   | m :: ms =>
       if c0.contains (idf m) now || memB (idf m) done then
@@ -464,7 +493,7 @@ def applyPlanScores (p : Params) (s : State) (plans : List TopicPlan) : State :=
     { pd with
       score := plans.foldl (fun sc pl =>
         if memB q pl.pruned then Score.prune p.score sc s.now pl.topic
-        else if memB q pl.added then Score.graft sc s.now pl.topic
+        else if memB q pl.added then Score.graft p.score sc s.now pl.topic
         else sc) pd.score })
 
 /-- The actions of the plans: a prune to each pruned peer, then a graft
@@ -495,7 +524,7 @@ def gossipActions (p : Params) (s : State) (order : List Peer) : List Action :=
     order.filter (fun q => decide (p.thresholds.gossipThreshold ≤ scoreOf p s q))
   let topics := s.mesh.map Prod.fst ++ s.fanout.map Prod.fst
   topics.flatMap fun t =>
-    let ids := Cache.MessageCache.gossipIds s.mcache t
+    let ids := Cache.MessageIndex.gossipIds s.mcache t
     if ids = [] then []
     else
       let targets :=
@@ -503,17 +532,36 @@ def gossipActions (p : Params) (s : State) (order : List Peer) : List Action :=
           !(memB q (meshOf s t)) && !(memB q (fanoutOf s t)))).take p.mesh.dLazy
       targets.map fun q => Action.sendRpc q (ihaveRpc t ids)
 
-/-- The state at the start of the heartbeat: the decayed scores, the new
-clock, the cleared backoff table, the pruned seen cache, and the shifted
-message cache. -/
+/-- True when a score decay is due: `decayInterval` has passed since the
+last decay boundary. -/
+def decayDue (p : Params) (s : State) (now : Millis) : Bool :=
+  decide (s.lastDecay + p.score.global.decayInterval ≤ now)
+
+/-- The state at the start of the heartbeat: the decayed scores when a
+decay is due, the new clock, the cleared backoff table, the pruned seen
+cache, and the shifted message cache.
+
+The scores decay once per `decayInterval`, as go-libp2p-pubsub v0.19.0
+decays on a ticker of that period (`score.go`, lines 414 and 415). The
+heartbeat drives this core, so the decay runs at the first heartbeat at
+or after each boundary. `lastDecay` then moves to the last boundary at or
+before `now`, so the period does not drift by the heartbeat's lateness.
+A heartbeat that finds several intervals passed decays once, as a go
+ticker drops the ticks a slow reader misses. A `decayInterval` of 0
+decays at every heartbeat. -/
 def freshState (p : Params) (s : State) (now : Millis) : State :=
+  let due := decayDue p s now
   { s with
-    peers := s.peers.map (fun e => (e.1, { e.2 with score := Score.decay p.score e.2.score })),
+    peers := if due then
+        s.peers.map (fun e => (e.1, { e.2 with score := Score.decay p.score e.2.score }))
+      else s.peers,
+    lastDecay := if due then now - (now - s.lastDecay) % p.score.global.decayInterval
+      else s.lastDecay,
     now := now,
     lastHeartbeat := now,
     backoff := Cache.Backoff.clear s.backoff now,
-    seen := Cache.SeenCache.prune s.seen now,
-    mcache := Cache.MessageCache.shift s.mcache }
+    seen := Cache.SeenIndex.prune s.seen now,
+    mcache := Cache.MessageIndex.shift s.mcache }
 
 /-- The per-topic plans of the heartbeat. -/
 def heartbeatPlans (p : Params) (s : State) (now : Millis) (order : List Peer) :
@@ -553,12 +601,39 @@ def heartbeatActions (p : Params) (s : State) (now : Millis) (order : List Peer)
   planActionsOf p s now order ++ negativeActions p s now order ++
     gossipActions p (gossipState p s now order) order
 
-/-- The heartbeat: decay, the fresh clock and tables, the per-topic plan,
+/-- The heartbeat: the decay when due, the fresh clock and tables, the per-topic plan,
 the score updates, the mesh write with the negative prune, and the
 actions of the plan, the negative prune, and the gossip. -/
 def heartbeat (p : Params) (s : State) (now : Millis) (order : List Peer) :
     State × List Action :=
   (heartbeatNext p s now order, heartbeatActions p s now order)
+
+/-- `heartbeat` with each part computed once. The parts above name each
+other: `negativeActions` calls `planScored` for every kept peer of every
+plan, and each call plans every topic again. Lean evaluates strictly and
+hoists no call out of a lambda, so a part named twice runs twice, and the
+heartbeat costs time quadratic in the topic count. Here each `let`
+evaluates once, before the lambdas that read it. `heartbeat_eq_heartbeatOnce`
+proves the two equal, so the compiler runs this definition, and the
+theorems keep reasoning about the parts. -/
+def heartbeatOnce (p : Params) (s : State) (now : Millis) (order : List Peer) :
+    State × List Action :=
+  let fresh := freshState p s now
+  let plans := planList p fresh now order
+  let scored := applyPlanScores p fresh plans
+  let next := settleMesh p scored plans
+  let negative := plans.flatMap (fun pl =>
+    (pl.kept.filter (fun q => decide (scoreOf p scored q < 0))).map
+      (fun q => Action.sendRpc q (pruneRpc pl.topic p.pruneBackoff)))
+  (next, plans.flatMap (planActions p) ++ negative ++
+    gossipActions p { next with mcache := s.mcache } order)
+
+/-- The two heartbeats are equal: every part of `heartbeatOnce` unfolds to
+the part of `heartbeat` that it binds. `@[csimp]` makes the compiler use
+`heartbeatOnce` for every call of `heartbeat`. -/
+@[csimp] theorem heartbeat_eq_heartbeatOnce : @heartbeat = @heartbeatOnce := by
+  funext p s now order
+  rfl
 
 /-! ## The event handlers -/
 
@@ -588,10 +663,45 @@ def applySubOpts (subs : List TopicId) (o : Rpc.SubOpts) : List TopicId :=
   if o.subscribe then (if memB t subs then subs else t :: subs)
   else subs.filter (fun u => decide (u ≠ t))
 
-/-- Update the announced topics of the sender. -/
-def handleSubs (s : State) (sender : Peer) (subs : List Rpc.SubOpts) : State :=
+/-- The topics of a sender that holds `current`, after the subscriptions
+of one RPC. `none` when the RPC breaks a cap. Each option folds into the
+list through a linear membership test, so with no cap one large RPC
+costs time quadratic in its size, and the list grows with no bound. The
+count cap comes first, so the fold runs only on an RPC within it, and it
+runs once: `handleSubs` stores the list this answer holds.
+
+go and rust leave both caps to the application, and both are off here
+by default. rust's `MaxCountSubscriptionFilter` has the two caps
+(rust-libp2p `c449090`, `subscription_filter.rs`, lines 109 to 156).
+Over either cap, rust ignores the subscriptions of the RPC
+(`behaviour.rs`, lines 2106 to 2119), and it still handles the messages
+and the control of the RPC (lines 3548 to 3586). go's
+`WrapLimitSubscriptionFilter` has the count cap, and over it go drops
+the whole RPC (go-libp2p-pubsub v0.19.0, `subscription_filter.go`,
+lines 143 to 147, and `pubsub.go`, lines 1506 to 1513). The router
+follows rust. Lighthouse runs rust's filter with both caps set
+(Lighthouse `ef55e2f`, `lighthouse_network/src/service/mod.rs`, lines
+332 to 341). -/
+def admittedSubs (p : Params) (current : List TopicId) (subs : List Rpc.SubOpts) :
+    Option (List TopicId) :=
+  let withinCount := match p.maxSubscriptionsPerRpc with
+    | some cap => decide (subs.length ≤ cap)
+    | none => true
+  if withinCount then
+    let next := subs.foldl applySubOpts current
+    match p.maxSubscribedTopics with
+    | some cap => if next.length ≤ cap then some next else none
+    | none => some next
+  else none
+
+/-- Update the announced topics of the sender. An RPC that breaks a cap
+changes none of them (`admittedSubs`). -/
+def handleSubs (p : Params) (s : State) (sender : Peer) (subs : List Rpc.SubOpts) : State :=
   match peerOf s sender with
-  | some pd => setPeer s sender { pd with subs := subs.foldl applySubOpts pd.subs }
+  | some pd =>
+    match admittedSubs p pd.subs subs with
+    | some next => setPeer s sender { pd with subs := next }
+    | none => s
   | none => s
 
 /-- Handle the published messages of an RPC: validate, accept, cache,
@@ -618,25 +728,49 @@ def handlePubs (p : Params) (s : State) (sender : Peer) (ms : List Message) :
 def promised (ps : Cache.PromiseTable) (q : Peer) (id : MessageId) : Bool :=
   ps.any (fun e => decide (e.peer = q ∧ e.id = id))
 
+/-- True when the score of `sender` is below the gossip threshold. The
+spec ignores the gossip of such a peer: "when a peer's score drops below
+this threshold, no gossip is emitted towards that peer and gossip from
+that peer is ignored" (`gossipsub-v1.1.md`, "Score Thresholds"). go
+skips its IHAVE and its IWANT the same way (go-libp2p-pubsub v0.19.0,
+`gossipsub.go`, lines 941 and 1015). -/
+def gossipIgnored (p : Params) (s : State) (sender : Peer) : Bool :=
+  decide (scoreOf p s sender < p.thresholds.gossipThreshold)
+
+/-- The control envelope with the sender's IHAVE and IWANT dropped when
+its score is below the gossip threshold (`gossipIgnored`). go reads the
+score once per RPC for them (`handleIHave` and `handleIWant`,
+`gossipsub.go`, lines 938 to 944 and 1012 to 1018), and so does this
+gate: the handlers below do not read it again for each entry. With a
+read per entry, one RPC of many IHAVE entries would cost a score each. -/
+def gossipOf (p : Params) (s : State) (sender : Peer) (c : Rpc.ControlMessage) :
+    Rpc.ControlMessage :=
+  if gossipIgnored p s sender then { c with ihave := [], iwant := [] } else c
+
 /-- Handle one IHAVE: request the ids that are unseen, uncached, and not
-promised, and record the promise. -/
+promised, and record the promise. An IHAVE for a topic we do not hold
+asks for nothing, as in go (`gossipsub.go`, lines 958 to 962). The gossip
+threshold applies before, to the whole RPC (`gossipOf`). -/
 def handleIhave (p : Params) (s : State) (sender : Peer) (i : Rpc.ControlIHave) :
     State × List Action :=
-  let wanted := i.messageIds.filter (fun id =>
-    !(s.seen.contains id s.now) && (Cache.MessageCache.get s.mcache id).isNone &&
-      !(promised s.iwant sender id))
-  let s1 : State :=
-    { s with
-      iwant := wanted.foldl
-        (fun ps id => ps.promise sender id (s.now + p.iwantDeadline)) s.iwant }
-  (s1, if wanted = [] then [] else [Action.sendRpc sender (iwantRpc wanted)])
+  if !memB (⟨i.topicId⟩ : TopicId) s.topics then (s, [])
+  else
+    let wanted := i.messageIds.filter (fun id =>
+      !(s.seen.contains id s.now) && (Cache.MessageIndex.get s.mcache id).isNone &&
+        !(promised s.iwant sender id))
+    let s1 : State :=
+      { s with
+        iwant := wanted.foldl
+          (fun ps id => ps.promise sender id (s.now + p.iwantDeadline)) s.iwant }
+    (s1, if wanted = [] then [] else [Action.sendRpc sender (iwantRpc wanted)])
 
 /-- Handle one IWANT: answer each id that the message cache holds under
-the same id. -/
+the same id. The gossip threshold applies before, to the whole RPC
+(`gossipOf`). -/
 def handleIwant (p : Params) (s : State) (sender : Peer) (w : Rpc.ControlIWant) :
     State × List Action :=
   let answers := w.messageIds.filterMap (fun id =>
-    match Cache.MessageCache.get s.mcache id with
+    match Cache.MessageIndex.get s.mcache id with
     | some m => if p.msgId m = id then some m else none
     | none => none)
   (s, answers.map (fun m => Action.sendRpc sender (publishRpc m)))
@@ -656,17 +790,22 @@ def handleGraft (p : Params) (s : State) (sender : Peer) (g : Rpc.ControlGraft) 
       match peerOf s sender with
       | some pd =>
           (setPeer (setTopicMesh s ⟨g.topicId⟩ (sender :: meshOf s ⟨g.topicId⟩)) sender
-            { pd with score := Score.graft pd.score s.now ⟨g.topicId⟩ }, [])
+            { pd with score := Score.graft p.score pd.score s.now ⟨g.topicId⟩ }, [])
       | none => (s, [])
   else (s, [])
 
-/-- The state after a prune records the backoff pair. -/
+/-- The state after a prune records the backoff pair, for a topic we
+hold. A prune for any other topic changes nothing, so a peer cannot grow
+the backoff table with topics we never joined. go's `handlePrune` takes
+the topics of its mesh alone (`gossipsub.go`, lines 1161 to 1166). -/
 def pruneState (p : Params) (s : State) (sender : Peer) (q : Rpc.ControlPrune) : State :=
-  { s with
-    backoff := Cache.Backoff.add s.backoff sender ⟨q.topicId⟩
-      (match q.backoff with
-        | some sec => sec * 1000
-        | none => p.pruneBackoff) s.now }
+  if memB (⟨q.topicId⟩ : TopicId) s.topics then
+    { s with
+      backoff := Cache.Backoff.add s.backoff sender ⟨q.topicId⟩
+        (match q.backoff with
+          | some sec => sec * 1000
+          | none => p.pruneBackoff) s.now }
+  else s
 
 /-- Handle one PRUNE: record the backoff pair, and remove the sender
 from the topic mesh with the prune score update. -/
@@ -724,16 +863,43 @@ def controlActions (p : Params) (s : State) (sender : Peer) (c : Rpc.ControlMess
     (mapHandlers (fun st b => handlePrune p st sender b) c.prune
       (controlGrafts p s sender c)).2
 
-/-- Handle the control envelope: ihave, iwant, graft, then prune. -/
+/-- Handle the control envelope: the gossip gate (`gossipOf`), then ihave,
+iwant, graft, and prune. -/
 def handleControl (p : Params) (s : State) (sender : Peer) :
     Option Rpc.ControlMessage → State × List Action
   | none => (s, [])
-  | some c => (controlPrunes p s sender c, controlActions p s sender c)
+  | some c0 =>
+      let c := gossipOf p s sender c0
+      (controlPrunes p s sender c, controlActions p s sender c)
+
+/-- `handleControl` with each stage run once. Each stage above starts from
+the state of the stage before, so it runs every stage before it again,
+and `controlActions` runs them all once more: the IHAVE handlers run five
+times per RPC. Here each stage runs once and hands its state on.
+`handleControl_eq_runControl` proves the two equal, so the compiler runs
+this definition, and the theorems keep reasoning about the stages. -/
+def runControl (p : Params) (s : State) (sender : Peer) :
+    Option Rpc.ControlMessage → State × List Action
+  | none => (s, [])
+  | some c0 =>
+      let c := gossipOf p s sender c0
+      let r1 := mapHandlers (fun st b => handleIhave p st sender b) c.ihave s
+      let r2 := mapHandlers (fun st b => handleIwant p st sender b) c.iwant r1.1
+      let r3 := mapHandlers (fun st b => handleGraft p st sender b) c.graft r2.1
+      let r4 := mapHandlers (fun st b => handlePrune p st sender b) c.prune r3.1
+      (r4.1, r1.2 ++ r2.2 ++ r3.2 ++ r4.2)
+
+/-- The two control handlers are equal: each stage of `runControl` unfolds
+to the stage of `handleControl` that it binds. `@[csimp]` makes the
+compiler use `runControl` for every call of `handleControl`. -/
+@[csimp] theorem handleControl_eq_runControl : @handleControl = @runControl := by
+  funext p s sender c
+  cases c <;> rfl
 
 /-- Handle a decoded RPC: subscriptions, published messages, control. -/
 def handleRpc (p : Params) (s : State) (sender : Peer) (rpc : Rpc.RPC) :
     State × List Action :=
-  let s1 := handleSubs s sender rpc.subscriptions
+  let s1 := handleSubs p s sender rpc.subscriptions
   let (s2, a2) := handlePubs p s1 sender rpc.publish
   let (s3, a3) := handleControl p s2 sender rpc.control
   (s3, a2 ++ a3)
@@ -1098,7 +1264,7 @@ private theorem handleGraft_add (p : Params) (s : State) (sender : Peer)
     (hpd : peerOf s sender = some pd) :
     handleGraft p s sender g =
       (setPeer (setTopicMesh s ⟨g.topicId⟩ (sender :: meshOf s ⟨g.topicId⟩)) sender
-        { pd with score := Score.graft pd.score s.now ⟨g.topicId⟩ }, []) := by
+        { pd with score := Score.graft p.score pd.score s.now ⟨g.topicId⟩ }, []) := by
   simp [handleGraft, hsub, hm, hb, hd, hpd]
 
 private theorem handleGraft_add_none (p : Params) (s : State) (sender : Peer)
@@ -1201,7 +1367,8 @@ private theorem filter_ne_self (l : List Peer) (sender : Peer) (h : memB sender 
 private theorem meshOf_pruneState (p : Params) (s : State) (sender : Peer)
     (q : Rpc.ControlPrune) (topic : TopicId) :
     meshOf (pruneState p s sender q) topic = meshOf s topic := by
-  simp [pruneState, meshOf]
+  unfold pruneState
+  split <;> simp [meshOf]
 
 private theorem meshOf_setPeer (s : State) (q : Peer) (pd : PeerData) (topic : TopicId) :
     meshOf (setPeer s q pd) topic = meshOf s topic := by
@@ -1267,7 +1434,8 @@ private theorem handlePrunes_mesh (p : Params) (s : State) (sender : Peer)
 private theorem handleIhave_mesh (p : Params) (s : State) (sender : Peer)
     (i : Rpc.ControlIHave) (topic : TopicId) :
     meshOf (handleIhave p s sender i).1 topic = meshOf s topic := by
-  simp [handleIhave, meshOf]
+  unfold handleIhave
+  split <;> simp [meshOf]
 
 private theorem handleIwant_mesh (p : Params) (s : State) (sender : Peer)
     (w : Rpc.ControlIWant) (topic : TopicId) :
@@ -1304,7 +1472,8 @@ private theorem topics_mapHandlers {β : Type} (f : State → β → State × Li
 
 private theorem handleIhave_topics (p : Params) (s : State) (sender : Peer)
     (i : Rpc.ControlIHave) : (handleIhave p s sender i).1.topics = s.topics := by
-  simp [handleIhave]
+  unfold handleIhave
+  split <;> simp
 
 private theorem handleIwant_topics (p : Params) (s : State) (sender : Peer)
     (w : Rpc.ControlIWant) : (handleIwant p s sender w).1.topics = s.topics := by
@@ -1324,7 +1493,8 @@ private theorem handleGraft_topics (p : Params) (s : State) (sender : Peer)
 
 private theorem pruneState_topics (p : Params) (s : State) (sender : Peer)
     (q : Rpc.ControlPrune) : (pruneState p s sender q).topics = s.topics := by
-  simp [pruneState]
+  unfold pruneState
+  split <;> simp
 
 private theorem handlePrune_topics (p : Params) (s : State) (sender : Peer)
     (q : Rpc.ControlPrune) : (handlePrune p s sender q).1.topics = s.topics := by
@@ -1335,7 +1505,8 @@ private theorem handlePrune_topics (p : Params) (s : State) (sender : Peer)
         exact pruneState_topics p s sender q
     | some pd =>
         simp only [handlePrune, hm, ite_true, hpd]
-        simp [setPeer, setTopicMesh, pruneState]
+        simp only [setPeer, setTopicMesh]
+        exact pruneState_topics p s sender q
   · simp only [handlePrune, hm]
     exact pruneState_topics p s sender q
 
@@ -1430,7 +1601,10 @@ private theorem handleControl_mesh (p : Params) (s : State) (sender : Peer)
     meshOf (handleControl p s sender c).1 topic = meshOf s topic := by
   cases c with
   | none => rfl
-  | some c =>
+  | some c0 =>
+    -- The lemma holds for every envelope, so it holds for the gated one.
+    simp only [handleControl]
+    generalize gossipOf p s sender c0 = c
     have h1 : meshOf (controlIhaves p s sender c) topic = meshOf s topic := by
       simp only [controlIhaves]
       exact handleIhaves_mesh p s sender c.ihave topic
@@ -1446,7 +1620,6 @@ private theorem handleControl_mesh (p : Params) (s : State) (sender : Peer)
       simp only [controlPrunes]
       rw [handlePrunes_mesh p (controlGrafts p s sender c) sender c.prune topic
         (by rw [h3]; exact hnot), h3]
-    simp only [handleControl]
     exact h4
 
 private theorem handleControl_prune (p : Params) (s : State) (sender : Peer)
@@ -1497,13 +1670,19 @@ private theorem foldl_updateScoreOf_topics (ms : List Message) (s : State) (send
   | cons m ms ih =>
     rw [List.foldl_cons, ih, updateScoreOf_topics]
 
-private theorem handleSubs_mesh (s : State) (sender : Peer) (subs : List Rpc.SubOpts)
-    (topic : TopicId) : meshOf (handleSubs s sender subs) topic = meshOf s topic := by
-  cases h : peerOf s sender <;> simp [handleSubs, h, setPeer, meshOf]
+private theorem handleSubs_mesh (p : Params) (s : State) (sender : Peer)
+    (subs : List Rpc.SubOpts) (topic : TopicId) :
+    meshOf (handleSubs p s sender subs) topic = meshOf s topic := by
+  cases h : peerOf s sender with
+  | none => simp [handleSubs, h]
+  | some pd =>
+    cases ha : admittedSubs p pd.subs subs <;> simp [handleSubs, h, ha, setPeer, meshOf]
 
-private theorem handleSubs_topics (s : State) (sender : Peer) (subs : List Rpc.SubOpts) :
-    (handleSubs s sender subs).topics = s.topics := by
-  cases h : peerOf s sender <;> simp [handleSubs, h, setPeer]
+private theorem handleSubs_topics (p : Params) (s : State) (sender : Peer)
+    (subs : List Rpc.SubOpts) : (handleSubs p s sender subs).topics = s.topics := by
+  cases h : peerOf s sender with
+  | none => simp [handleSubs, h]
+  | some pd => cases ha : admittedSubs p pd.subs subs <;> simp [handleSubs, h, ha, setPeer]
 
 private theorem handlePubs_mesh (p : Params) (s : State) (sender : Peer)
     (ms : List Message) (topic : TopicId) :
@@ -1662,8 +1841,8 @@ theorem tickGossipGated (p : Params) (s s' : State) (acts : List Action)
 /-! ## The deduplication theorem -/
 
 /-- Every accepted message was absent from the pre-state seen cache. -/
-theorem accept_gate (c0 : Cache.SeenCache) (now : Millis) (idf : Sign.MsgIdFn)
-    (done : List MessageId) (c : Cache.SeenCache) (ms : List Message) :
+theorem accept_gate (c0 : Cache.SeenIndex) (now : Millis) (idf : Sign.MsgIdFn)
+    (done : List MessageId) (c : Cache.SeenIndex) (ms : List Message) :
     ∀ m ∈ (accept c0 now idf done c ms).accepted, c0.contains (idf m) now = false := by
   induction ms generalizing done c with
   | nil => simp [accept]
@@ -1703,7 +1882,9 @@ private theorem handleIhave_not_deliver (p : Params) (s : State) (sender : Peer)
     (i : Rpc.ControlIHave) (m : Message) :
     Action.deliver m ∉ (handleIhave p s sender i).2 := by
   simp only [handleIhave]
-  split <;> simp
+  split
+  · simp
+  · split <;> simp
 
 private theorem handleIwant_not_deliver (p : Params) (s : State) (sender : Peer)
     (w : Rpc.ControlIWant) (m : Message) :
@@ -1774,15 +1955,19 @@ private theorem controlActions_not_deliver (p : Params) (s : State) (sender : Pe
     · exact mapHandlers_not_deliver _ (fun s b => handleGraft_not_deliver p s sender b) _ _ _ h
   · exact mapHandlers_not_deliver _ (fun s b => handlePrune_not_deliver p s sender b) _ _ _ h
 
-/-- A message reaches the application only when the pre-state seen cache
-does not hold its id. -/
-private theorem handleSubs_seen (s : State) (sender : Peer) (subs : List Rpc.SubOpts) :
-    (handleSubs s sender subs).seen = s.seen := by
-  cases h : peerOf s sender <;> simp [handleSubs, h, setPeer]
+/-- `handleSubs` writes one peer record at most, so the seen cache and
+the clock stay. `stepDeliverUnseen` reads both through these lemmas. -/
+private theorem handleSubs_seen (p : Params) (s : State) (sender : Peer)
+    (subs : List Rpc.SubOpts) : (handleSubs p s sender subs).seen = s.seen := by
+  cases h : peerOf s sender with
+  | none => simp [handleSubs, h]
+  | some pd => cases ha : admittedSubs p pd.subs subs <;> simp [handleSubs, h, ha, setPeer]
 
-private theorem handleSubs_now (s : State) (sender : Peer) (subs : List Rpc.SubOpts) :
-    (handleSubs s sender subs).now = s.now := by
-  cases h : peerOf s sender <;> simp [handleSubs, h, setPeer]
+private theorem handleSubs_now (p : Params) (s : State) (sender : Peer)
+    (subs : List Rpc.SubOpts) : (handleSubs p s sender subs).now = s.now := by
+  cases h : peerOf s sender with
+  | none => simp [handleSubs, h]
+  | some pd => cases ha : admittedSubs p pd.subs subs <;> simp [handleSubs, h, ha, setPeer]
 
 private theorem join_not_deliver (p : Params) (s : State) (peer : Peer)
     (proto : PubsubProto) (m : Message) : Action.deliver m ∉ (join p s peer proto).2 := by
@@ -1862,7 +2047,7 @@ does not hold its id. -/
 theorem stepDeliverUnseen (p : Params) (s s' : State) (acts : List Action)
     (e : Event) (m : Message)
     (hstep : step p s e = .ok (s', acts)) (hdel : Action.deliver m ∈ acts) :
-    Cache.SeenCache.contains s.seen (p.msgId m) s.now = false := by
+    Cache.SeenIndex.contains s.seen (p.msgId m) s.now = false := by
   cases e with
   | peerJoined peer proto =>
       have h1 : join p s peer proto = (s', acts) := by
@@ -1940,21 +2125,21 @@ theorem stepDeliverUnseen (p : Params) (s s' : State) (acts : List Action)
               rcases hdel with hdl | hdl
               · simp only [List.mem_map] at hdl
                 obtain ⟨m', hm', heq⟩ := hdl
-                have hseen : (handleSubs s sender rpc.subscriptions).seen = s.seen :=
-                  handleSubs_seen s sender rpc.subscriptions
-                have hnow : (handleSubs s sender rpc.subscriptions).now = s.now :=
-                  handleSubs_now s sender rpc.subscriptions
+                have hseen : (handleSubs p s sender rpc.subscriptions).seen = s.seen :=
+                  handleSubs_seen p s sender rpc.subscriptions
+                have hnow : (handleSubs p s sender rpc.subscriptions).now = s.now :=
+                  handleSubs_now p s sender rpc.subscriptions
                 cases heq
-                have hgate := accept_gate (handleSubs s sender rpc.subscriptions).seen
-                  (handleSubs s sender rpc.subscriptions).now p.msgId []
-                  (handleSubs s sender rpc.subscriptions).seen
+                have hgate := accept_gate (handleSubs p s sender rpc.subscriptions).seen
+                  (handleSubs p s sender rpc.subscriptions).now p.msgId []
+                  (handleSubs p s sender rpc.subscriptions).seen
                   (List.filter (fun m => validationOk p m) rpc.publish) m hm'
                 rwa [hseen, hnow] at hgate
               · exact absurd hdl
-                  (forwardPubs_not_deliver (handleSubs s sender rpc.subscriptions) sender
-                    ((accept (handleSubs s sender rpc.subscriptions).seen
-                        (handleSubs s sender rpc.subscriptions).now p.msgId []
-                        (handleSubs s sender rpc.subscriptions).seen
+                  (forwardPubs_not_deliver (handleSubs p s sender rpc.subscriptions) sender
+                    ((accept (handleSubs p s sender rpc.subscriptions).seen
+                        (handleSubs p s sender rpc.subscriptions).now p.msgId []
+                        (handleSubs p s sender rpc.subscriptions).seen
                         (List.filter (fun m => validationOk p m) rpc.publish)).accepted) m)
             · cases hctl : rpc.control with
               | none =>
@@ -1963,7 +2148,9 @@ theorem stepDeliverUnseen (p : Params) (s s' : State) (acts : List Action)
               | some c =>
                   rw [hctl] at hdel
                   simp only [handleControl] at hdel
-                  exact absurd hdel (controlActions_not_deliver p _ sender c m)
+                  -- The envelope is the gated one (`gossipOf`), and the lemma
+                  -- holds for every envelope.
+                  exact absurd hdel (controlActions_not_deliver p _ sender _ m)
 
 /-! ## The backoff theorem -/
 
