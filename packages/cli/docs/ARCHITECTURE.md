@@ -76,14 +76,17 @@ work.
   failure exits 1. The behavior section defines both.
 - **`interop`** (the spike's `Interop.lean`). Configuration arrives as
   environment variables, in the shape of the libp2p
-  transport-interop test plan: `transport` (`tcp`), `muxer` (`yamux`
-  or `mplex`), `security` (`noise`), `is_dialer`, `ip`, `redis_addr`,
-  and `test_timeout_seconds`. `Interop.startHost` offers
-  `Mux.yamux` or `Mux.mplex`, the muxer named in the environment.
-  The W5.9 gate still runs yamux. go-libp2p v0.50 has no mplex in
-  its defaults, so the matrix skips those cells, and
-  `scripts/mplex-interop.sh` covers `Mux.mplex`. The listener publishes its dialable
-  multiaddr with the `/p2p/<id>` suffix through Redis, and the dialer
+  transport-interop test plan: `transport` (`tcp` or `quic-v1`),
+  `muxer` (`yamux` or `mplex`), `security` (`noise` or `tls`),
+  `is_dialer`, `ip`, `redis_addr`, and `test_timeout_seconds`. Over
+  `tcp`, `Interop.startHost` offers the security protocol and the
+  muxer named in the environment. `quic-v1` secures and muxes its own
+  connections, so the harness skips `security` and `muxer` for it, as
+  go's peer does. The W5.9 gate still runs yamux. go-libp2p v0.50 has
+  no mplex in its defaults, so the matrix skips those cells, and
+  `scripts/mplex-interop.sh` covers `Mux.mplex`. The listener
+  publishes its dialable multiaddr with the `/p2p/<id>` suffix through
+  Redis, and the dialer
   fetches it, dials, pings once, and prints the timing JSON with the
   test plan's keys verbatim, `handshakePlusOneRTTMillis` and
   `pingRTTMilllis`, typo included, because the runner compares the
@@ -101,9 +104,9 @@ work.
    wires them. Every seam
    value comes from its implementation
    package: the TCP transport from `net/streams`, which alone binds
-   `Std.Async.TCP` (§9, delta 7), the security value from
-   `libp2p/security`, and the muxer values from `libp2p/mux`. The
-   wiring assembles and calls.
+   `Std.Async.TCP` (§9, delta 7), the QUIC transport from
+   `libp2p/quic`, the security values from `libp2p/security`, and the
+   muxer values from `libp2p/mux`. The wiring assembles and calls.
 2. **No reusable code.** Code a second binary wants goes down a
    package (§2). The Redis client serves the harness alone, so it
    stays in `Interop/Redis.lean`; the first want from a second binary
@@ -908,11 +911,18 @@ the same `headSha`. Two later body edits reran the license guard as
 ## The stack
 
 The harness composes the real packages: an Ed25519 identity from
-`Libp2p.Identity`, the TCP transport, `Noise.securityProtocol` with a
-static key from `Noise.Config.generate`, one muxer from the test
-plan, `Libp2p.Host`, and ping's handler and initiator from
-`Libp2p.Protocols.Ping`. The demo and the ping node use that same
-identity, transport, and Noise construction, and their muxer list is
+`Libp2p.Identity`, `Libp2p.Host`, and ping's handler and initiator
+from `Libp2p.Protocols.Ping`, over the run's transport:
+
+- `tcp`: the TCP transport, `Noise.securityProtocol` with a static key
+  from `Noise.Config.generate` or `Tls.securityProtocol` with a
+  certificate from `Tls.Config.generate`, and `Mux.yamux` or
+  `Mux.mplex`;
+- `quic-v1`: `Libp2p.Quic.transport` with a certificate from
+  `Tls.Config.generate`, as the host's one secured transport.
+
+The demo and the ping node use the identity, the TCP transport, and
+the Noise construction above, and their muxer list is
 `[Mux.yamux, Mux.mplex]`.
 
 ## What the package must not depend on

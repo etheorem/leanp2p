@@ -159,14 +159,19 @@ channels and the parks wrap `Std`, so the suite pins their behavior
 - **The `Std` wrap.** Lean v4.34 ships the primitives the package
   needs (ARCHITECTURE §4.1). A direct import would spread toolchain
   names across the stack. The wrapper holds them in one module, so an
-  API move touches one module.
+  API move touches one module. The two transports are the exceptions
+  of root §4.1: `Std.Async.TCP` in `net/streams` and `Std.Async.UDP` in
+  `net/quic`. Each package binds its transport in its own modules, and
+  no other package imports it.
 - **Parks hold no thread.** The parks run in `Async` and resolve as
   promise continuations, so the tasks share Lean's pool, whose size
   `LEAN_NUM_THREADS` fixes. A blocking `IO.wait` on a pool task makes
   the runtime start a replacement worker (ARCHITECTURE §4.1 gives the
   measurement). A parked loop or reader of a host (§3.3) therefore adds
   no thread. Code inside an `Async` task must not block either:
-  a blocking call holds a pool worker.
+  a blocking call holds a pool worker. `Std`'s UDP receive selector is
+  one such call: it waits on the receive with `.block`, so `net/quic`
+  parks on the native receive instead.
 - **A sender never parks inside `Std`.** `Std.CloseableChannel.close`
   wakes the parked receivers only. A sender parked inside `Std` on a
   full channel wakes only when a receive frees a slot, one sender per

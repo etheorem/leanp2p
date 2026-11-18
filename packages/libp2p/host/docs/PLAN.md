@@ -15,6 +15,7 @@ suite passes under `+RTS -N1`, and the import lint is green.
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
 | 1a | W5.1, W5.2, W1.1 | the registries, the dedup rule, the peerstore, `Host.Error`, and the constants: pure functions over data, with their suites | the dedup, registry, and peerstore milestones below pass with no connection in the loop |
 | 1b | 1a, W5.5 | the swarm: `dial`, `dialPeer`, `startListening`, the upgrade pipeline, stream serving, `Host.close`, and the policy values | the root W5.6 row holds, and the milestones below pass |
+| 2 | 1b, W5.2 | the secured transports of root W4.4: the `securedTransports` list, their dial, listen, and shutdown paths through the checkpoint and the dedup of unit 1b, and the QUIC-first default ranker with its theorems | the host checks of `Tests/Quic.lean` pass: two hosts over QUIC dial, ping, and close, a close ends a QUIC dial still in its handshake, and the ranker puts QUIC first; the secured checks of `Tests/Host.lean` pass over the sim value: the pipeline, the ranker's choice, a dial over both paths, the gater's refusals with every scope released, and the close of a secured dial and accept in their handshakes |
 
 The split mirrors the negotiate pair's. Unit 1a is pure-function work
 over the table types. It needs `PeerId` (W5.1), the seam types
@@ -32,6 +33,9 @@ public stages of `libp2p/negotiate`, with the peer checkpoint after
 the handshake (`Libp2p/Host/Upgrade.lean`). The stream negotiation is
 the host's own shell, `negotiateStream`, over the pure core of
 `libp2p/negotiate` (the package ARCHITECTURE, "Stream serving").
+Unit 2 is done (the package ARCHITECTURE, "Secured transports"). The
+live checks are `scripts/quic-interop.sh`, a host against go-libp2p's,
+and the `quic-v1` cells of the W5.9 matrix.
 
 ## Consumers
 

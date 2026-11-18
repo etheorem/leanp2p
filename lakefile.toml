@@ -16,13 +16,18 @@ defaultTargets = [
   "CryptoPure",
   "Streams",
   "Yamux",
+  "Tls",
+  "Quic",
   "Libp2pIdentity",
   "Libp2pCore",
   "Libp2pSecurity",
+  "Libp2pQuic",
   "Libp2pMux",
   "Libp2pNegotiate",
   "Libp2pHost",
   "Libp2pProtocols",
+  "Libp2pDiscv5",
+  "Libp2pEth2",
   "CliHarness",
   "demo",
   "pingnode",
@@ -51,6 +56,14 @@ path = "packages/crypto/backend"
 [[require]]
 name = "TlsNative"
 path = "packages/net/tls/native"
+
+# `net/quic/native` is a nested Lake package for the same reason: it
+# compiles the pinned ngtcp2 tree (`packages/net/quic/upstream/`) and the
+# shim of `net/quic` into one archive, which resolves against the
+# toolchain's static OpenSSL.
+[[require]]
+name = "QuicNative"
+path = "packages/net/quic/native"
 
 # `net/streams/shim` is a nested Lake package for the same reason. Its
 # `lakefile.lean` builds the C abort of the TCP transport. It provides
@@ -170,6 +183,12 @@ roots = ["Tls"]
 globs = ["Tls.*"]
 
 [[lean_lib]]
+name = "Quic"
+srcDir = "packages/net/quic"
+roots = ["Quic"]
+globs = ["Quic.*"]
+
+[[lean_lib]]
 name = "Libp2pIdentity"
 srcDir = "packages/libp2p/identity"
 roots = ["Libp2p.Identity"]
@@ -186,6 +205,12 @@ name = "Libp2pSecurity"
 srcDir = "packages/libp2p/security"
 roots = ["Libp2p.Security"]
 globs = ["Libp2p.Security.*"]
+
+[[lean_lib]]
+name = "Libp2pQuic"
+srcDir = "packages/libp2p/quic"
+roots = ["Libp2p.Quic"]
+globs = ["Libp2p.Quic.*"]
 
 [[lean_lib]]
 name = "Libp2pMux"
@@ -210,6 +235,20 @@ name = "Libp2pProtocols"
 srcDir = "packages/libp2p/protocols"
 roots = ["Libp2p.Protocols"]
 globs = ["Libp2p.Protocols.*"]
+
+# Node Discovery v5.1 over UDP, the consensus discovery (root PLAN W6.11).
+[[lean_lib]]
+name = "Libp2pDiscv5"
+srcDir = "packages/libp2p/discv5"
+roots = ["Libp2p.Discv5"]
+
+# The consensus networking of an Ethereum client: the topics and the
+# message id, the ENR fields, the req/resp methods, and the service over
+# the host, gossipsub, and discv5 (root PLAN W6.12).
+[[lean_lib]]
+name = "Libp2pEth2"
+srcDir = "packages/libp2p/eth2"
+roots = ["Libp2p.Eth2"]
 
 [[lean_lib]]
 name = "CliHarness"
@@ -263,6 +302,13 @@ root = "Tests.Interop.Noise"
 [[lean_exe]]
 name = "tls-interop"
 root = "Tests.Interop.Tls"
+
+# The Lean side of the QUIC interop check against go-libp2p's host with
+# its QUIC transport; run it through `scripts/quic-interop.sh`. Like
+# `tls-interop`, it is not part of `lake test`.
+[[lean_exe]]
+name = "quic-interop"
+root = "Tests.Interop.Quic"
 
 [[lean_exe]]
 name = "gossipsub-interop"

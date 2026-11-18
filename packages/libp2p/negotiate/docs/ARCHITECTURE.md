@@ -18,6 +18,7 @@ The spike reference is `Protocol/Multiselect.lean` and
 | `Libp2p/Negotiate/Message.lean` | the `Msg` type, its `Codec` and `LawfulCodec` instances (§3.2), the uvarint length prefix, the `ls` reply framing |
 | `Libp2p/Negotiate/Step.lean` | the pure core: `State`/`Event`/`Action`/`step`, the `Reply` closed set, `Negotiate.Error` (§3.3, §3.4, §3.5) |
 | `Libp2p/Negotiate/Upgrade.lean` | `Negotiate.upgrade`, the upgrader over the seam lists, the identity check, the deadline wiring |
+| `Libp2p/Negotiate/Secured.lean` | `Negotiate.securedOver`: a `SecuredTransport` whose dial and accept run the upgrade over any `Streams.Transport`, with the owner's admission before each accepted upgrade; over the sim transport it is the sim value of the seam (root W4.4) |
 
 All declarations live in the `Libp2p.Negotiate` namespace, and the root
 module re-exports the public submodules. The 30 s upgrade deadline is

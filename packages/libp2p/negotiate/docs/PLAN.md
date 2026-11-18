@@ -15,6 +15,7 @@ pass, the suite passes under `+RTS -N1`, and the import lint is green.
 | 0 | none | this documentation pair, the first work unit of the package (ARCHITECTURE §2) | written, and consistent with the root docs |
 | 1a | W5.2 | the multistream core: `Constants.lean`, the `Msg` codec with its `LawfulCodec` instance and the `ls` framing, and `State`/`Event`/`Action`/`step` with the `Reply` set and `Negotiate.Error` | the core replays the transcript milestones below with no connection in the loop |
 | 1b | 1a, W5.3, W5.4 | the upgrader: `Negotiate.upgrade` over the ordered seam lists, the identity check, the leftover hand-over between the three stages, the `Except.mapError` into `Core.Error`, the deadline wiring | the root W5.5 row holds, and the milestones below pass |
+| 2 | 1b, W4.4 | `securedOver`, the sim value of the `SecuredTransport` seam: the upgrade inside a dial, with the abort of a host's close, and inside an accept, with the owner's admission before it and a listener close that reaches it | the host suite's secured checks pass on it (`Tests/Host.lean`, "The secured paths") |
 
 The split mirrors the security pair's: the pure side closes on
 transcripts alone, and among the W5 units it needs only `ProtocolId`

@@ -11,10 +11,11 @@ session tickets, no session cache, no middlebox compatibility mode,
 and the verify callback with its one-certificate rule (the package
 ARCHITECTURE, "The settings").
 
-The QUIC transport (W4.4, etheorem/leanp2p#92) is to run its
-handshake on the same context (`Context.native`), so the TLS settings
-have one home for both transports (the package ARCHITECTURE, "One
-context for both transports").
+Another shim can run its own handshake on the same context
+(`Context.native`, through `native/c/tls_shim.h`), as the QUIC
+transport of `net/quic` does. The TLS settings have one home for both
+transports (the package ARCHITECTURE, "One context for both
+transports").
 -/
 
 set_option autoImplicit false

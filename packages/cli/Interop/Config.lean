@@ -17,12 +17,14 @@ the runner compares the keys literally.
 
 ## What the harness supports
 
-The gate runs `tcp + /noise + yamux` (root PLAN W5.9). The parse also
-reads `mplex`, the second muxer of root §4.9. `libp2p/mux` holds no
-mplex value yet (P2, the mux PLAN, unit 2), so the host start refuses
-it. Any other transport, security, or muxer name is a configuration
-error. On every refusal the binary exits nonzero (the test plan: "On
-error, the dialer should return a non-zero exit code").
+The gate runs `tcp + /noise + yamux` (root PLAN W5.9), and the QUIC
+unit adds `quic-v1` (root PLAN W4.4). Over `tcp`, the security is
+`noise` or `tls`, and the muxer is `yamux` or `mplex`, the two muxers
+of root §4.9. `quic-v1` brings its own security and muxing, so the
+parse skips both variables for it, as the go peer does (lines 116 to
+127 of its `main.go`). Any other transport, security, or muxer name is
+a configuration error. On every refusal the binary exits nonzero (the
+test plan: "On error, the dialer should return a non-zero exit code").
 
 `ip` and `redis_addr` take literal IPv4 addresses. The TCP transport
 dials and listens on `/ip4` and `/ip6` only (the streams ARCHITECTURE,
@@ -73,10 +75,26 @@ inductive Muxer where
   | mplex
   deriving DecidableEq, Repr
 
+/-- The two security protocols of root §4.9. -/
+inductive Security where
+  /-- `/noise`, the security of the gate. -/
+  | noise
+  /-- `/tls/1.0.0`. -/
+  | tls
+  deriving DecidableEq, Repr
+
+/-- The transport, and what it runs on its connections. -/
+inductive Transport where
+  /-- TCP, with the security protocol and the muxer of the upgrade. -/
+  | tcp (security : Security) (muxer : Muxer)
+  /-- QUIC v1, which secures and muxes its connections itself. -/
+  | quicV1
+  deriving DecidableEq, Repr
+
 /-- The parsed configuration of one harness run. -/
 structure Config where
-  /-- The muxer to offer. -/
-  muxer : Muxer
+  /-- The transport, with its security and muxer over TCP. -/
+  transport : Transport
   /-- `true` for the dialer, `false` for the listener. -/
   isDialer : Bool
   /-- The address to listen on, with port 0. -/
@@ -92,6 +110,12 @@ def tcpAddr? (ip : String) (port : String) : Except String Multiformats.Multiadd
   | .ok a => .ok a
   | .error _ => .error s!"{ip}:{port} is no IPv4 address and TCP port"
 
+/-- The `quic-v1` multiaddr of a literal IPv4 address and a UDP port. -/
+def quicAddr? (ip : String) (port : String) : Except String Multiformats.Multiaddr :=
+  match Multiformats.Multiaddr.parse? s!"/ip4/{ip}/udp/{port}/quic-v1" with
+  | .ok a => .ok a
+  | .error _ => .error s!"{ip}:{port} is no IPv4 address and UDP port"
+
 /-- `redis_addr` as `<ipv4>:<port>`. The port is the text after the last
 colon. -/
 def redisAddr? (text : String) : Except String Multiformats.Multiaddr :=
@@ -103,22 +127,25 @@ def redisAddr? (text : String) : Except String Multiformats.Multiaddr :=
 
 /-- The configuration from the variable lookup `env`. -/
 def parse (env : String → Option String) : Except String Config := do
-  match env transportVar with
-  | some "tcp" => pure ()
-  | other => throw s!"{transportVar}={other.getD ""}: the harness supports tcp only"
-  match env securityVar with
-  | some "noise" => pure ()
-  | other => throw s!"{securityVar}={other.getD ""}: the harness supports noise only"
-  let muxer ← match env muxerVar with
-    | some "yamux" => pure Muxer.yamux
-    | some "mplex" => pure Muxer.mplex
-    | other => throw s!"{muxerVar}={other.getD ""}: the harness supports yamux and mplex"
-  let listenAddr ← tcpAddr? ((env ipVar).getD defaultIp) "0"
+  let ip := (env ipVar).getD defaultIp
+  let (transport, listenAddr) ← match env transportVar with
+    | some "tcp" =>
+      let security ← match env securityVar with
+        | some "noise" => pure Security.noise
+        | some "tls" => pure Security.tls
+        | other => throw s!"{securityVar}={other.getD ""}: the harness supports noise and tls"
+      let muxer ← match env muxerVar with
+        | some "yamux" => pure Muxer.yamux
+        | some "mplex" => pure Muxer.mplex
+        | other => throw s!"{muxerVar}={other.getD ""}: the harness supports yamux and mplex"
+      pure (Transport.tcp security muxer, ← tcpAddr? ip "0")
+    | some "quic-v1" => pure (Transport.quicV1, ← quicAddr? ip "0")
+    | other => throw s!"{transportVar}={other.getD ""}: the harness supports tcp and quic-v1"
   let redisAddr ← redisAddr? ((env redisAddrVar).getD defaultRedisAddr)
   -- The go peer keeps the default when the value is no numeral (lines 46
   -- to 52 of its `main.go`), and so does the harness.
   let timeoutSec := ((env timeoutVar).bind String.toNat?).getD defaultTimeoutSec
-  return { muxer, isDialer := env isDialerVar == some "true", listenAddr, redisAddr, timeoutSec }
+  return { transport, isDialer := env isDialerVar == some "true", listenAddr, redisAddr, timeoutSec }
 
 /-! ## The timing record -/
 

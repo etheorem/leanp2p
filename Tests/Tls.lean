@@ -20,7 +20,7 @@ the sim transport:
 * the spec vectors: each valid certificate derives the spec's peer id,
   and the invalid one fails its signature check, as the spike's
   `Tests/TlsExt.lean` checked them;
-* the validity window, which the spike did not check;
+* the validity window, both ends included (RFC 5280 §4.1.2.5);
 * the extension rules, one `CertError` arm each, over the generated
   certificates of `backend-strictness.json`;
 * the `SignedKey` codec: the spec values read back and re-encode to

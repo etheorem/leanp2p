@@ -3,9 +3,9 @@
 # this package's TLS seam value against go-libp2p v0.50.0's TLS
 # transport, over plain loopback TCP, in both directions. Each run checks
 # both certificates and both peer ids, moves 200000 bytes each way
-# (thirteen TLS records), and ends with an orderly close. Six more runs
-# check the refusals in both directions, each ending in the alert
-# bad_certificate, and peers that use no ALPN.
+# (thirteen TLS records), and ends with an orderly close. Eight more
+# runs check the refusals in both directions, each ending in its alert,
+# peers that use no ALPN, and that our client sends no server name.
 #
 # Go builds offline from the module cache; run `go mod download` in
 # scripts/tls-interop once on a machine that lacks it.
@@ -54,12 +54,16 @@ status=0
 run "lean dials go" "$go" listen "$lean" dial || status=1
 run "go dials lean" "$lean" listen "$go" dial || status=1
 # Each refusal passes when the refusing side answers its own refusal
-# and the other side receives the alert bad_certificate.
+# and the other side receives the alert: bad_certificate for a refused
+# certificate, certificate_required for a client that sent none.
 run "go dials lean without the extension" "$lean" listen-noext "$go" dial-noext || status=1
 run "go dials lean with a chain of two" "$lean" listen-chain "$go" dial-chain || status=1
+run "go dials lean without a certificate" "$lean" listen-nocert "$go" dial-nocert || status=1
 run "lean dials an expired go server" "$go" listen-expired "$lean" dial-refuse || status=1
 run "lean dials go without the extension" "$go" listen-refuse "$lean" dial-noext || status=1
 # A peer with no ALPN reads as "libp2p", with no inlined muxer.
 run "go dials lean without ALPN" "$lean" listen "$go" dial-noalpn || status=1
 run "lean dials go without ALPN" "$go" listen-noalpn "$lean" dial || status=1
+# The go server ends the handshake when the ClientHello names a server.
+run "lean dials go, and sends no server name" "$go" listen-nosni "$lean" dial || status=1
 exit $status

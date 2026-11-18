@@ -39,20 +39,34 @@ W0 scaffold
 W5 joins all three tracks (identity needs A+B, security needs B+C, mux/negotiate need C)
  └── W5.1 → W5.2 → {W5.3, W5.4} → W5.5 → W5.6 → W5.7 → W5.8 → W5.9
       (W5.10 mplex follows W5.4)
+      (W5.11 TLS follows W5.2; W4.4 QUIC follows W5.9 and W5.11)
+      (W5.12 host limits and W5.13 host events follow W5.6)
+      (W5.14 rust interop follows W5.9 and W4.4)
 W6 consensus extension
  └── {W6.1 enr, W6.2 snappy} → W6.3 req/resp → W6.4 gossipsub
+      gossipsub: W6.4 → W6.5 → W6.6 → W6.7 → W6.8 (W6.6 also needs W5.13)
+      req/resp: W6.3 → W6.9
+      discovery: W6.1 → {W6.10, W6.11} (W6.11 also needs W4.4)
+      W6.12 eth2 needs W0.4, W4.4, W5.12, W5.13, W6.8, W6.9, W6.10, W6.11
 ```
+
+The units W0.4, W5.12 to W5.14, and W6.5 to W6.12 came after the
+hackathon week, as the v2 roadmap. Their tracking issue lists each one
+with its issue. Their pull requests target the `leanp2pv2` branch.
+That base is tentative and can change. The tracking issue names the
+current one.
 
 Three tracks run fully in parallel from W1 to W4. They join in the
 libp2p wave (W5). The critical path is 15 units deep:
 **W0 → W1.1 → W1.2 → W2.1 → W2.2 → W5.1 → W5.2 → W5.3 → W5.5 → W5.6 →
-W5.7 → W5.8 → W5.9 → W6.3 → W6.4**.
+W5.7 → W5.8 → W5.9 → W6.3 → W6.4**. The v2 units extend it through
+gossipsub: **W6.4 → W6.5 → W6.6 → W6.7 → W6.8 → W6.12**.
 
 ## W0: repo scaffold (no dependencies)
 
-Status: done. The three units are closed; `lake build` builds all 19
-leaf libraries, the lint and the runner are green (also under
-`+RTS -N1 -RTS`), and the vector corpus loads through its provenance
+Status: W0.1 to W0.3 are done, and W0.4 belongs to v2. The three
+units are closed; `lake build` builds all 19 leaf libraries, the lint
+and the runner are green (also under `+RTS -N1 -RTS`), and the vector corpus loads through its provenance
 suite. CI runs on every push to `etheorem/leanp2p` and is green, the
 vendor verify included.
 
@@ -61,6 +75,7 @@ vendor verify included.
 | W0.1 | Lake skeleton: `packages/` tree with one `lean_lib` per leaf (§2), empty roots compile | `lake build` green with all leaves present |
 | W0.2 | CI: import-rule lint (group chain §2, grep-enforced), test-runner layout (one suite module per upstream file, `lake test`, `-N1` required) | lint + empty runner green in CI |
 | W0.3 | Vector infrastructure: `scripts/extract-vectors.py`, `VECTORS.lock`, `Tests/vectors/` moved from the `spike` branch | a trivial vector suite loads and passes |
+| W0.4 | The consensus p2p specs: every fork's `p2p-interface.md` to Fulu, `fulu/partial-columns`, and altair's light-client file in `vendor/consensus-specs`, with the pin of `VECTORS.lock` on the latest release, `v1.7.0-beta.4` | the vendor verify passes |
 
 ## W1: foundations (parallel)
 
@@ -92,13 +107,14 @@ vendor verify included.
 | W4.1 | `net/streams` core | P0 | W1.1, W1.2, W2.1, W2.3 | `Connection`/`Listener`/`Transport`, `readExactly`, `BufReader`, `Framing`, `Stream` (+`prependBytes`) as the seam over a loop (ARCHITECTURE §3.3), the in-memory sim as the second `Transport` value; W2.1 gives `Framing` its `uvarint` prefix, and W2.3 gives the seam its `Multiaddr` |
 | W4.2 | `net/streams` tcp | P0 | W4.1, W1.1 | libuv transport with the close-wakes discipline, failed-write teardown, deadline wiring for §5.4 |
 | W4.3 | `net/yamux` | P0 | W4.1 | header codec (a proved `LawfulCodec`), session as a pure `step` + one loop task (ARCHITECTURE §3.3), flow control, hostile-frame rules (caps, SYN-only + parity, stream retirement, wake hand-off, capped control queue) |
+| W4.4 | `net/quic` + `libp2p/quic` | P0 | W4.1, W5.2, W5.6, W5.9, W5.11 | the QUIC transport (RFC 9000, `quic-v1`): ngtcp2 pinned and bound FFI first, one loop task per UDP socket over the `Clock` seam, the stream views, the bounds of new connections (a cap on handshakes, a Retry past half of it, the owner's admission before each handshake), the `SecuredTransport` seam in `libp2p/core` with its sim value in `libp2p/negotiate`, the host's secured transports and its QUIC-first ranker, and the certificate check of W5.11 inside the handshake. The consensus networking spec makes QUIC a MUST and the primary transport (`p2p-interface.md`, lines 154 to 161); **gate**: go-libp2p's QUIC transport in both directions, with the "Peer Authentication" refusals, and the `quic-v1` cells of the W5.9 matrix |
 
 ## W5: libp2p (joins the tracks)
 
 | Unit | Pkg | P | deps | Deliverable |
 |---|---|---|---|---|
 | W5.1 | `libp2p/identity` | P0 | W2.2, W2.3, W3.3 | four key types, deterministic marshalings, strict unmarshal (per-type `Data` length), peer id (identity inlining ≤ 42 B), the key-marshal forms that the backend does not own |
-| W5.2 | `libp2p/core` | P0 | W4.1, W5.1 | `ProtocolId`, `Core.Error`, the seam structures (`SecurityProtocol`/`SecureConn`, `Muxer`/`MuxSession`, `StreamHandler`, gater/resource-manager/address-ranker); types only, with no protocol logic (ARCHITECTURE §3.1, §4.9) |
+| W5.2 | `libp2p/core` | P0 | W4.1, W5.1 | `ProtocolId`, `Core.Error`, the seam structures (`SecurityProtocol`/`SecureConn`, `Muxer`/`MuxSession`, `StreamHandler`, gater/resource-manager/address-ranker; `SecuredTransport`/`SecuredSession` arrives with W4.4); types only, with no protocol logic (ARCHITECTURE §3.1, §4.9) |
 | W5.3 | `libp2p/security` (Noise) | P0 | W4.2, W3.3, W5.2 | XX handshake as a pure `step` + transport; leftover hand-over as data; an AEAD failure is a protocol error, distinct from EOF; 8 KiB pre-auth payload cap; the `SecurityProtocol` value plus a fixed-key test value |
 | W5.4 | `libp2p/mux` | P0 | W4.3, W5.2 | the yamux `Muxer` value over W4.3; mplex follows as W5.10 in the same package |
 | W5.5 | `libp2p/negotiate` | P0 | W5.2, W5.3, W5.4 | multistream-select as a pure `step` (1 KiB cap, `na`, `ls`, lazy) + upgrader over the `core` seams with leftover hand-over between stages |
@@ -108,23 +124,36 @@ vendor verify included.
 | W5.9 | `cli/` interop | P0 | W5.8 | transport-interop harness; **gate**: go-libp2p matrix `tcp + /noise + yamux`, dial and listen, plus silent-peer and slow-reader scenarios |
 | W5.10 | `libp2p/mux` | P0 | W2.1, W5.2, W5.4 | the mplex `Muxer` value (`/mplex/6.7.0`): the message codec, the go-compatible `(id, initiator)` identity, the half-close rules, and the 1 MiB cap before allocation. The consensus networking spec requires mplex of every TCP client and puts yamux first (`p2p-interface.md`, lines 210 to 215), so every host offers `[Mux.yamux, Mux.mplex]`; go-mplex loopback interop in both directions |
 | W5.11 | `net/tls` + `libp2p/security` (TLS) | P0 | W3.2, W5.1, W5.2 | the libp2p TLS handshake: the TLS 1.3 engine over libssl (`net/tls`), the `SignedKey` codec with its round-trip theorem, the certificate and its checks (every MUST of the spec's "Peer Authentication"), and `/tls/1.0.0` as a `SecurityProtocol` value with its fixed-key test value; **gate**: the four spec certificates, and go-libp2p's TLS transport over loopback TCP in both directions |
+| W5.12 | `libp2p/host` limits | P0 | W5.6, W5.10 | the keepalive probe of every connected peer at once, the peerstore address limit and TTL, and a limiting resource manager with go-libp2p's base limits (issue #93) |
+| W5.13 | `libp2p/host` events | P0 | W5.6 | connection events with the session number, the close of one peer, the peer list, and each session's direction and remote address |
+| W5.14 | `cli/` rust interop | P0 | W5.9, W5.10, W5.11, W4.4 | the rust-libp2p cells of the transport matrix, over sigp's fork that Lighthouse pins: TCP with Noise and yamux, Noise and mplex, TLS and yamux, and QUIC, each way; **gate**: all 11 cells pass |
 
 ## W6: consensus extension (P0/P1; see ARCHITECTURE.md §8)
 
 | Unit | Pkg | P | deps | Deliverable |
 |---|---|---|---|---|
-| W6.1 | `libp2p/identity` ENR | P1 | W5.1, W3.2 | the package's own RLP behind its `Codec` surface, the fallback the package docs record: the etheorem `LeanRlp` package has its item codec on `main` (etheorem/etheorem#123), and its vector runner and round-trip theorems have not landed; + ENR encode/decode + peer-id/multiaddr mapping (discv5 itself stays out of scope); the `v4` identity scheme verifies the 64-byte `r ‖ s` signature of EIP-778 through the keccak-256 path of W3.2 (`LeanHazmatKeccak`) and secp256k1 key recovery (`LeanHazmatSecp256k1`), and signs through the backend's RFC 6979 digest signer (`secp256k1SignDigest`); the `enr:` text form |
+| W6.1 | `libp2p/identity` ENR | P1 | W5.1, W3.2 | the package's own RLP behind its `Codec` surface, the fallback the package docs record: the etheorem `LeanRlp` package has its item codec on `main` (etheorem/etheorem#123), and its vector runner and round-trip theorems have not landed; + ENR encode/decode + peer-id/multiaddr mapping (discv5 is W6.11); the `v4` identity scheme verifies the 64-byte `r ‖ s` signature of EIP-778 through the keccak-256 path of W3.2 (`LeanHazmatKeccak`) and secp256k1 key recovery (`LeanHazmatSecp256k1`), and signs through the backend's RFC 6979 digest signer (`secp256k1SignDigest`); the `enr:` text form |
 | W6.2 | `codec/snappy` | P0 | W1.2 | snappy FFI: the package binds upstream `google/snappy` (C++; the C++ runtime compiled out, the `LeanHazmatBn254` pattern) behind a Lean interface per the dependency strategy (FFI first; a native Lean replacement later, behind the same interface); block format only, raw `compress`/`decompress`, the length prefix stays in the req/resp framing (§8) |
 | W6.3 | req/resp framework | P0 | W5.6, W6.2 | `/eth2/beacon_chain/req/.../ssz_snappy` framing: a protobuf varint length of the raw bytes, then the snappy framing format over the W6.2 block binding, with the altair context bytes and the result codes of a response chunk; the `max_compressed_len` budget, deadlines, error/EOF distinction; SSZ payloads stay client-side |
 | W6.4 | gossipsub v1.1 | P0 | W5.6, W5.7, W1.1 (select/bounded queues) | RPC codec; mesh, scoring, and heartbeat as one pure `step` with time as an `Event` (ARCHITECTURE §3.3); signing policies; **gate**: gossipsub-interop against go and rust with no behavior difference |
+| W6.5 | gossipsub: held validation and the size caps | P0 | W6.4 | each message waits for the application's accept, ignore, or reject before it is forwarded, and a held message expires after `historyLength` heartbeats; the RPC cap and the payload cap are parameters, over the `ByteArray` payload path; **gate**: the held-message theorems, and a 10 MiB message through two nodes |
+| W6.6 | gossipsub: v1.0 and v1.1 completion | P0 | W6.5, W5.13 | the gaps of #95 items 3 and 4: fanout expiry, IWANT promises, score retention, the spam caps, adaptive gossip, the unsubscribe backoff, flood publishing, D_out, opportunistic grafting, P₅ to P₇, the parameter constraints, explicit peers, and floodsub peers; no peer exchange, sent or accepted (#95); **gate**: the go pubsub interop |
+| W6.7 | gossipsub v1.2 and v1.3 | P0 | W6.6 | IDONTWANT, the v1.3 Extensions message, and partial messages; **gate**: the partial-message checks against go and rust |
+| W6.8 | gossipsub at consensus scale | P0 | W6.7 | hash-indexed peer and IDONTWANT tables, a score table per heartbeat, and a protobuf length check on the field's bytes; **gate**: the load test of 200 peers and 205 topics |
+| W6.9 | req/resp: the streaming responder and the rate limit | P0 | W6.3, W5.12 | the responder writes chunk by chunk, the requester checks each chunk before the next, and GCRA buckets limit each peer and method by withholding chunks, as phase0 allows; **gate**: a withheld chunk and a refused third request over loopback |
+| W6.10 | `libp2p/identity`: consensus ENR addresses | P0 | W6.1 | the dial addresses of a consensus record and the reverse map from listeners, with no IPv6 fallback |
+| W6.11 | `libp2p/discv5` | P0 | W6.1, W3.2, W4.1, W4.4 | Node Discovery v5.1 over UDP: the packet codec with its proved message model, the handshake, the table and the lookup of the theory doc, the endpoint votes, and the eclipse limits; **gate**: the devp2p wire vectors, geth's `v5test`, and the sigp crate in both directions |
+| W6.12 | `libp2p/eth2` | P0 | W0.4, W4.4, W5.12, W5.13, W6.8, W6.9, W6.10, W6.11 | the consensus profile and the service, networking only: the topics and the message id over the fork schedule that the client hands in, the ENR fields, the req/resp methods with their bounds, the `Status` duty, the peer duties, Lighthouse's score profile, and discovery. The client owns every consensus type, and the service carries its bytes; **gate**: two services over loopback, the record of a Lighthouse node, the message id against the spec's formula, and the score profile against Lighthouse's formulas |
 
 ## Deferred (P2: seams only, no scheduled work)
 
-- QUIC and WebTransport transports (behind `Transport`)
+- WebTransport (over QUIC, behind `SecuredTransport`)
 - kad-dht, peer routing, rendezvous, fetch, mDNS
 - relay and circuit, DCUtR, AUTONAT
 - WebSockets, WebRTC, pnet, libp2p-HTTP
 - peer records and signed envelopes
+- gossipsub peer exchange: the spec makes it optional, and no
+  consensus client sends it (#95)
 
 Each item must keep compiling against its seam. None may block a P0 or
 P1 unit.
@@ -139,5 +168,9 @@ P1 unit.
   Identify and ping (W5.7), then `cli/` (W5.8), wait for the host only.
 - **W6**: W6.1 ∥ W6.2 as soon as their deps finish. W6.3, then W6.4,
   end the critical path.
+- **v2**: W0.4, W5.12, and W5.13 run in parallel. Three tracks follow:
+  gossipsub (W6.5 to W6.8, one after another, since all four change
+  `Gossipsub/Core.lean`), discovery (W6.10 and W6.11), and req/resp
+  (W6.9). W5.14 can land any time after W4.4. W6.12 comes last.
 - Watch the contention points. `W2.1`, `W4.1`, `W5.2`, and `W5.6` each
   have three or more consumers, so put them first inside their waves.

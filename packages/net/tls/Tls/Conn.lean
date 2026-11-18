@@ -97,12 +97,6 @@ namespace Tls
 
 open Conc Streams
 
-/-- The longest wait for the `close_notify` alert to reach the
-connection, 5 seconds, the bound Go's `crypto/tls` puts on the same
-write (`Conn.closeNotify`). A peer that stops reading cannot hold the
-close longer. -/
-def closeNotifyMs : Nat := 5000
-
 /-- A connection after the TLS handshake. -/
 structure Secured where
   /-- The secure connection: `read` answers plaintext, and `write`

@@ -10,7 +10,7 @@
  *
  * - Every exported symbol carries the `leanp2p_tls_` prefix. Exactly
  *   one `@[extern]` declaration in `TlsNative.lean` reaches it, apart
- *   from the two entries of `tls_shim.h`, which another shim calls.
+ *   from the five entries of `tls_shim.h`, which another shim calls.
  * - The shim borrows every argument (`b_lean_obj_arg`), the session
  *   and the context objects included.
  * - One mutex guards each session. libssl allows one thread on an
@@ -23,8 +23,11 @@
  * - The certificate check runs inside the handshake, in libssl's verify
  *   callback. The callback enforces the one rule the caller cannot see,
  *   that the peer sent exactly one certificate, and then hands that
- *   certificate to the caller's check, a Lean closure the session
- *   holds. A refusal of either kind fails the handshake with
+ *   certificate to the caller's check, a Lean closure that the `SSL`
+ *   holds in its ex_data. Every `SSL` of the context needs one: a
+ *   session attaches its own, and another shim attaches one to its own
+ *   `SSL` through `tls_shim.h`. A refusal of either kind fails the
+ *   handshake with
  *   `X509_V_ERR_CERT_REJECTED`, which libssl sends as the alert
  *   `bad_certificate` (`ssl_x509err2alert`), as Go's `crypto/tls`
  *   sends it when `VerifyPeerCertificate` fails.
@@ -86,14 +89,40 @@ static lean_external_class *context_class;
 static lean_external_class *session_class;
 static void session_finalize(void *p);
 
-/* The `SSL` ex_data slot that holds the session, so the verify callback
-   finds the caller's check from the store it gets. */
-static int session_index = -1;
+/* The caller's certificate check of one `SSL`, and the reason of its
+   last refusal. The `SSL` owns it through its ex_data slot. */
+typedef struct {
+    /* A pure `ByteArray → Option String`: one reference. */
+    lean_object *check;
+    /* The reason the check gave for its refusal; empty when it gave
+       none. */
+    char refusal[256];
+} peer_check;
+
+/* The free callback of the ex_data slot. libssl calls it from
+   `SSL_free` (`CRYPTO_free_ex_data`) with the slot's value, which is
+   NULL when no check was attached. */
+static void free_peer_check(void *parent, void *ptr, CRYPTO_EX_DATA *ad, int idx, long argl,
+                            void *argp) {
+    (void)parent;
+    (void)ad;
+    (void)idx;
+    (void)argl;
+    (void)argp;
+    peer_check *pc = ptr;
+    if (pc == NULL) return;
+    lean_dec(pc->check);
+    free(pc);
+}
+
+/* The `SSL` ex_data slot that holds the `peer_check`, so the verify
+   callback finds the check from the store it gets. */
+static int check_index = -1;
 
 static void register_classes(void) {
     context_class = lean_register_external_class(context_finalize, noop_foreach);
     session_class = lean_register_external_class(session_finalize, noop_foreach);
-    session_index = SSL_get_ex_new_index(0, NULL, NULL, NULL, NULL);
+    check_index = SSL_get_ex_new_index(0, NULL, NULL, NULL, free_peer_check);
 }
 
 static pthread_once_t classes_once = PTHREAD_ONCE_INIT;
@@ -199,21 +228,14 @@ typedef struct {
     BIO *wbio; /* the bytes for the peer, drained by the Lean side */
     pthread_mutex_t mu;
     lean_object *context; /* one reference, so the SSL_CTX outlives us */
-    /* The caller's certificate check, a pure `ByteArray → Option String`:
-       one reference, held for the session's life. */
-    lean_object *check;
-    /* The reason the check gave for its refusal; empty when it gave
-       none. */
-    char refusal[256];
     char error[256];
 } tls_session;
 
 static void session_finalize(void *p) {
     tls_session *s = p;
-    SSL_free(s->ssl); /* frees both BIOs */
+    SSL_free(s->ssl); /* frees both BIOs and the check (`free_peer_check`) */
     pthread_mutex_destroy(&s->mu);
     lean_dec(s->context);
-    lean_dec(s->check);
     free(s);
 }
 
@@ -226,40 +248,70 @@ static tls_session *session_of(b_lean_obj_arg o) { return lean_get_external_data
    certificate's DER. The check is a pure Lean function, so the call
    is `lean_apply_1` and its answer is an `Option String` object:
    `none` is `lean_box(0)`, and `some` is constructor 1 with the reason
-   in field 0. The callback keeps the reason for `lastError`. libssl
-   sets `verify_result` from the store's error, so a refusal is
-   `X509_V_ERR_CERT_REJECTED` there, and the alert is
-   `bad_certificate`. */
+   in field 0. The callback keeps the reason in the `peer_check`, for
+   `leanp2p_tls_refusal`. An `SSL` with no check attached refuses every
+   certificate, fail-closed. libssl sets `verify_result` from the
+   store's error, so a refusal is `X509_V_ERR_CERT_REJECTED` there, and
+   the alert is `bad_certificate`. */
 static int verify_peer(X509_STORE_CTX *store, void *arg) {
     (void)arg;
     X509 *leaf = X509_STORE_CTX_get0_cert(store);
     STACK_OF(X509) *chain = X509_STORE_CTX_get0_untrusted(store);
     SSL *ssl = X509_STORE_CTX_get_ex_data(store, SSL_get_ex_data_X509_STORE_CTX_idx());
-    tls_session *s = ssl != NULL ? SSL_get_ex_data(ssl, session_index) : NULL;
+    peer_check *pc = ssl != NULL ? SSL_get_ex_data(ssl, check_index) : NULL;
     unsigned char *der = NULL;
     int n = -1;
-    if (leaf != NULL && chain != NULL && sk_X509_num(chain) == 1 && s != NULL)
+    if (leaf != NULL && chain != NULL && sk_X509_num(chain) == 1 && pc != NULL)
         n = i2d_X509(leaf, &der);
     int ok = 0;
     if (n > 0) {
         lean_object *bytes = mk_bytes(der, (size_t)n);
         /* `lean_apply_1` consumes the closure and its argument. */
-        lean_inc(s->check);
-        lean_object *r = lean_apply_1(s->check, bytes);
+        lean_inc(pc->check);
+        lean_object *r = lean_apply_1(pc->check, bytes);
         if (lean_is_scalar(r)) {
             ok = 1;
         } else {
-            snprintf(s->refusal, sizeof s->refusal, "%s", lean_string_cstr(lean_ctor_get(r, 0)));
+            snprintf(pc->refusal, sizeof pc->refusal, "%s", lean_string_cstr(lean_ctor_get(r, 0)));
         }
         lean_dec(r);
     }
-    else if (s != NULL && chain != NULL && sk_X509_num(chain) != 1)
-        snprintf(s->refusal, sizeof s->refusal,
+    else if (pc != NULL && chain != NULL && sk_X509_num(chain) != 1)
+        snprintf(pc->refusal, sizeof pc->refusal,
                  "the peer sent %d certificates, and the TLS spec allows one",
                  sk_X509_num(chain));
     OPENSSL_free(der);
     if (!ok) X509_STORE_CTX_set_error(store, X509_V_ERR_CERT_REJECTED);
     return ok;
+}
+
+/* Attach the caller's check to an `SSL` made from a `Tls.Context`, so the
+   verify callback runs it on the peer's certificate. The `SSL` takes one
+   reference to `check` and drops it in `SSL_free`. The caller attaches
+   once per `SSL`: `SSL_set_ex_data` replaces a value without freeing
+   it. 1 on success, 0 when an allocation or the slot failed; the `SSL`
+   then holds no check and refuses every certificate. */
+int leanp2p_tls_attach_check(SSL *ssl, b_lean_obj_arg check) {
+    pthread_once(&classes_once, register_classes);
+    peer_check *pc = calloc(1, sizeof *pc);
+    if (pc == NULL) return 0;
+    lean_inc(check);
+    pc->check = check;
+    if (SSL_set_ex_data(ssl, check_index, pc) != 1) {
+        lean_dec(check);
+        free(pc);
+        ERR_clear_error();
+        return 0;
+    }
+    return 1;
+}
+
+/* The reason of the last refusal by the `SSL`'s check; empty when it
+   gave none, or when no check is attached. Valid until the next
+   handshake step or `SSL_free`. */
+const char *leanp2p_tls_refusal(const SSL *ssl) {
+    const peer_check *pc = SSL_get_ex_data(ssl, check_index);
+    return pc != NULL ? pc->refusal : "";
 }
 
 /* Keep the first error of the thread's queue as the session's error
@@ -287,7 +339,7 @@ LEAN_EXPORT lean_obj_res leanp2p_tls_session_new(b_lean_obj_arg context, uint8_t
     BIO *rbio = BIO_new(BIO_s_mem());
     BIO *wbio = BIO_new(BIO_s_mem());
     int ok = s != NULL && ssl != NULL && rbio != NULL && wbio != NULL
-        && SSL_set_ex_data(ssl, session_index, s) == 1;
+        && leanp2p_tls_attach_check(ssl, check) == 1;
     if (ok && !server) ok = SSL_set_alpn_protos(ssl, c->alpn, c->alpn_len) == 0;
     if (!ok) {
         SSL_free(ssl);
@@ -310,8 +362,6 @@ LEAN_EXPORT lean_obj_res leanp2p_tls_session_new(b_lean_obj_arg context, uint8_t
     pthread_mutex_init(&s->mu, NULL);
     lean_inc(context);
     s->context = context;
-    lean_inc(check);
-    s->check = check;
     return lean_io_result_mk_ok(some(lean_alloc_external(session_class, s)));
 }
 
@@ -333,13 +383,13 @@ LEAN_EXPORT lean_obj_res leanp2p_tls_session_feed(b_lean_obj_arg session, b_lean
 
 /* True when a failed handshake step refused the peer's certificate: the
    verify callback failed it (a chain of more than one, or the caller's
-   check), or a client sent none to a server that requires one
-   (`tls_process_client_certificate` raises
-   `SSL_R_PEER_DID_NOT_RETURN_A_CERTIFICATE`). Read before `keep_error`
-   clears the queue. */
-static int peer_certificate_refused(tls_session *s) {
+   check), or a client sent none to a server that requires one (libssl
+   raises `SSL_R_PEER_DID_NOT_RETURN_A_CERTIFICATE`). It reads the
+   thread's error queue, so the caller asks before it clears the
+   queue. */
+int leanp2p_tls_refused(const SSL *ssl) {
     unsigned long e = ERR_peek_error();
-    return SSL_get_verify_result(s->ssl) != X509_V_OK
+    return SSL_get_verify_result(ssl) != X509_V_OK
         || (ERR_GET_LIB(e) == ERR_LIB_SSL
             && ERR_GET_REASON(e) == SSL_R_PEER_DID_NOT_RETURN_A_CERTIFICATE);
 }
@@ -356,12 +406,13 @@ LEAN_EXPORT lean_obj_res leanp2p_tls_session_handshake(b_lean_obj_arg session) {
     if (r == 1) code = 0;
     else if (SSL_get_error(s->ssl, r) == SSL_ERROR_WANT_READ) code = 1;
     else {
-        code = peer_certificate_refused(s) ? 3 : 2;
+        code = leanp2p_tls_refused(s->ssl) ? 3 : 2;
         keep_error(s, "the handshake failed");
         /* A refusal of the verify callback names its own reason, which
            says more than libssl's "certificate verify failed". */
-        if (code == 3 && s->refusal[0] != '\0')
-            snprintf(s->error, sizeof s->error, "%s", s->refusal);
+        const char *refusal = leanp2p_tls_refusal(s->ssl);
+        if (code == 3 && refusal[0] != '\0')
+            snprintf(s->error, sizeof s->error, "%s", refusal);
     }
     pthread_mutex_unlock(&s->mu);
     return lean_io_result_mk_ok(lean_box(code));
