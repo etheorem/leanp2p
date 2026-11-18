@@ -217,16 +217,16 @@ dir = "vendor/lighthouse"
 repo = "https://github.com/sigp/lighthouse"
 commit = "bee5677194e3cc528fd22a49415330dc7adbe723"
 branch = "unstable"
-paths = ["/beacon_node/lighthouse_network/src/rpc/codec.rs", "/beacon_node/lighthouse_network/src/rpc/methods.rs", "/LICENSE"]
-used-for = "the req/resp decisions: the frame decoder, the length handling, and the error payload of every non-zero result (W6.3)"
+paths = ["/beacon_node/lighthouse_network/src/rpc/codec.rs", "/beacon_node/lighthouse_network/src/rpc/methods.rs", "/beacon_node/lighthouse_network/src/rpc/handler.rs", "/beacon_node/lighthouse_network/src/rpc/protocol.rs", "/beacon_node/lighthouse_network/src/peer_manager/mod.rs", "/LICENSE"]
+used-for = "the req/resp decisions: the frame decoder, the length handling, and the error payload of every non-zero result (W6.3); handler.rs, protocol.rs, peer_manager/mod.rs: the close at the end of a response and the score of a failed close"
 
 [[vendor]]
 dir = "vendor/prysm"
 repo = "https://github.com/OffchainLabs/prysm"
 commit = "4ccffee97f3c5938c70b2cba64629484d09fc094"
 branch = "develop"
-paths = ["/beacon-chain/p2p/encoder/ssz.go", "/beacon-chain/p2p/encoder/varint.go", "/go.mod", "/LICENSE.md"]
-used-for = "the req/resp decisions: the writer shape of the go fixtures, the varint reader, and the snappy version pin (W6.3)"
+paths = ["/beacon-chain/p2p/encoder/ssz.go", "/beacon-chain/p2p/encoder/varint.go", "/beacon-chain/sync/rpc_chunked_response.go", "/beacon-chain/sync/error.go", "/go.mod", "/LICENSE.md"]
+used-for = "the req/resp decisions: the writer shape of the go fixtures, the varint reader, and the snappy version pin (W6.3); rpc_chunked_response.go and error.go: the chunk layout the req/resp interop peer writes (scripts/reqresp-interop)"
 
 [[vendor]]
 dir = "vendor/lodestar"

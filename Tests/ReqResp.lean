@@ -510,23 +510,70 @@ def exchangeChecks (r : Runner) : Async Unit := do
     r.check "a silent requester: the responder fails at its deadline"
       ((← res.get).any (failsWith .timeout))
     tc.close
-  -- A requester that stops at its last chunk resets a stream the peer
-  -- left open, since the rest is no longer relevant.
+  -- After its last expected chunk, the requester waits for the
+  -- responder's close (`closedClean`). The close ends the exchange with
+  -- no reset.
   do
     let tc ← TestClock.new
     let one := method (maxChunks := 1)
     let (a, b) ← pair
     let owner ← TaskSet.new
     owner.spawn do
+      -- Read the request to its end, answer one chunk, and close.
+      discard <| pump b (requestReader one) fun _ => pure ()
+      discard <| b.write (chunkWire one ⟨.success, ByteArray.empty, noise 2 8⟩)
+      b.close
+    let got ← requestAll a one tc.clock 1000 (some (noise 1 4))
+    owner.joinAll
+    r.check "the responder's close after the last chunk: the chunk arrives"
+      (match got with | .ok [c] => c.payload == noise 2 8 | _ => false)
+    -- The requester has returned, so a reset of its own came before this
+    -- read. Its half-close is all the responder sees.
+    r.check "the responder's close after the last chunk: no reset"
+      (match ← b.read with | .ok none => true | _ => false)
+    tc.close
+  -- A byte after the last expected chunk resets the stream at once, with
+  -- no wait for the deadline. Unsplit, the byte comes in the same read as
+  -- the chunk and stays in the core's buffer; split, it comes in a read
+  -- of its own.
+  for split in [false, true] do
+    let tc ← TestClock.new
+    let one := method (maxChunks := 1)
+    let (a, b) ← pair split
+    let owner ← TaskSet.new
+    owner.spawn do
+      discard <| pump b (requestReader one) fun _ => pure ()
+      discard <| b.write (chunkWire one ⟨.success, ByteArray.empty, noise 2 8⟩ ++ bs [0])
+    let got ← requestAll a one tc.clock 1000 (some (noise 1 4))
+    owner.joinAll
+    r.check s!"a byte after the last chunk (split {split}): the chunk arrives"
+      (match got with | .ok [c] => c.payload == noise 2 8 | _ => false)
+    r.check s!"a byte after the last chunk (split {split}): the reset"
+      (match ← b.read with | .error .reset => true | _ => false)
+    tc.close
+  -- A responder that stays open after the last chunk: the requester
+  -- resets the stream at the second deadline.
+  do
+    let tc ← TestClock.new
+    let one := method (maxChunks := 1)
+    let (a, b) ← pair
+    let owner ← TaskSet.new
+    let res : OnceRef (Option (Except Error (List Chunk))) ← OnceRef.new none
+    owner.spawn do
       -- Read the request to its end, answer one chunk, and stay open.
       discard <| pump b (requestReader one) fun _ => pure ()
       discard <| b.write (chunkWire one ⟨.success, ByteArray.empty, noise 2 8⟩)
-    let got ← requestAll a one tc.clock 1000 (some (noise 1 4))
+    owner.spawn do res.set (some (← requestAll a one tc.clock 1000 (some (noise 1 4))))
+    -- The first timer is the request's deadline. The second timer is the
+    -- wait for the close, and it arms after the chunk.
+    let first ← tc.nextTimer
+    let second ← tc.nextTimer
+    r.check "a responder that stays open: the second deadline arms" (first && second)
+    tc.advance 1000
     owner.joinAll
-    r.check "a stop before the peer's close: the chunk arrives"
-      (match got with | .ok [c] => c.payload == noise 2 8 | _ => false)
-    -- The requester has returned, so its reset came before this read.
-    r.check "a stop before the peer's close: the peer sees the reset"
+    r.check "a responder that stays open: the chunk arrives"
+      ((← res.get).any fun got => match got with | .ok [c] => c.payload == noise 2 8 | _ => false)
+    r.check "a responder that stays open: the reset at the second deadline"
       (match ← b.read with | .error .reset => true | _ => false)
     tc.close
   -- The handler value maps the error once, at the seam.
@@ -619,6 +666,18 @@ def openStreamOf (p : Pair) : OpenStream := fun ids => do
   | .error (.stream e) | .error (.upgrade e) | .error (.session e) => return .error e
   | .error e => return .error (.protocol (toString e))
 
+/-- `openStreamOf`, with each `reset` of the opened stream counted in
+`resets`. A `Streams.Stream` is a structure of four functions, so the
+count wraps the one field and leaves the other three alone. -/
+def countingOpen (p : Pair) (resets : OnceRef Nat) : OpenStream := fun ids => do
+  match ← openStreamOf p ids with
+  | .ok (id, s) =>
+    return .ok (id, { s with
+      reset := do
+        resets.update (· + 1)
+        s.reset })
+  | .error e => return .error e
+
 def simChecks (r : Runner) : Async Unit := do
   r.section "over the sim" "phase0 Req/Resp interaction; ARCHITECTURE §5.4; PRINCIPLES 1.4"
   let m := method (ctx := true)
@@ -691,6 +750,91 @@ def simChecks (r : Runner) : Async Unit := do
     -- The second close of the client does nothing, and the pair closes
     -- the server and the clock.
     r.check "sim: a closed connection, the hosts close with no fault" (← p.close).isNone
+    tc.close
+  -- After its last expected chunk, the requester waits for the
+  -- responder's close (`closedClean`). The responder here is `serve`,
+  -- which closes right after its last chunk. Over yamux, a reset after
+  -- the requester's FIN ends only the responder's write direction
+  -- (`Yamux/Loop.lean`, "The reset"). So the responder's reads cannot
+  -- show the reset, and the check counts the requester's resets.
+  let one := method (maxChunks := 1)
+  let chunk : Chunk := ⟨.success, ByteArray.empty, noise 2 8⟩
+  for split in [false, true] do
+    let tc ← TestClock.new
+    let p ← hostPair split
+    p.server.setHandler (handler one tc.clock 1000 fun _ => return [chunk])
+    let resets ← OnceRef.new 0
+    let got : OnceRef (List Chunk) ← OnceRef.new []
+    let res ← requestPeer (countingOpen p resets) (← Limiter.new) one tc.clock 1000 (some (noise 3 4))
+      fun c => got.update (· ++ [c])
+    r.check s!"sim (split {split}): the responder's close after the last chunk: the chunk arrives"
+      (succeedsWith () res && (← got.get).map (·.payload) == [noise 2 8])
+    r.check s!"sim (split {split}): the responder's close after the last chunk: no reset"
+      ((← resets.get) == 0)
+    r.check s!"sim (split {split}): the responder's close, the handler saw no failure"
+      ((← p.failures.get).isEmpty)
+    r.check s!"sim (split {split}): the responder's close, the hosts close with no fault"
+      (← p.close).isNone
+    tc.close
+  -- A byte after the last expected chunk resets the stream at once. With
+  -- `apart` false, the byte goes out in the same write as the chunk.
+  -- With `apart` true, it goes out in a write of its own. The handler
+  -- parks until the requester returns, so the stream stays open while
+  -- the requester reads.
+  for apart in [false, true] do
+    let tc ← TestClock.new
+    let p ← hostPair
+    let release : Chan Unit ← Chan.new 1
+    let wire := chunkWire one chunk
+    p.server.setHandler ⟨one.id, fun _ s => ExceptT.mk do
+      discard <| pump s (requestReader one) fun _ => pure ()
+      for w in (if apart then [wire, bs [0]] else [wire ++ bs [0]]) do
+        discard <| s.write w
+      discard <| release.recv
+      return .ok ()⟩
+    let resets ← OnceRef.new 0
+    let got : OnceRef (List Chunk) ← OnceRef.new []
+    let res ← requestPeer (countingOpen p resets) (← Limiter.new) one tc.clock 1000 (some (noise 3 4))
+      fun c => got.update (· ++ [c])
+    discard <| release.send ()
+    r.check s!"sim (apart {apart}): a byte after the last chunk: the chunk arrives"
+      (succeedsWith () res && (← got.get).map (·.payload) == [noise 2 8])
+    r.check s!"sim (apart {apart}): a byte after the last chunk: one reset"
+      ((← resets.get) == 1)
+    r.check s!"sim (apart {apart}): a byte after the last chunk, the hosts close with no fault"
+      (← p.close).isNone
+    tc.close
+  -- A responder that stays open after the last chunk: the requester
+  -- resets the stream at the second deadline, and only once.
+  do
+    let tc ← TestClock.new
+    let p ← hostPair
+    let release : Chan Unit ← Chan.new 1
+    p.server.setHandler ⟨one.id, fun _ s => ExceptT.mk do
+      discard <| pump s (requestReader one) fun _ => pure ()
+      discard <| s.write (chunkWire one chunk)
+      discard <| release.recv
+      return .ok ()⟩
+    let resets ← OnceRef.new 0
+    let got : OnceRef (List Chunk) ← OnceRef.new []
+    let owner ← TaskSet.new
+    let res : OnceRef (Option (Except Error Unit)) ← OnceRef.new none
+    owner.spawn do
+      res.set (some (← requestPeer (countingOpen p resets) (← Limiter.new) one tc.clock 1000
+        (some (noise 3 4)) fun c => got.update (· ++ [c])))
+    -- The first timer is the request's deadline. The second timer is the
+    -- wait for the close, and it arms after the chunk.
+    let first ← tc.nextTimer
+    let second ← tc.nextTimer
+    r.check "sim: a responder that stays open, the second deadline arms" (first && second)
+    tc.advance 1000
+    owner.joinAll
+    discard <| release.send ()
+    r.check "sim: a responder that stays open, the chunk arrives"
+      ((← res.get).any (succeedsWith ()) && (← got.get).map (·.payload) == [noise 2 8])
+    r.check "sim: a responder that stays open, one reset at the second deadline"
+      ((← resets.get) == 1)
+    r.check "sim: a responder that stays open, the hosts close with no fault" (← p.close).isNone
     tc.close
 
 def run (r : Runner) : IO Unit := do

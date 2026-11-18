@@ -278,3 +278,11 @@ root = "Demo"
 name = "pingnode"
 srcDir = "packages/cli"
 root = "PingNode"
+
+# The Lean side of the req/resp interop check against a go-libp2p host
+# with prysm's ssz_snappy encoder; run it through
+# `scripts/reqresp-interop.sh`. Like `noise-interop`, it is not part of
+# `lake test`.
+[[lean_exe]]
+name = "reqresp-interop"
+root = "Tests.Interop.ReqResp"

@@ -263,11 +263,35 @@ Both spike programs call `Ping.ping`.
   with `ErrorMessage` payload, the `<context-bytes>` is also empty").
 - **The requester stops at its last chunk.** It reads until the peer
   closes, an error chunk arrives, or `maxChunks` chunks arrived
-  ("Requesting side", rules 1, 2, and 4). It reads no byte after that,
-  and it resets the stream when the peer has not closed. So the answer
-  does not depend on how the transport split the reads. The responder
-  reads the request to the end of the stream and refuses a byte after
-  it ("at which point an EOF should arise").
+  ("Requesting side", rules 1, 2, and 4). It decodes no byte after
+  that, so the answer does not depend on how the transport split the
+  reads. The responder reads the request to the end of the stream and
+  refuses a byte after it ("at which point an EOF should arise").
+- **The requester waits for the responder's close.** The responder
+  closes its write side after its last chunk ("Responding side",
+  step 5). A reset from the requester that lands first fails that
+  close. Lighthouse reports a failed close of an inbound stream as an
+  error (`send_message_to_inbound_substream`, `rpc/handler.rs`,
+  lines 1165 to 1173 of `vendor/lighthouse`; an I/O failure becomes
+  `RPCError::IoError`, `rpc/protocol.rs`, lines 1086 to 1089). Its peer
+  manager scores an `IoError` as a `HighToleranceError`
+  (`peer_manager/mod.rs`, lines 566 to 569). Lighthouse's own requester
+  closes the stream after its last expected chunk, with no reset
+  (`rpc/handler.rs`, lines 689 to 703). So after its last expected
+  chunk, `request` reads on under a second deadline of `timeoutMs`.
+  The responder's close ends the exchange with no reset. A byte after
+  the last chunk resets the stream, and so does the expiry: the spec
+  asks for a reset on a timeout ("Requesting side"). The checks over
+  the stream pair: "the responder's close after the last chunk: no
+  reset", "a byte after the last chunk (split false): the reset", the
+  same with the byte in a read of its own (split true), and "a
+  responder that stays open: the reset at the second deadline". The
+  checks between two hosts count the requester's resets. Over yamux, a
+  reset after the requester's FIN ends only the responder's write
+  direction, so the responder's reads cannot show it. These checks:
+  "the responder's close after the last chunk: no reset", "a byte
+  after the last chunk: one reset" (apart false and true), and "a
+  responder that stays open, one reset at the second deadline".
 - **The size bounds come from the client.** The spec bounds each
   payload by its SSZ type ("within the expected size bounds derived
   from the payload SSZ type or `MAX_PAYLOAD_SIZE`, whichever is

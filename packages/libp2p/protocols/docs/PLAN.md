@@ -59,6 +59,13 @@ in the codec group wrapping upstream `google/snappy`.
   hosts over loopback TCP, `scripts/ping-interop.sh` pings a go node both ways
   on loopback, and identify against go closes through the captured
   vector.
+- `scripts/reqresp-interop.sh` runs req/resp against a go-libp2p host
+  that frames every payload with prysm's `SszNetworkEncoder`, both ways
+  over loopback TCP with Noise and yamux. Each run asks for Status v1
+  and BeaconBlocksByRange v2. One block chunk spans two snappy frames.
+  A count of 0 draws an `InvalidRequest` chunk. The go responder fails
+  the run when its close after the last chunk fails. A requester that
+  resets the stream at its last Status chunk fails that close.
 
 ## Test milestones (unit 1)
 
