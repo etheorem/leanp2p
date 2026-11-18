@@ -901,6 +901,138 @@ private def subscribeWaitChecks (r : Tests.Runner) : Async Unit := do
   sw.close
   (tc.close : BaseIO Unit)
 
+/-- A short real-time wait, so the node's tasks run. -/
+private def nap : Async Unit := do
+  let t ← (Park.sleep 20 () : BaseIO (Park Unit))
+  select #[t]
+
+/-- A host whose outbound streams hold every write until the test closes
+`gate`. It records the bytes it lets through, and it keeps the node's
+handler, so the test can feed inbound RPCs. With the gate shut, the writer
+holds one frame and the peer queue fills, so every later frame drops. -/
+private structure GatedHost where
+  seam : HostSeam
+  handler : OnceRef (Option Libp2p.Core.StreamHandler)
+  gate : Chan Unit
+  written : OnceRef (List Nat)
+
+private def gatedHost : BaseIO GatedHost := do
+  let handler ← OnceRef.new (none : Option Libp2p.Core.StreamHandler)
+  let gate : Chan Unit ← Chan.new 1
+  let written ← OnceRef.new ([] : List Nat)
+  let seam : HostSeam := {
+    setHandler := fun h => handler.set (some h)
+    newStream := fun _ _ => return .ok (Constants.meshsubId, {
+      read := pure (.ok none)
+      write := fun bytes => do
+        -- Park: the test closes the gate.
+        discard <| gate.recv
+        (written.update (· ++ Bytes.toNatList bytes) : BaseIO Unit)
+        return .ok ()
+      close := pure ()
+      reset := pure () }) }
+  return { seam, handler, gate, written }
+
+/-- The RPCs of the written bytes, in order. Each frame is at least one
+byte, so `fuel` of the byte count is enough. -/
+private def writtenRpcs : Nat → List Nat → List Rpc.RPC
+  | 0, _ => []
+  | fuel + 1, buf =>
+    match Rpc.decodeFrame? buf with
+    | .ok (some (body, rest)) =>
+      match Core.decodeRpc body with
+      | .ok rpc => rpc :: writtenRpcs fuel rest
+      | .error _ => writtenRpcs fuel rest
+    | _ => []
+
+/-- The RPCs that the gated host let through. -/
+private def gatedRpcs (h : GatedHost) : Async (List Rpc.RPC) := do
+  let buf ← (h.written.get : BaseIO (List Nat))
+  return writtenRpcs buf.length buf
+
+/-- The records of our own state come back after a drop, as go sends them
+again. With the peer's queue full, 200 subscription records mostly drop.
+Once the queue drains, the retries reach the peer, so it hears every topic.
+A GRAFT that drops reaches the peer in a later frame. -/
+private def stateRetryChecks (r : Tests.Runner) : Async Unit := do
+  -- The subscription records.
+  do
+    let h ← (gatedHost : BaseIO GatedHost)
+    let tc ← (TestClock.new : BaseIO TestClock)
+    let n ← (start h.seam { clock := tc.clock } : BaseIO Node)
+    r.check "node.retry.peer-joined" (← (n.peerJoined pb .meshsub : BaseIO Bool))
+    for i in [0:200] do
+      discard <| n.subscribeWait ⟨s!"topic-{i}"⟩ (fun _ => pure ())
+    -- The writer holds one frame and the queue 32, so at least 167 drop.
+    let mut dropped := 0
+    for _ in [0:250] do
+      dropped ← (n.dropped : BaseIO Nat)
+      if 167 ≤ dropped then break
+      nap
+    r.check "node.retry.subscription-records-drop" (167 ≤ dropped)
+    (h.gate.close : BaseIO Unit)
+    -- Each retry waits up to one second of the test clock, and a retry
+    -- that finds the queue full drops and waits again.
+    let mut heard : List String := []
+    for _ in [0:60] do
+      tc.advance 1000
+      nap
+      heard := ((← gatedRpcs h).flatMap (·.subscriptions)).filterMap fun o =>
+        if o.subscribe then some o.topicid else none
+      heard := heard.eraseDups
+      if heard.length == 200 then break
+    r.check "node.retry.peer-hears-every-topic" (heard.length == 200)
+    n.stop
+    (tc.close : BaseIO Unit)
+  -- A GRAFT record.
+  do
+    let h ← (gatedHost : BaseIO GatedHost)
+    let tc ← (TestClock.new : BaseIO TestClock)
+    let receipts ← (Chan.new 8 : BaseIO (Chan Peer))
+    let n ← (start h.seam { clock := tc.clock, onRpc := fun p _ => discard (receipts.trySend p) } :
+      BaseIO Node)
+    let some handler ← (h.handler.get : BaseIO (Option Libp2p.Core.StreamHandler))
+      | throw <| IO.userError "missing node handler"
+    -- The peer announces the topic on an inbound stream.
+    let wanted : TopicId := ⟨"graft-me"⟩
+    let inbound ← (Pipe.new 4 : BaseIO Pipe)
+    let owner ← (TaskSet.new : BaseIO TaskSet)
+    owner.spawn do
+      discard <| (handler.handle { remotePeer := pb, remoteAddr := Multiformats.Multiaddr.empty } {
+        read := return .ok (← inbound.read)
+        write := fun _ => pure (.ok ())
+        close := pure ()
+        reset := (inbound.close : BaseIO Unit) }).run
+    discard <| inbound.write (frame (subOptRpc wanted true))
+    -- The loop runs `onRpc` as it takes the RPC, so the posts below come
+    -- after the core learns the peer's topic.
+    r.check "node.retry.peer-announces" ((← receive receipts) == some pb)
+    -- Fill the peer's queue: 40 subscription records, past 33.
+    for i in [0:40] do
+      discard <| n.subscribeWait ⟨s!"filler-{i}"⟩ (fun _ => pure ())
+    -- The subscribe fills the mesh with the peer, and its GRAFT drops.
+    discard <| n.subscribeWait wanted (fun _ => pure ())
+    let mut graftDrops := 0
+    for _ in [0:250] do
+      graftDrops ← (n.dropped : BaseIO Nat)
+      if 8 ≤ graftDrops then break
+      nap
+    r.check "node.retry.graft-queue-full" (8 ≤ graftDrops)
+    (h.gate.close : BaseIO Unit)
+    -- The GRAFT rides on a later frame, or the heartbeat sends it.
+    let mut grafted := false
+    for _ in [0:30] do
+      tc.advance 1000
+      nap
+      grafted := (← gatedRpcs h).any fun rpc =>
+        rpc.control.any fun c => c.graft.any (·.topicId == wanted.name)
+      if grafted then break
+    r.check "node.retry.dropped-graft-reaches-the-peer" grafted
+    (inbound.close : BaseIO Unit)
+    owner.joinAll
+    n.stop
+    (tc.close : BaseIO Unit)
+
 /-- Run the node regressions and print the measured queue and ordering counts. -/
 def run (r : Tests.Runner) : IO Unit := do
   r.section "gossipsub Node" "packages/libp2p/protocols/docs/PLAN.md, unit 3"
@@ -926,5 +1058,6 @@ def run (r : Tests.Runner) : IO Unit := do
     stalledAndDrops r
     publisherOrder r
     subscribeWaitChecks r
+    stateRetryChecks r
 
 end Tests.Gossipsub.Node
