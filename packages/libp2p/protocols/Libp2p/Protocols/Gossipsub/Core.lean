@@ -737,13 +737,23 @@ skips its IHAVE and its IWANT the same way (go-libp2p-pubsub v0.19.0,
 def gossipIgnored (p : Params) (s : State) (sender : Peer) : Bool :=
   decide (scoreOf p s sender < p.thresholds.gossipThreshold)
 
+/-- The control envelope with the sender's IHAVE and IWANT dropped when
+its score is below the gossip threshold (`gossipIgnored`). go reads the
+score once per RPC for them (`handleIHave` and `handleIWant`,
+`gossipsub.go`, lines 938 to 944 and 1012 to 1018), and so does this
+gate: the handlers below do not read it again for each entry. With a
+read per entry, one RPC of many IHAVE entries would cost a score each. -/
+def gossipOf (p : Params) (s : State) (sender : Peer) (c : Rpc.ControlMessage) :
+    Rpc.ControlMessage :=
+  if gossipIgnored p s sender then { c with ihave := [], iwant := [] } else c
+
 /-- Handle one IHAVE: request the ids that are unseen, uncached, and not
-promised, and record the promise. An IHAVE from a peer below the gossip
-threshold, or for a topic we do not hold, asks for nothing, as in go
-(`gossipsub.go`, lines 958 to 962). -/
+promised, and record the promise. An IHAVE for a topic we do not hold
+asks for nothing, as in go (`gossipsub.go`, lines 958 to 962). The gossip
+threshold applies before, to the whole RPC (`gossipOf`). -/
 def handleIhave (p : Params) (s : State) (sender : Peer) (i : Rpc.ControlIHave) :
     State × List Action :=
-  if gossipIgnored p s sender || !memB (⟨i.topicId⟩ : TopicId) s.topics then (s, [])
+  if !memB (⟨i.topicId⟩ : TopicId) s.topics then (s, [])
   else
     let wanted := i.messageIds.filter (fun id =>
       !(s.seen.contains id s.now) && (Cache.MessageIndex.get s.mcache id).isNone &&
@@ -755,16 +765,15 @@ def handleIhave (p : Params) (s : State) (sender : Peer) (i : Rpc.ControlIHave) 
     (s1, if wanted = [] then [] else [Action.sendRpc sender (iwantRpc wanted)])
 
 /-- Handle one IWANT: answer each id that the message cache holds under
-the same id. A peer below the gossip threshold gets no answer. -/
+the same id. The gossip threshold applies before, to the whole RPC
+(`gossipOf`). -/
 def handleIwant (p : Params) (s : State) (sender : Peer) (w : Rpc.ControlIWant) :
     State × List Action :=
-  if gossipIgnored p s sender then (s, [])
-  else
-    let answers := w.messageIds.filterMap (fun id =>
-      match Cache.MessageIndex.get s.mcache id with
-      | some m => if p.msgId m = id then some m else none
-      | none => none)
-    (s, answers.map (fun m => Action.sendRpc sender (publishRpc m)))
+  let answers := w.messageIds.filterMap (fun id =>
+    match Cache.MessageIndex.get s.mcache id with
+    | some m => if p.msgId m = id then some m else none
+    | none => none)
+  (s, answers.map (fun m => Action.sendRpc sender (publishRpc m)))
 
 /-- Handle one GRAFT. An unknown topic is ignored. A member is a no-op.
 A peer in backoff, or a mesh at `dHigh`, gets a prune. Otherwise the
@@ -854,11 +863,14 @@ def controlActions (p : Params) (s : State) (sender : Peer) (c : Rpc.ControlMess
     (mapHandlers (fun st b => handlePrune p st sender b) c.prune
       (controlGrafts p s sender c)).2
 
-/-- Handle the control envelope: ihave, iwant, graft, then prune. -/
+/-- Handle the control envelope: the gossip gate (`gossipOf`), then ihave,
+iwant, graft, and prune. -/
 def handleControl (p : Params) (s : State) (sender : Peer) :
     Option Rpc.ControlMessage → State × List Action
   | none => (s, [])
-  | some c => (controlPrunes p s sender c, controlActions p s sender c)
+  | some c0 =>
+      let c := gossipOf p s sender c0
+      (controlPrunes p s sender c, controlActions p s sender c)
 
 /-- `handleControl` with each stage run once. Each stage above starts from
 the state of the stage before, so it runs every stage before it again,
@@ -869,7 +881,8 @@ this definition, and the theorems keep reasoning about the stages. -/
 def runControl (p : Params) (s : State) (sender : Peer) :
     Option Rpc.ControlMessage → State × List Action
   | none => (s, [])
-  | some c =>
+  | some c0 =>
+      let c := gossipOf p s sender c0
       let r1 := mapHandlers (fun st b => handleIhave p st sender b) c.ihave s
       let r2 := mapHandlers (fun st b => handleIwant p st sender b) c.iwant r1.1
       let r3 := mapHandlers (fun st b => handleGraft p st sender b) c.graft r2.1
@@ -1427,8 +1440,7 @@ private theorem handleIhave_mesh (p : Params) (s : State) (sender : Peer)
 private theorem handleIwant_mesh (p : Params) (s : State) (sender : Peer)
     (w : Rpc.ControlIWant) (topic : TopicId) :
     meshOf (handleIwant p s sender w).1 topic = meshOf s topic := by
-  unfold handleIwant
-  split <;> simp
+  simp [handleIwant]
 
 private theorem handleIhaves_mesh (p : Params) (s : State) (sender : Peer)
     (is : List Rpc.ControlIHave) (topic : TopicId) :
@@ -1465,8 +1477,7 @@ private theorem handleIhave_topics (p : Params) (s : State) (sender : Peer)
 
 private theorem handleIwant_topics (p : Params) (s : State) (sender : Peer)
     (w : Rpc.ControlIWant) : (handleIwant p s sender w).1.topics = s.topics := by
-  unfold handleIwant
-  split <;> simp
+  simp [handleIwant]
 
 private theorem handleGraft_topics (p : Params) (s : State) (sender : Peer)
     (g : Rpc.ControlGraft) : (handleGraft p s sender g).1.topics = s.topics := by
@@ -1590,7 +1601,10 @@ private theorem handleControl_mesh (p : Params) (s : State) (sender : Peer)
     meshOf (handleControl p s sender c).1 topic = meshOf s topic := by
   cases c with
   | none => rfl
-  | some c =>
+  | some c0 =>
+    -- The lemma holds for every envelope, so it holds for the gated one.
+    simp only [handleControl]
+    generalize gossipOf p s sender c0 = c
     have h1 : meshOf (controlIhaves p s sender c) topic = meshOf s topic := by
       simp only [controlIhaves]
       exact handleIhaves_mesh p s sender c.ihave topic
@@ -1606,7 +1620,6 @@ private theorem handleControl_mesh (p : Params) (s : State) (sender : Peer)
       simp only [controlPrunes]
       rw [handlePrunes_mesh p (controlGrafts p s sender c) sender c.prune topic
         (by rw [h3]; exact hnot), h3]
-    simp only [handleControl]
     exact h4
 
 private theorem handleControl_prune (p : Params) (s : State) (sender : Peer)
@@ -1877,9 +1890,7 @@ private theorem handleIwant_not_deliver (p : Params) (s : State) (sender : Peer)
     (w : Rpc.ControlIWant) (m : Message) :
     Action.deliver m ∉ (handleIwant p s sender w).2 := by
   simp only [handleIwant]
-  split
-  · simp
-  · simp [List.mem_map]
+  simp [List.mem_map]
 
 private theorem handlePrune_not_deliver (p : Params) (s : State) (sender : Peer)
     (q : Rpc.ControlPrune) (m : Message) :
@@ -2137,7 +2148,9 @@ theorem stepDeliverUnseen (p : Params) (s s' : State) (acts : List Action)
               | some c =>
                   rw [hctl] at hdel
                   simp only [handleControl] at hdel
-                  exact absurd hdel (controlActions_not_deliver p _ sender c m)
+                  -- The envelope is the gated one (`gossipOf`), and the lemma
+                  -- holds for every envelope.
+                  exact absurd hdel (controlActions_not_deliver p _ sender _ m)
 
 /-! ## The backoff theorem -/
 
