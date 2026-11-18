@@ -225,8 +225,8 @@ dir = "vendor/prysm"
 repo = "https://github.com/OffchainLabs/prysm"
 commit = "4ccffee97f3c5938c70b2cba64629484d09fc094"
 branch = "develop"
-paths = ["/beacon-chain/p2p/encoder/ssz.go", "/beacon-chain/p2p/encoder/varint.go", "/go.mod", "/LICENSE.md"]
-used-for = "the req/resp decisions: the writer shape of the go fixtures, the varint reader, and the snappy version pin (W6.3)"
+paths = ["/beacon-chain/p2p/encoder/ssz.go", "/beacon-chain/p2p/encoder/varint.go", "/beacon-chain/sync/rpc_chunked_response.go", "/beacon-chain/sync/error.go", "/go.mod", "/LICENSE.md"]
+used-for = "the req/resp decisions: the writer shape of the go fixtures, the varint reader, and the snappy version pin (W6.3); rpc_chunked_response.go and error.go: the chunk layout the req/resp interop peer writes (scripts/reqresp-interop)"
 
 [[vendor]]
 dir = "vendor/lodestar"
