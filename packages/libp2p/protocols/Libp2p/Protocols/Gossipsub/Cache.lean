@@ -490,23 +490,44 @@ whose times never go back, which is how the router calls them. The
 property test in `Tests/Gossipsub/Cache.lean` pins it (CLAUDE.md,
 "Proofs and tests", rule 2). With times that go back, a model `prune`
 can drop an entry from the middle, and the index keeps it until it
-reaches the front. -/
+reaches the front.
+
+The index keys each id by its `IdKey`. A `MessageId` is a `List Nat`,
+one heap cell per byte. A full index of 262144 ids of 20 bytes, the
+consensus capacity, took about 166 MiB with list keys, 650 bytes an id,
+and takes about 23 MiB with `IdKey`, 90 bytes an id. Both figures are
+the peak resident memory above an empty index, in one run each. -/
+
+/-- A message id as a map key. An id whose every value is a byte keeps
+its bytes in a `ByteArray`. The model allows any `Nat` in an id, so an
+id with a larger value keeps its list, and two different ids never share
+a key. -/
+inductive IdKey where
+  | bytes (b : ByteArray)
+  | wide (l : List Nat)
+  deriving BEq, Hashable
+
+/-- The key of an id. -/
+def IdKey.of (id : MessageId) : IdKey :=
+  if id.bytes.all (· < 256) then .bytes ⟨(id.bytes.map (·.toUInt8)).toArray⟩
+  else .wide id.bytes
 
 /-- The production seen cache. -/
 structure SeenIndex where
   /-- The bounds, shared with the model. -/
   params : SeenParams
-  /-- Each live id: its add time, and the number of its queue entry. -/
-  index : Std.HashMap MessageId (Millis × Nat) := {}
+  /-- Each live id, by its key: its add time, and the number of its queue
+  entry. -/
+  index : Std.HashMap IdKey (Millis × Nat) := {}
   /-- `(id, number)` in add order, oldest first, stale entries included.
   The number tells a stale entry: a re-add in the same millisecond
   leaves two entries with one id and one time. The queue is two lists:
   `front` oldest first, and `back` newest first. A peek that finds
   `front` empty moves `back` over once and keeps the result, so each
   entry is reversed at most once. -/
-  front : List (MessageId × Nat) := []
+  front : List (IdKey × Nat) := []
   /-- The newer half of the queue, newest first. -/
-  back : List (MessageId × Nat) := []
+  back : List (IdKey × Nat) := []
   /-- The queue's length, stale entries included: the fuel of a walk. -/
   len : Nat := 0
   /-- The next entry number. -/
@@ -519,7 +540,7 @@ def empty (p : SeenParams) : SeenIndex := { params := p }
 
 /-- Whether the id is seen at `now`: `SeenCache.contains`. -/
 def contains (c : SeenIndex) (id : MessageId) (now : Millis) : Bool :=
-  match c.index.get? id with
+  match c.index.get? (IdKey.of id) with
   | some (t, _) => decide (t + c.params.ttl > now)
   | none => false
 
@@ -546,7 +567,8 @@ def popWhile (fuel : Nat) (drop : SeenIndex → Millis → Bool) (c : SeenIndex)
 /-- Record the id at `now`: `SeenCache.add`. Past the capacity, the
 oldest live ids go. -/
 def add (c : SeenIndex) (id : MessageId) (now : Millis) : SeenIndex :=
-  let c := { c with index := c.index.insert id (now, c.next), back := (id, c.next) :: c.back,
+  let key := IdKey.of id
+  let c := { c with index := c.index.insert key (now, c.next), back := (key, c.next) :: c.back,
                     len := c.len + 1, next := c.next + 1 }
   if c.index.size ≤ c.params.capacity then c
   else popWhile c.len (fun c _ => c.params.capacity < c.index.size) c
