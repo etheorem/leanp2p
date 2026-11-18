@@ -121,12 +121,25 @@ the writer. A session that ends reads `Streams.Error.closed` on every
 stream whose peer direction was open. `join` answers
 `Core.Error.protocol` with an `mplex:` detail for a protocol error.
 
-Three bounds hold each peer's input: `inboxCap` messages per stream,
-`acceptCap` streams waiting for `accept`, and `liveStreamCap` live
-streams. A full inbox blocks the reader until the application reads,
-resets the stream, or closes the session. The spec allows that
-answer ("Implementation notes"), and TCP then slows the peer. An
-inbound open over `liveStreamCap` gets a reset.
+Four bounds hold each peer's input: `inboxCap` chunks per stream inbox,
+`inboxChunkBytes` bytes per chunk, `acceptCap` streams waiting for
+`accept`, and `liveStreamCap` live streams. A full inbox blocks the
+reader until the application reads, resets the stream, or closes the
+session. The spec allows that answer ("Implementation notes"), and TCP
+then slows the peer. An inbound open over `liveStreamCap` gets a reset.
+
+mplex has no flow control, so these caps are the whole bound on what
+one peer can make a session hold (root §5, invariant 1). The reader
+splits each message into chunks of 4096 bytes, the `BufferSize` in
+which go-mplex v0.7.0 reads and hands on a message (`multiplex.go`,
+line 26, and lines 478 to 499). A session then holds at most
+`liveStreamCap × inboxCap × inboxChunkBytes` = 1024 × 8 × 4 KiB =
+32 MiB of unread data, plus the one message that the reader decodes.
+With a whole message per chunk, the product was 1024 × 8 × 1 MiB =
+8 GiB. A byte budget per session would bound it tighter, and it would
+need a wake for the reader when the application reads on any stream.
+The chunk size reaches the bound of go-mplex with no new wake. The
+check: "a 1 MiB message reaches the reader in 4096-byte chunks".
 
 #### Differences with go-mplex v0.7.0
 

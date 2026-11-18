@@ -516,6 +516,50 @@ private def runHostile (r : Runner) : Async Unit := do
     sess.close
     pair.peer.close
     discard <| joinAnswer sess
+  -- A 1 MiB message reaches the reader in chunks of `inboxChunkBytes`,
+  -- so each inbox holds at most `inboxCap` of them (the package
+  -- ARCHITECTURE, the bound of a session).
+  do
+    let pair ← ends
+    let sess ← openSession .responder pair.dialer
+    let body : ByteArray := ⟨(Array.range cap).map (·.toUInt8)⟩
+    pair.peer.write (msg .newStream 0 ++ msg .messageInitiator 0 body)
+    let st ← mustAccept sess
+    let mut chunkSizes : Array Nat := #[]
+    let mut received := ByteArray.empty
+    while received.size < cap do
+      match ← st.read with
+      | .ok (some c) =>
+        chunkSizes := chunkSizes.push c.size
+        received := received ++ c
+      | _ => break
+    r.check "a 1 MiB message reaches the reader in 4096-byte chunks"
+      (received == body && chunkSizes.size == cap / Libp2p.Mux.Mplex.Session.inboxChunkBytes &&
+        chunkSizes.all (· == Libp2p.Mux.Mplex.Session.inboxChunkBytes))
+    sess.close
+    pair.peer.close
+    discard <| joinAnswer sess
+  -- A message that is not a whole number of chunks ends with a short one:
+  -- 8292 bytes read as 4096, 4096, and 100, in order.
+  do
+    let pair ← ends
+    let sess ← openSession .responder pair.dialer
+    let body : ByteArray := ⟨(Array.range 8292).map (·.toUInt8)⟩
+    pair.peer.write (msg .newStream 0 ++ msg .messageInitiator 0 body)
+    let st ← mustAccept sess
+    let mut shortSizes : Array Nat := #[]
+    let mut shortReceived := ByteArray.empty
+    while shortReceived.size < body.size do
+      match ← st.read with
+      | .ok (some c) =>
+        shortSizes := shortSizes.push c.size
+        shortReceived := shortReceived ++ c
+      | _ => break
+    r.check "an 8292-byte message reads as 4096, 4096, and 100"
+      (shortReceived == body && shortSizes == #[4096, 4096, 100])
+    sess.close
+    pair.peer.close
+    discard <| joinAnswer sess
   -- Five continuation bytes leave the session waiting, and the rest of
   -- the header completes the message.
   do
