@@ -56,7 +56,16 @@ def run (args : List String) : IO UInt32 := do
   let mut running : Option GossipsubSession.Running := none
   let mut resultCode : UInt32 := 1
   try
-    let started ← GossipsubSession.start identity config
+    -- The node listens on 0.0.0.0, and the peers reach it at its own
+    -- hosts-file address. The identify answer names that address.
+    let ownIp ← try lookupHostsFile hostName catch _ => pure none
+    let ownAddrs : List Multiaddr :=
+      match (ownIp.bind multiaddrPrefix).map Multiaddr.parse? with
+      | some (.ok addr) => [addr]
+      | _ => []
+    if ownAddrs.isEmpty then
+      IO.eprintln s!"no /etc/hosts address for {hostName}: identify names no listen address"
+    let started ← GossipsubSession.start identity ownAddrs config
     let active ← match started with
       | .ok value => pure value
       | .error e => throw (IO.userError e)
@@ -89,10 +98,11 @@ def run (args : List String) : IO UInt32 := do
           | .error e => return .error (reprStr e)
         active.host.addAddrs targetPeer [address]
         let mut dialResult := ← active.host.dialPeer targetPeer
-        for attempt in [1, 2, 3, 4] do
+        -- Five dials in all: the first, then up to four more.
+        for attempt in [2, 3, 4, 5] do
           match dialResult with
           | .error (.unreachable _) =>
-            IO.eprintln s!"dial {nodeName} unreachable, retry {attempt}/5 after 200 ms"
+            IO.eprintln s!"dial {nodeName} unreachable, attempt {attempt}/5 after 200 ms"
             let timer ← (Conc.Clock.system.after 200 : BaseIO (Conc.Park Unit))
             discard <| Conc.select #[timer]
             dialResult ← active.host.dialPeer targetPeer

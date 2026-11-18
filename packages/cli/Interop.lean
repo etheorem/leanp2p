@@ -150,9 +150,22 @@ def listen (cfg : Config) (redis : Redis.Client) (h : Host) : Run Unit := do
   (Conc.select #[sleep] : Async Unit)
   throw s!"no dialer finished within {cfg.timeoutSec} s"
 
+/-- One ping on `stream`, under a deadline of `ms` on `clock`. `none`
+when the deadline expires first: a peer that never echoes would hold
+the run until the runner kills it, so the dialer bounds the ping by the
+time left of the test timeout. On expiry the deadline resets the
+stream, which wakes the parked read. The reset task lives in a set this
+call owns and joins. -/
+def pingWithin (clock : Conc.Clock) (ms : Nat) (stream : Streams.Stream) (payload : ByteArray) :
+    Async (Option (Except Libp2p.Protocols.Ping.Error (Option Nat))) := do
+  let owner ← Conc.TaskSet.new
+  let r ← Conc.withinDeadline clock ms (owner.spawn stream.reset) (Ping.ping stream clock payload)
+  owner.joinAll
+  return r.toOption
+
 /-- The dialer: take the address, dial, ping once, and print the timing
-record. -/
-def dial (cfg : Config) (redis : Redis.Client) (h : Host) : Run Unit := do
+record. The ping runs under the time left until `deadlineMs`. -/
+def dial (cfg : Config) (redis : Redis.Client) (h : Host) (deadlineMs : Nat) : Run Unit := do
   let (text, _) ← orFail "redis BLPOP" (fun e => reprStr e)
     (← redis.blpop Config.listenerAddrKey cfg.timeoutSec)
   let some text := text | throw s!"no listener address within {cfg.timeoutSec} s"
@@ -166,12 +179,14 @@ def dial (cfg : Config) (redis : Redis.Client) (h : Host) : Run Unit := do
   let payload ← orFail "ping payload" (fun e => reprStr e)
     (← (Crypto.randomBytes Ping.payloadSize).run)
   let pingStart ← IO.monoNanosNow
-  -- The annotation binds the ping's `Except` as data, so its failure
-  -- waits until after the reset below. `orFail` then reports it.
-  let answer : Except Libp2p.Protocols.Ping.Error (Option Nat) ←
-    (Ping.ping stream Conc.Clock.system payload : Async _)
+  let left := deadlineMs - (← IO.monoMsNow)
+  -- The annotation binds the ping's answer as data, so a failure waits
+  -- until after the reset below. `orFail` then reports it.
+  let answer : Option (Except Libp2p.Protocols.Ping.Error (Option Nat)) ←
+    (pingWithin Conc.Clock.system left stream payload : Async _)
   let done ← IO.monoNanosNow
   stream.reset
+  let some answer := answer | throw s!"ping: no echo within {cfg.timeoutSec} s"
   discard <| orFail "ping" (fun e => reprStr e) answer
   IO.println (Config.timingJson ((done - start) / 1000) ((done - pingStart) / 1000))
 
@@ -183,7 +198,7 @@ def run (cfg : Config) : Run Unit := do
   try
     let h ← startHost cfg
     try
-      if cfg.isDialer then dial cfg redis h else listen cfg redis h
+      if cfg.isDialer then dial cfg redis h deadlineMs else listen cfg redis h
     finally
       h.close
   finally

@@ -15,8 +15,6 @@ namespace Cli.GossipsubSession
 
 open Conc Streams Multiformats Libp2p.Core Libp2p.Identity Libp2p.Host
 open Libp2p.Protocols Libp2p.Protocols.Constants
-open Conc Streams Multiformats Libp2p.Core Libp2p.Identity Libp2p.Host
-open Libp2p.Protocols Libp2p.Protocols.Constants
 open Libp2p.Protocols.Gossipsub Libp2p.Protocols.Gossipsub.Node
 
 /-- Use the production yamux session through the core muxer seam. -/
@@ -46,8 +44,14 @@ the mesh. -/
 def servedProtocols : List String :=
   [identifyId.toString, meshsubId.toString]
 
-/-- Build Noise and the real TCP host. Node.start installs meshsub. -/
-def start (identity : PrivKey) (nodeConfig : Node.Config := {}) : IO (Except String Running) := do
+/-- Build Noise and the real TCP host. Node.start installs meshsub. The
+identify answer names `listenAddrs`, the addresses a peer can dial back
+(identify, "listenAddrs"). The answer goes in with the host, before the
+listen, so no peer can ask before it is there. A caller that listens on
+an unspecified address passes the addresses that the listener will
+serve. -/
+def start (identity : PrivKey) (listenAddrs : List Multiaddr) (nodeConfig : Node.Config := {}) :
+    IO (Except String Running) := do
   let generated ← (Libp2p.Security.Noise.Config.generate identity).run
   let noise ← match generated with
     | .error e => return .error (reprStr e)
@@ -60,7 +64,8 @@ def start (identity : PrivKey) (nodeConfig : Node.Config := {}) : IO (Except Str
     transports := [Streams.Tcp.transport]
     security := [Libp2p.Security.Noise.securityProtocol noise]
     muxers := offeredMuxers
-    handlers := [Identify.respondHandler pubkey [] servedProtocols "leanp2p"] }
+    handlers := [Identify.respondHandler pubkey (listenAddrs.map (·.toBytes)) servedProtocols
+      "leanp2p"] }
   let hostResult ← BaseIO.toIO (Libp2p.Host.Host.new config)
   let host ← match hostResult with
     | .error e => return .error (reprStr e)
