@@ -88,6 +88,16 @@ itself, by the rule above, and the dial throws `timeExpired`. The phases
 after the connect, up to authentication, run under
 `Connection.withinUnauthDeadline` in the layers that own them.
 
+## Small writes
+
+Every connection sets `TCP_NODELAY`, the dialed ones and the accepted
+ones. With Nagle's algorithm, the kernel holds a small write while an
+earlier one waits for its ACK. The peer can delay that ACK by 40 ms. A
+handshake is a run of small writes, so it pays that delay at each
+turn. Go's `net` package and the TCP transport of the rust
+reference set the option on every connection (the package
+ARCHITECTURE, "Decisions", cites both).
+
 ## The address forms
 
 A TCP multiaddr has exactly two components. The `ip4` value is 4 bytes,
@@ -251,8 +261,13 @@ private def finish (sock : Socket) : BaseIO Unit := do
     discard <| IO.mapTask (t := done.result?) fun _ => sock.cancelRecv
   | .error _ => pure ()
 
-/-- The connection over a connected socket. -/
+/-- The connection over a connected socket. The dial and the accept both
+build their connection here, so each one sends a small write at once
+(the module doc, "Small writes"). The option changes the latency alone,
+so a failure to set it leaves the connection as it is, as Go's `net`
+package does. -/
 private def connection (sock : Socket) : IO Connection := do
+  try sock.noDelay catch _ => pure ()
   let localAddr ← addrOf (← sock.getSockName)
   let remoteAddr ← addrOf (← sock.getPeerName)
   -- From here the socket lives in the cell only: no closure below names
